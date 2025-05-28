@@ -7,7 +7,7 @@ import numpy as np # Make sure this import is present
 
 st.set_page_config(page_title="Energy Analysis", layout="wide")
 
-st.title("Solarvest Intelligent")
+st.title("Energy Analysis Dashboard")
 
 # -----------------------------
 # SECTION: TNB Tariff Selection
@@ -305,12 +305,24 @@ if uploaded_file:
                 excess = peak_load - PEAK_THRESHOLD
                 duration = (end_time - start_time).total_seconds() / 60  # minutes
                 md_cost = excess * md_rate_for_selected_tariff if excess > 0 else 0
+                # Calculate total kWh required to shave the maximum demand for this event
+                # Only consider points above threshold
+                group_above = group[group[power_col] > PEAK_THRESHOLD]
+                # Energy above threshold: sum((load - threshold) * (interval in hours))
+                # Assume data is at 1-min intervals (1/60 hr), but check actual interval
+                if len(group_above) > 1:
+                    interval_minutes = (group_above.index[1] - group_above.index[0]).total_seconds() / 60
+                else:
+                    interval_minutes = 1  # fallback
+                interval_hours = interval_minutes / 60
+                total_kwh_to_shave = ((group_above[power_col] - PEAK_THRESHOLD) * interval_hours).sum()
                 event_summaries.append({
                     'Date': start_time.date(),
                     'Start Time': start_time.strftime('%H:%M'),
                     'End Time': end_time.strftime('%H:%M'),
                     'Peak Load (kW)': peak_load,
                     f'Excess over {PEAK_THRESHOLD:,.2f} (kW)': excess,
+                    'Total kWh to Shave MD': total_kwh_to_shave,
                     'Duration (minutes)': duration,
                     'Maximum Demand Cost (RM)': md_cost
                 })
