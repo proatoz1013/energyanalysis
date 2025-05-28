@@ -7,7 +7,7 @@ import numpy as np # Make sure this import is present
 
 st.set_page_config(page_title="Energy Analysis", layout="wide")
 
-st.title("Energy Analysis Dashboard")
+st.title("Solarvest Intelligent")
 
 # -----------------------------
 # SECTION: TNB Tariff Selection
