@@ -2,24 +2,40 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+from tariffs.rp4_tariffs import get_tariff_data
 
 
 def show():
     st.title("TNB New Tariff Comparison")
     st.markdown("""
-    This tool allows you to compare the new TNB tariffs for different consumer categories. Select your category and input your consumption details to see a breakdown and comparison of costs under the new tariff structure.
+    This tool allows you to compare the new TNB tariffs for different consumer categories. Select your industry and tariff schedule to see a breakdown and comparison of costs under the new tariff structure.
     """)
 
-    # Example categories and tariffs (customize as needed)
-    categories = [
-        "Industrial (E1, E2, E3, D)",
-        "Commercial (C1, C2)",
-        "Residential (D)"
-    ]
-    category = st.selectbox("Select Consumer Category", categories)
+    # 1. Select Non Domestic (only one option for now)
+    industry_options = ["Non Domestic"]
+    selected_industry = st.selectbox("Select Non Domestic / Domestic", industry_options, index=0)
 
-    if category == "Industrial (E1, E2, E3, D)":
-        st.subheader("Industrial Tariff Comparison")
+    # 2. Tariff Industry (keys from rp4_tariffs, e.g. Non Domestic, Specific Agriculture, ...)
+    tariff_data = get_tariff_data()
+    tariff_industries = list(tariff_data.keys())
+    selected_tariff_industry = st.selectbox("Select Tariff Industry", tariff_industries, index=0)
+
+    # 3. Tariff Type (Tariff names for selected industry)
+    tariff_types = [t["Tariff"] for t in tariff_data[selected_tariff_industry]["Tariffs"]]
+    selected_tariff_type = st.selectbox("Select Voltage and Tariff Type", tariff_types, index=0)
+
+    # Find the selected tariff object
+    selected_tariff_obj = next((t for t in tariff_data[selected_tariff_industry]["Tariffs"] if t["Tariff"] == selected_tariff_type), None)
+    if not selected_tariff_obj:
+        st.error("Selected tariff details not found.")
+        return
+
+    st.info(f"Selected Industry: {selected_industry} | Tariff Industry: {selected_tariff_industry} | Tariff Type: {selected_tariff_type}")
+    st.json(selected_tariff_obj)
+    # ...existing or new calculation logic can follow here...
+
+    if selected_tariff_industry == "Non Domestic":
+        st.subheader("Non-Domestic Tariff Comparison")
         monthly_kwh = st.number_input("Enter Monthly Energy Consumption (kWh)", min_value=0.0, value=10000.0, step=100.0)
         max_demand_kw = st.number_input("Enter Maximum Demand (kW)", min_value=0.0, value=500.0, step=10.0)
         # Example rates (replace with actual new tariff rates)
@@ -52,42 +68,5 @@ def show():
         st.dataframe(df, use_container_width=True)
         st.success("Comparison complete. Adjust the values above to see updated results.")
 
-    elif category == "Commercial (C1, C2)":
-        st.subheader("Commercial Tariff Comparison")
-        monthly_kwh = st.number_input("Enter Monthly Energy Consumption (kWh)", min_value=0.0, value=8000.0, step=100.0)
-        max_demand_kw = st.number_input("Enter Maximum Demand (kW)", min_value=0.0, value=300.0, step=10.0)
-        c1_rate = 0.435
-        c1_icpt = 0.027
-        c2_rate = 0.385
-        c2_md_rate = 25.0
-        c2_icpt = 0.16
-        c1_cost = monthly_kwh * (c1_rate + c1_icpt)
-        c2_cost = monthly_kwh * (c2_rate + c2_icpt) + max_demand_kw * c2_md_rate
-        df = pd.DataFrame({
-            "Tariff": ["C1 (Low Voltage Commercial)", "C2 (Medium Voltage Commercial)"],
-            "Total Cost (RM)": [c1_cost, c2_cost]
-        })
-        st.dataframe(df, use_container_width=True)
-        st.success("Comparison complete. Adjust the values above to see updated results.")
-
-    elif category == "Residential (D)":
-        st.subheader("Residential Tariff Comparison")
-        monthly_kwh = st.number_input("Enter Monthly Energy Consumption (kWh)", min_value=0.0, value=500.0, step=10.0)
-        # Example tiered rates (replace with actual new tariff rates)
-        tiers = [
-            (200, 0.218),
-            (100, 0.334),
-            (300, 0.516),
-            (float('inf'), 0.571)
-        ]
-        remaining = monthly_kwh
-        total_cost = 0
-        for limit, rate in tiers:
-            if remaining > 0:
-                kwh_this_tier = min(remaining, limit)
-                total_cost += kwh_this_tier * rate
-                remaining -= kwh_this_tier
-        st.write(f"Estimated Monthly Bill: RM {total_cost:,.2f}")
-        st.success("Comparison complete. Adjust the value above to see updated results.")
     else:
-        st.info("Please select a valid category.")
+        st.warning(f"Tariff comparison for '{selected_tariff_industry}' is not yet implemented.")
