@@ -5,7 +5,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from tnb_tariff_comparison import show as show_tnb_tariff_comparison
 
-st.set_page_config(page_title="Energy Analysis", layout="wide")
+st.set_page_config(page_title="Load Profile Analysis", layout="wide")
 
 tabs = st.tabs(["Load Profile Analysis", "TNB New Tariff Comparison"])
 
@@ -64,9 +64,8 @@ with tabs[0]:
             st.subheader("0. Cost Comparison by Tariff")
             voltage_level = st.selectbox("Select Voltage Level", ["Low Voltage", "Medium Voltage", "High Voltage"], key="voltage_level_selector_cost_comp")
 
-            if power_col not in df.columns:
-                st.error(f"Selected power column '{power_col}' not found. Please check selection.")
-            else:
+            # Cost calculation logic
+            if st.button("Calculate Cost"):
                 df_energy_for_cost_kwh = df[[power_col]].copy()
                 df_energy_for_cost_kwh["Energy (kWh)"] = df_energy_for_cost_kwh[power_col] * (1/60)
                 peak_energy_cost_calc = df_energy_for_cost_kwh.between_time("08:00", "21:59")["Energy (kWh)"].sum()
@@ -274,11 +273,11 @@ with tabs[0]:
                         md_rate_for_selected_tariff = t_info_detail.get("MD Rate", 0)
                         break
                 if not md_rate_for_selected_tariff:
+                    # Fallback: search all tariffs for MD Rate if not found above
                     for ind_key_fallback in tariff_data:
                         for t_info_detail_fallback in tariff_data[ind_key_fallback]:
                             if t_info_detail_fallback["Tariff"] == tariff_rate:
                                 md_rate_for_selected_tariff = t_info_detail_fallback.get("MD Rate", 0)
-                                break
                         if md_rate_for_selected_tariff:
                             break
                 df_peak_events = df_for_detailed_trend[[power_col]].copy()
@@ -403,13 +402,14 @@ with tabs[0]:
                         'Duration (minutes)': '{:,.1f}',
                         'Maximum Demand Cost (RM)': 'RM {:,.2f}'
                     }), use_container_width=True)
-                    max_md_cost = df_events_summary['Maximum Demand Cost (RM)'].max()
-                    st.markdown(f"**Maximum of Maximum Demand Cost (RM): RM {max_md_cost:,.2f}**")
                 else:
                     st.info(f"No peak events (load > {PEAK_THRESHOLD:,.2f} kW) detected in the selected period.")
 
-                # -----------------------------
-            # 2. Load Duration Curve
+            # -----------------------------
+            # SECTION: Load Duration Curve
+            # Main Title: 2. Load Duration Curve
+            # - Shows the distribution of load over time, highlighting peak periods.
+            # -----------------------------
             st.subheader("2. Load Duration Curve")
             if power_col not in df.columns:
                 st.error(f"Selected power column '{power_col}' not found.")
@@ -582,11 +582,15 @@ with tabs[0]:
                     df_weekly_total_energy = df[power_col].resample('W').apply(lambda x: x.sum() * (1/60) if not x.empty else 0)
                     st.bar_chart(df_weekly_total_energy)
 
-        except pd.errors.EmptyDataError: st.error("Uploaded Excel file is empty or unreadable.")
-        except KeyError as e: st.error(f"Column key error: {e}. Check column selection/Excel structure.")
-        except ValueError as e: st.error(f"Value error: {e}. Check data types/parsing.")
+        except pd.errors.EmptyDataError:
+            st.error("Uploaded Excel file is empty or unreadable.")
+        except KeyError as e:
+            st.error(f"Column key error: {e}. Check column selection/Excel structure.")
+        except ValueError as e:
+            st.error(f"Value error: {e}. Check data types/parsing.")
         except Exception as e:
             st.error(f"An unexpected error occurred: {e}")
             st.error("Ensure Excel file is correctly formatted and columns are selected.")
-            # import traceback; st.error(traceback.format_exc()) # For debugging
 
+with tabs[1]:
+    show_tnb_tariff_comparison()
