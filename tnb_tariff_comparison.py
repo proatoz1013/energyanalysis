@@ -204,14 +204,6 @@ def show():
                 "Unit Rate (RM)": "–",
                 "Total Cost (RM)": f"{safe_get(cost_breakdown, 'Capacity Cost', 0):,.2f}"
             })
-            # --- Capacity Charge Section (always row 5, even if 0) ---
-            table_rows.append({
-                "Description": "Capacity Charge",
-                "Unit": "kW",
-                "Value": f"{safe_get(cost_breakdown, 'Max Demand', 0):,.2f}",
-                "Unit Rate (RM)": f"{safe_get(cost_breakdown, 'Capacity Charge Rate', '–')}",
-                "Total Cost (RM)": f"{safe_get(cost_breakdown, 'Capacity Charge', 0):,.2f}"
-            })
             if "Network Cost" in cost_breakdown:
                 table_rows.append({
                     "Description": "Network Charge",
