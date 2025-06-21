@@ -66,14 +66,19 @@ def show():
                 total_kwh = 0
             col3.metric("Total Energy (kWh)", f"{total_kwh:,.2f}")
 
+        # --- Manual input for number of public holidays ---
+        st.subheader("Manual Public Holiday Count")
+        manual_holiday_count = st.number_input(
+            "Enter number of public holidays in the period:",
+            min_value=0, value=0, step=1, key="manual_holiday_count_input"
+        )
+        # Select the first N unique dates as holidays
+        unique_dates = df["Parsed Timestamp"].dt.date.unique()
+        holidays = set(unique_dates[:manual_holiday_count])
+
         # --- Calculate % of peak and off-peak period and show as bar chart ---
         from tariffs.peak_logic import is_peak_rp4
-        from utils.holiday_api import get_malaysia_public_holidays
         import plotly.express as px
-        years = df["Parsed Timestamp"].dt.year.unique()
-        holidays = set()
-        for year in years:
-            holidays.update(get_malaysia_public_holidays(year))
         is_peak = df["Parsed Timestamp"].apply(lambda ts: is_peak_rp4(ts, holidays))
         # Calculate kWh for peak and off-peak
         df = df.sort_values("Parsed Timestamp")
@@ -109,6 +114,22 @@ def show():
         fig.update_layout(yaxis_title='Energy (kWh)', xaxis_title='', showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
         st.caption(f"Peak: {peak_kwh:,.2f} kWh ({peak_pct:.1f}%) | Off-Peak: {offpeak_kwh:,.2f} kWh ({offpeak_pct:.1f}%)")
+
+        # --- Show number of days: weekday, weekend, and holidays ---
+        if not df.empty:
+            unique_dates = df["Parsed Timestamp"].dt.date.unique()
+            years = pd.Series(unique_dates).apply(lambda d: d.year).unique()
+            weekday_count = 0
+            weekend_count = 0
+            for d in unique_dates:
+                if pd.Timestamp(d).weekday() >= 5:
+                    weekend_count += 1
+                else:
+                    weekday_count += 1
+            st.markdown(f"**Number of Days:**  ")
+            st.markdown(f"- Weekdays: **{weekday_count}**  ")
+            st.markdown(f"- Weekends: **{weekend_count}**  ")
+            st.markdown(f"- Holidays: **{manual_holiday_count}**  ")
 
         # --- Cost Calculation and Display ---
         from utils.cost_calculator import calculate_cost
