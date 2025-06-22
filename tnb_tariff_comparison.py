@@ -8,6 +8,10 @@ from tariffs.peak_logic import is_peak_rp4
 
 def show():
     st.title("TNB New Tariff Comparison")
+    # Inject custom CSS for table styling at the very top
+    with open("assets/style.css") as f:
+        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+
     st.markdown("")
     st.markdown("")
     st.markdown("")
@@ -139,13 +143,11 @@ def show():
             col3.metric("Total Energy (kWh)", f"{total_kwh:,.2f}")
             col3.metric("Maximum Demand kW", f"{df[power_col].max():,.2f}")
             # Show Peak Demand (maximum demand during peak periods only)
-            if not df.empty:
-                is_peak = df["Parsed Timestamp"].apply(lambda ts: is_peak_rp4(ts, holidays))
-                if is_peak.any():
-                    peak_demand = df.loc[is_peak, power_col].max()
-                    col3.metric("Peak Demand (kW, Peak Period Only)", f"{peak_demand:,.2f}")
-                else:
-                    col3.metric("Peak Demand (kW, Peak Period Only)", "N/A")
+            peak_demand = get_peak_demand(df, power_col, holidays)
+            if peak_demand is not None:
+                col3.metric("Peak Demand (kW, Peak Period Only)", f"{peak_demand:,.2f}")
+            else:
+                col3.metric("Peak Demand (kW, Peak Period Only)", "N/A")
         # --- Calculate % of peak and off-peak period and show as bar chart ---
         is_peak = df["Parsed Timestamp"].apply(lambda ts: is_peak_rp4(ts, holidays))
         # Calculate kWh for peak and off-peak
@@ -243,11 +245,11 @@ def show():
                     </tr>
                     <tr class=\"section\">
                         <td>A</td>
-                        <td class=\"left\">A. Energy Consumption kWh</td>
-                        <td>kWh</td>
-                        <td>{total_kwh}</td>
+                        <td class=\"left\"><b>A. Energy Consumption kWh</b></td>
                         <td></td>
-                        <td>{energy_cost}</td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
                     </tr>
                     <tr>
                         <td>1</td>
@@ -275,52 +277,30 @@ def show():
                     </tr>
                     <tr class=\"section\">
                         <td>B</td>
-                        <td class=\"left\">B. Maximum Demand (Peak Demand)</td>
-                        <td>kW</td>
-                        <td>{max_demand}</td>
+                        <td class=\"left\"><b>B. Maximum Demand (Peak Demand)</b></td>
                         <td></td>
-                        <td>{capacity_cost}</td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
                     </tr>
                     <tr>
                         <td>1</td>
-                        <td class=\"left\">Network Charge</td>
+                        <td class="left">Capacity Charge</td>
                         <td>kW</td>
-                        <td>{max_demand}</td>
-                        <td>{network_rate}</td>
-                        <td>{network_cost}</td>
+                        <td>{peak_demand}</td>
+                        <td>{capacity_rate}</td>
+                        <td>{capacity_cost}</td>
                     </tr>
                     <tr>
                         <td>2</td>
-                        <td class=\"left\">Retail Charge</td>
+                        <td class="left">Network Charge</td>
                         <td>kW</td>
-                        <td>{max_demand}</td>
-                        <td>{retail_rate}</td>
-                        <td>{retail_cost}</td>
-                    </tr>
-                    <tr class=\"section\">
-                        <td>C</td>
-                        <td class=\"left\">Others Charges</td>
-                        <td></td>
-                        <td></td>
-                        <td></td>
-                        <td>0</td>
-                    </tr>
-                    <tr class=\"total\">
-                        <td></td>
-                        <td class=\"left\">Total Estimated Cost</td>
-                        <td></td>
-                        <td></td>
-                        <td></td>
-                        <td>{total_cost}</td>
+                        <td>{peak_demand}</td>
+                        <td>{network_rate}</td>
+                        <td>{network_cost}</td>
                     </tr>
                 </table>
                 """.format(
-                    total_kwh=fmt(breakdown.get("Total kWh", "")),
-                    energy_cost=fmt(
-                        (breakdown.get("Peak Energy Cost", 0) or 0) +
-                        (breakdown.get("Off-Peak Energy Cost", 0) or 0)
-                        if "Peak Energy Cost" in breakdown else breakdown.get("Energy Cost (RM)", "")
-                    ),
                     peak_kwh=fmt(breakdown.get("Peak kWh", "")),
                     peak_rate=fmt(breakdown.get("Peak Rate", "")),
                     peak_cost=fmt(breakdown.get("Peak Energy Cost", "")),
@@ -330,16 +310,17 @@ def show():
                     afa_kwh=fmt(breakdown.get("AFA kWh", "")),
                     afa_rate=fmt(breakdown.get("AFA Rate", "")),
                     afa_cost=fmt(breakdown.get("AFA Adjustment", "")),
-                    max_demand=fmt(breakdown.get("Max Demand (kW)", "")),
-                    capacity_cost=fmt(breakdown.get("Capacity Cost", "")),
+                    peak_demand=fmt(breakdown.get("Peak Demand (kW, Peak Period Only)", "")),
                     network_rate=fmt(breakdown.get("Network Rate", "")),
                     network_cost=fmt(breakdown.get("Network Cost", "")),
-                    retail_rate=fmt(breakdown.get("Retail Rate", "")),
-                    retail_cost=fmt(breakdown.get("Retail Cost", "")),
+                    capacity_rate=fmt(breakdown.get("Capacity Rate", "")),
+                    capacity_cost=fmt(breakdown.get("Capacity Cost", "")),
+                    others_charges=fmt(breakdown.get("Others Charges", 0)),
                     total_cost=fmt(breakdown.get("Total Cost", "")),
                 )
                 return html
 
+            st.write("DEBUG: cost_breakdown", cost_breakdown)
             st.markdown(html_cost_table(cost_breakdown), unsafe_allow_html=True)
 
             # --- Pie Chart for Cost Breakdown ---
@@ -400,6 +381,13 @@ def show():
             for f in formulae:
                 st.markdown(f"- {f}")
 
-    # Inject custom CSS for table styling
-    with open("assets/style.css") as f:
-        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+def get_peak_demand(df, power_col, holidays):
+    """
+    Returns the maximum demand (kW) during peak periods only.
+    """
+    if df.empty:
+        return None
+    is_peak = df["Parsed Timestamp"].apply(lambda ts: is_peak_rp4(ts, holidays))
+    if is_peak.any():
+        return df.loc[is_peak, power_col].max()
+    return None
