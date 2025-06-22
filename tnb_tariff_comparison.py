@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 from tariffs.rp4_tariffs import get_tariff_data
+from tariffs.peak_logic import is_peak_rp4
 
 
 def show():
@@ -45,7 +46,7 @@ def show():
     # - "Thermal Energy Storage (TES)"
     # - "Backfeed"
     tariff_groups = list(tariff_data[selected_user_type]["Tariff Groups"].keys())
-    # Robust default: 'Non Domestic' if present, else first
+    # Robust default: 'Non Domestic' if present, else tariff_groups[0]
     default_tariff_group = 'Non Domestic' if 'Non Domestic' in tariff_groups else tariff_groups[0]
     tariff_group_index = tariff_groups.index(default_tariff_group)
     selected_tariff_group = st.selectbox(
@@ -75,6 +76,7 @@ def show():
         tariff_types,
         index=tariff_type_index
     )
+    
 
     # Find the selected tariff object
     selected_tariff_obj = next((t for t in tariffs if t["Tariff"] == selected_tariff_type), None)
@@ -92,12 +94,28 @@ def show():
         st.subheader("Column Selection")
         timestamp_col = st.selectbox("Select timestamp column", df.columns, key="timestamp_col_selector")
         power_col = st.selectbox("Select power (kW) column", df.select_dtypes(include='number').columns, key="power_col_selector")
-       # --- Manual input for number of public holidays ---
-        st.subheader("Manual Public Holiday Count")
-        manual_holiday_count = st.number_input(
-            "Enter number of public holidays in the period:",
-            min_value=0, value=1, step=1, key="manual_holiday_count_input"
+       # --- Manual input for public holidays using a multi-select dropdown ---
+        st.subheader("Manual Public Holiday Selection")
+        st.caption("Select any combination of days as public holidays. The dropdown supports non-consecutive dates.")
+        # Suggest a default range based on the data
+        if not df.empty:
+            min_date = df[timestamp_col].min().date() if pd.api.types.is_datetime64_any_dtype(df[timestamp_col]) else pd.to_datetime(df[timestamp_col], errors="coerce").min().date()
+            max_date = df[timestamp_col].max().date() if pd.api.types.is_datetime64_any_dtype(df[timestamp_col]) else pd.to_datetime(df[timestamp_col], errors="coerce").max().date()
+            unique_dates = pd.date_range(min_date, max_date).date
+        else:
+            unique_dates = []
+        holiday_options = [d.strftime('%A, %d %B %Y') for d in unique_dates]
+        selected_labels = st.multiselect(
+            "Select public holidays in the period:",
+            options=holiday_options,
+            default=[],
+            help="Pick all public holidays in the data period. You can select multiple, non-consecutive days."
         )
+        # Map back to date objects
+        label_to_date = {d.strftime('%A, %d %B %Y'): d for d in unique_dates}
+        selected_holidays = [label_to_date[label] for label in selected_labels]
+        holidays = set(selected_holidays)
+        manual_holiday_count = len(holidays)
         # --- Calculate period of start time and end time ---
         df["Parsed Timestamp"] = pd.to_datetime(df[timestamp_col], errors="coerce")
         df = df.dropna(subset=["Parsed Timestamp"])
@@ -122,13 +140,7 @@ def show():
             col3.metric("Maximum Demand kW", f"{df[power_col].max():,.2f}")
 
  
-        # Select the first N unique dates as holidays
-        unique_dates = df["Parsed Timestamp"].dt.date.unique()
-        holidays = set(unique_dates[:manual_holiday_count])
-
         # --- Calculate % of peak and off-peak period and show as bar chart ---
-        from tariffs.peak_logic import is_peak_rp4
-        import plotly.express as px
         is_peak = df["Parsed Timestamp"].apply(lambda ts: is_peak_rp4(ts, holidays))
         # Calculate kWh for peak and off-peak
         df = df.sort_values("Parsed Timestamp")
