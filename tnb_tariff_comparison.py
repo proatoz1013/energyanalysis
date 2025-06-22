@@ -138,8 +138,14 @@ def show():
                 total_kwh = 0
             col3.metric("Total Energy (kWh)", f"{total_kwh:,.2f}")
             col3.metric("Maximum Demand kW", f"{df[power_col].max():,.2f}")
-
- 
+            # Show Peak Demand (maximum demand during peak periods only)
+            if not df.empty:
+                is_peak = df["Parsed Timestamp"].apply(lambda ts: is_peak_rp4(ts, holidays))
+                if is_peak.any():
+                    peak_demand = df.loc[is_peak, power_col].max()
+                    col3.metric("Peak Demand (kW, Peak Period Only)", f"{peak_demand:,.2f}")
+                else:
+                    col3.metric("Peak Demand (kW, Peak Period Only)", "N/A")
         # --- Calculate % of peak and off-peak period and show as bar chart ---
         is_peak = df["Parsed Timestamp"].apply(lambda ts: is_peak_rp4(ts, holidays))
         # Calculate kWh for peak and off-peak
@@ -180,18 +186,25 @@ def show():
         # --- Show number of days: weekday, weekend, and holidays ---
         if not df.empty:
             unique_dates = df["Parsed Timestamp"].dt.date.unique()
-            years = pd.Series(unique_dates).apply(lambda d: d.year).unique()
+            holidays_set = set(holidays)
             weekday_count = 0
             weekend_count = 0
+            holiday_count = 0
             for d in unique_dates:
-                if pd.Timestamp(d).weekday() >= 5:
+                if d in holidays_set:
+                    holiday_count += 1
+                elif pd.Timestamp(d).weekday() >= 5:
                     weekend_count += 1
                 else:
                     weekday_count += 1
-            st.markdown(f"**Number of Days:**  ")
-            st.markdown(f"- Weekdays: **{weekday_count}**  ")
-            st.markdown(f"- Weekends: **{weekend_count}**  ")
-            st.markdown(f"- Holidays: **{manual_holiday_count}**  ")
+            total_days = len(unique_dates)
+            st.markdown("**Number of Days:**")
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Weekdays", weekday_count)
+            col2.metric("Weekends", weekend_count)
+            col3.metric("Holidays", holiday_count)
+            col4.metric("Total Days", total_days)
+            st.caption("Total = Weekdays + Weekends + Holidays")
 
         # --- AFA Input ---
         st.markdown("**AFA (Additional Fuel Adjustment) Rate**")
