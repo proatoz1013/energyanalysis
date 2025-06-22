@@ -1,27 +1,44 @@
 import pandas as pd
 import datetime
 
-def is_peak_rp4(ts, holidays):
+def is_public_holiday(dt, holidays):
     """
-    Returns True if the timestamp is in peak period according to RP4 rules:
-    - Peak: Monday–Friday, 8:00–22:00, excluding public holidays.
-    - Off-peak: All other times (including weekends and public holidays).
-    Args:
-        ts (datetime.datetime): Timestamp to check.
-        holidays (set of datetime.date): Set of public holiday dates.
-    Returns:
-        bool: True if peak, False if off-peak.
+    Returns True if the datetime falls on a public holiday (matching by date).
     """
-    if isinstance(ts, pd.Timestamp):
-        ts = ts.to_pydatetime()
-    date = ts.date()
-    # If public holiday, always off-peak
-    if date in holidays:
+    if isinstance(dt, pd.Timestamp):
+        dt = dt.to_pydatetime()
+    return dt.date() in holidays
+
+def is_peak_hour(dt, peak_start=14, peak_end=22):
+    """
+    Check if a datetime falls within peak hours (default 2 PM to 10 PM).
+    """
+    if isinstance(dt, pd.Timestamp):
+        dt = dt.to_pydatetime()
+    return peak_start <= dt.hour < peak_end
+
+def is_peak_rp4(dt, holidays, peak_days={0, 1, 2, 3, 4}, peak_start=14, peak_end=22):
+    """
+    RP4 peak period rule:
+    - Peak: Mon–Fri, 14:00–22:00 (excluding public holidays)
+    - Off-Peak: All other times
+    """
+    if isinstance(dt, pd.Timestamp):
+        dt = dt.to_pydatetime()
+    if dt.tzinfo:
+        dt = dt.replace(tzinfo=None)
+    if is_public_holiday(dt, holidays):
         return False
-    # If weekend, always off-peak
-    if ts.weekday() >= 5:
+    if dt.weekday() not in peak_days:
         return False
-    # Peak hours: 8:00 to 22:00 (8am to 10pm, inclusive of 8:00, exclusive of 22:00)
-    if 8 <= ts.hour < 22:
-        return True
-    return False
+    return is_peak_hour(dt, peak_start, peak_end)
+
+def classify_peak_period(df, timestamp_col, holidays, label_col="Period"):
+    """
+    Add a column (default: 'Period') indicating whether each timestamp is in Peak or Off-Peak.
+    """
+    df = df.copy()
+    df[label_col] = df[timestamp_col].apply(
+        lambda ts: "Peak" if is_peak_rp4(ts, holidays) else "Off-Peak"
+    )
+    return df

@@ -20,19 +20,25 @@ def calculate_cost(df, tariff, power_col, holidays=None, afa_kwh=0, afa_rate=0):
     time_deltas = df["Parsed Timestamp"].diff().dt.total_seconds().div(3600).fillna(0)
     interval_kwh = df[power_col] * time_deltas
     total_kwh = interval_kwh.sum()
+    # Calculate max demand (should be max of all, not just peak period)
     max_demand_kw = df[power_col].max()
+    # For TOU tariffs, also calculate peak period max demand
+    is_peak = df["Parsed Timestamp"].apply(lambda ts: is_peak_rp4(ts, holidays or set()))
+    peak_demand_kw = df.loc[is_peak, power_col].max() if is_peak.any() else 0
     breakdown = {}
     voltage = tariff.get("Voltage", "Low Voltage")
+    rules = tariff.get("Rules", {})
+    rates = tariff.get("Rates", {})
     # General Tariff (not split)
-    if not tariff.get("Split", False):
-        energy_cost = total_kwh * tariff.get("Energy Rate", 0)
+    if not rules.get("has_peak_split", False):
+        energy_cost = total_kwh * rates.get("Energy Rate", 0)
         if voltage == "Low Voltage":
-            capacity_cost = total_kwh * tariff.get("Capacity Rate", 0)
-            network_cost = total_kwh * tariff.get("Network Rate", 0)
+            capacity_cost = total_kwh * rates.get("Capacity Rate", 0)
+            network_cost = total_kwh * rates.get("Network Rate", 0)
         else:
-            capacity_cost = max_demand_kw * tariff.get("Capacity Rate", 0)
-            network_cost = max_demand_kw * tariff.get("Network Rate", 0)
-        retail_cost = tariff.get("Retail Rate", 0)
+            capacity_cost = max_demand_kw * rates.get("Capacity Rate", 0)
+            network_cost = max_demand_kw * rates.get("Network Rate", 0)
+        retail_cost = rates.get("Retail Rate", 0)
         # Calculate AFA adjustment cost
         # If afa_kwh is not provided, use total_kwh
         if afa_kwh == 0:
@@ -44,7 +50,7 @@ def calculate_cost(df, tariff, power_col, holidays=None, afa_kwh=0, afa_rate=0):
             "Energy Cost (RM)": energy_cost,
             "Capacity Cost (RM)": capacity_cost,
             "Network Cost (RM)": network_cost,
-            "Retail Cost (RM)": retail_cost,
+            "Retail Cost": retail_cost,
             "AFA Adjustment": afa_cost,
             "Total Cost": energy_cost + capacity_cost + network_cost + retail_cost + afa_cost
         })
@@ -53,21 +59,17 @@ def calculate_cost(df, tariff, power_col, holidays=None, afa_kwh=0, afa_rate=0):
     is_peak = df["Parsed Timestamp"].apply(lambda ts: is_peak_rp4(ts, holidays or set()))
     peak_kwh = interval_kwh[is_peak].sum()
     offpeak_kwh = interval_kwh[~is_peak].sum()
-    peak_rate = tariff.get("Peak Rate", 0)
-    # Support both 'OffPeak Rate' and 'Off-Peak Rate' keys
-    offpeak_rate = (
-        tariff.get("Off-Peak Rate")
-        if "Off-Peak Rate" in tariff else tariff.get("OffPeak Rate", 0)
-    )
+    peak_rate = rates.get("Peak Rate", 0)
+    offpeak_rate = rates.get("Off-Peak Rate", rates.get("OffPeak Rate", 0))
     peak_cost = peak_kwh * peak_rate
     offpeak_cost = offpeak_kwh * offpeak_rate
     if voltage == "Low Voltage":
-        capacity_cost = total_kwh * tariff.get("Capacity Rate", 0)
-        network_cost = total_kwh * tariff.get("Network Rate", 0)
+        capacity_cost = total_kwh * rates.get("Capacity Rate", 0)
+        network_cost = total_kwh * rates.get("Network Rate", 0)
     else:
-        capacity_cost = max_demand_kw * tariff.get("Capacity Rate", 0)
-        network_cost = max_demand_kw * tariff.get("Network Rate", 0)
-    retail_cost = tariff.get("Retail Rate", 0)
+        capacity_cost = max_demand_kw * rates.get("Capacity Rate", 0)
+        network_cost = max_demand_kw * rates.get("Network Rate", 0)
+    retail_cost = rates.get("Retail Rate", 0)
     # Calculate AFA adjustment cost
     # If afa_kwh is not provided, use total_kwh
     if afa_kwh == 0:
@@ -78,14 +80,16 @@ def calculate_cost(df, tariff, power_col, holidays=None, afa_kwh=0, afa_rate=0):
         "Off-Peak kWh": offpeak_kwh,
         "Peak Rate": peak_rate,
         "Off-Peak Rate": offpeak_rate,
+        "Capacity Rate": rates.get("Capacity Rate", 0),
+        "Network Rate": rates.get("Network Rate", 0),
+        "Retail Rate": retail_cost,
         "Peak Energy Cost": peak_cost,
         "Off-Peak Energy Cost": offpeak_cost,
         "AFA kWh": afa_kwh,
         "AFA Rate": afa_rate,
         "AFA Adjustment": afa_cost,
         "Max Demand (kW)": max_demand_kw,
-        "Capacity Rate": tariff.get("Capacity Rate", 0),
-        "Network Rate": tariff.get("Network Rate", 0),
+        "Peak Demand (kW, Peak Period Only)": peak_demand_kw,
         "Capacity Cost": capacity_cost,
         "Network Cost": network_cost,
         "Retail Cost": retail_cost,
@@ -121,8 +125,10 @@ def format_cost_breakdown(breakdown):
         {"No": "3", "Description": "AFA Consumption", "Unit": "kWh", "Value": fmt(breakdown.get("AFA kWh", "")), "Unit Rate (RM)": fmt(breakdown.get("AFA Rate", "")), "Total Cost (RM)": fmt(breakdown.get("AFA Adjustment", ""))},
     ]
     # Section B: Maximum Demand
+    # Always show correct Capacity Cost (check both keys)
+    capacity_cost_val = breakdown.get("Capacity Cost", breakdown.get("Capacity Cost (RM)", ""))
     rows += [
-        {"No": "B", "Description": "B. Maximum Demand (Peak Demand)", "Unit": "kW", "Value": fmt(breakdown.get("Max Demand (kW)", "")), "Unit Rate (RM)": "", "Total Cost (RM)": fmt(breakdown.get("Capacity Cost", ""))},
+        {"No": "B", "Description": "B. Maximum Demand (Peak Demand)", "Unit": "kW", "Value": fmt(breakdown.get("Max Demand (kW)", "")), "Unit Rate (RM)": "", "Total Cost (RM)": fmt(capacity_cost_val)},
         {"No": "1", "Description": "Network Charge", "Unit": "kW", "Value": fmt(breakdown.get("Max Demand (kW)", "")), "Unit Rate (RM)": fmt(breakdown.get("Network Rate", "")), "Total Cost (RM)": fmt(breakdown.get("Network Cost", ""))},
         {"No": "2", "Description": "Retail Charge", "Unit": "kW", "Value": fmt(breakdown.get("Max Demand (kW)", "")), "Unit Rate (RM)": fmt(breakdown.get("Retail Rate", "")), "Total Cost (RM)": fmt(breakdown.get("Retail Cost", ""))},
     ]
