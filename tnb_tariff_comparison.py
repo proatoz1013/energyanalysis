@@ -17,15 +17,40 @@ def show():
     """)
 
     # Step 1: Select User Type
+    # This sets the top-level category of the tariff structure.
+    # Options:
+    # - "Business"    # (also known as Non-Domestic)
+    # - "Residential" # (tariff data may be added later)
     tariff_data = get_tariff_data()
     user_types = list(tariff_data.keys())
     selected_user_type = st.selectbox("Select User Type", user_types, index=0)
 
     # Step 2: Select Tariff Group (under selected User Type)
+    # These are specific industry or supply categories within the User Type.
+    # Available options under "Business":
+    # - "Non Domestic"
+    # - "Specific Agriculture"
+    # - "Water & Sewerage Operator"
+    # - "Street Lighting"
+    # - "Co-Generation"
+    # - "Traction"
+    # - "Bulk"
+    # - "Thermal Energy Storage (TES)"
+    # - "Backfeed"
     tariff_groups = list(tariff_data[selected_user_type]["Tariff Groups"].keys())
     selected_tariff_group = st.selectbox("Select Tariff Group", tariff_groups, index=0)
 
     # Step 3: Select Voltage and Tariff Type
+    # These are full tariff definitions under the selected Tariff Group.
+    # Format: "<Voltage> <Tariff Type>"
+    # Example options under "Business" → "Non Domestic":
+    # - "Low Voltage General"
+    # - "Low Voltage TOU"
+    # - "Medium Voltage General"
+    # - "Medium Voltage TOU"
+    # - "High Voltage General"
+    # - "High Voltage TOU"
+    # These dropdowns map to: tariff_data[user_type]["Tariff Groups"][group]["Tariffs"]
     tariffs = tariff_data[selected_user_type]["Tariff Groups"][selected_tariff_group]["Tariffs"]
     tariff_types = [t["Tariff"] for t in tariffs]
     selected_tariff_type = st.selectbox("Select Voltage and Tariff Type", tariff_types, index=0)
