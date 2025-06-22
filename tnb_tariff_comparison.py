@@ -23,7 +23,14 @@ def show():
     # - "Residential" # (tariff data may be added later)
     tariff_data = get_tariff_data()
     user_types = list(tariff_data.keys())
-    selected_user_type = st.selectbox("Select User Type", user_types, index=0)
+    # Robust default: 'Business' if present, else first
+    default_user_type = 'Business' if 'Business' in user_types else user_types[0]
+    user_type_index = user_types.index(default_user_type)
+    selected_user_type = st.selectbox(
+        "Select User Type",
+        user_types,
+        index=user_type_index
+    )
 
     # Step 2: Select Tariff Group (under selected User Type)
     # These are specific industry or supply categories within the User Type.
@@ -38,7 +45,14 @@ def show():
     # - "Thermal Energy Storage (TES)"
     # - "Backfeed"
     tariff_groups = list(tariff_data[selected_user_type]["Tariff Groups"].keys())
-    selected_tariff_group = st.selectbox("Select Tariff Group", tariff_groups, index=0)
+    # Robust default: 'Non Domestic' if present, else first
+    default_tariff_group = 'Non Domestic' if 'Non Domestic' in tariff_groups else tariff_groups[0]
+    tariff_group_index = tariff_groups.index(default_tariff_group)
+    selected_tariff_group = st.selectbox(
+        "Select Tariff Group",
+        tariff_groups,
+        index=tariff_group_index
+    )
 
     # Step 3: Select Voltage and Tariff Type
     # These are full tariff definitions under the selected Tariff Group.
@@ -53,7 +67,14 @@ def show():
     # These dropdowns map to: tariff_data[user_type]["Tariff Groups"][group]["Tariffs"]
     tariffs = tariff_data[selected_user_type]["Tariff Groups"][selected_tariff_group]["Tariffs"]
     tariff_types = [t["Tariff"] for t in tariffs]
-    selected_tariff_type = st.selectbox("Select Voltage and Tariff Type", tariff_types, index=0)
+    # Robust default: 'Medium Voltage TOU' if present, else first
+    default_tariff_type = 'Medium Voltage TOU' if 'Medium Voltage TOU' in tariff_types else tariff_types[0]
+    tariff_type_index = tariff_types.index(default_tariff_type)
+    selected_tariff_type = st.selectbox(
+        "Select Voltage and Tariff Type",
+        tariff_types,
+        index=tariff_type_index
+    )
 
     # Find the selected tariff object
     selected_tariff_obj = next((t for t in tariffs if t["Tariff"] == selected_tariff_type), None)
