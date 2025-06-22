@@ -147,12 +147,6 @@ def show():
         # --- Cost Calculation and Display ---
         from utils.cost_calculator import calculate_cost
         st.subheader("Cost Breakdown for Selected Tariff")
-        # Get holidays for all years in data
-        years = df["Parsed Timestamp"].dt.year.unique()
-        from utils.holiday_api import get_malaysia_public_holidays
-        holidays = set()
-        for year in years:
-            holidays.update(get_malaysia_public_holidays(year))
         cost_breakdown = calculate_cost(df, selected_tariff_obj, power_col, holidays, afa_rate=afa_rate)
         if "error" in cost_breakdown:
             st.error(cost_breakdown["error"])
