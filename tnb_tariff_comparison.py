@@ -231,17 +231,8 @@ def show():
                     if isinstance(val, (int, float)):
                         return f"{val:,.2f}"
                     return val
-                # Use double braces to escape curly braces in .format for CSS
                 html = """
-                <style>
-                .cost-table {{ border-collapse: collapse; width: 100%; }}
-                .cost-table th, .cost-table td {{ border: 1px solid #ddd; padding: 8px; text-align: right; }}
-                .cost-table th {{ background-color: #f2f2f2; text-align: center; }}
-                .cost-table td.left {{ text-align: left; }}
-                .cost-table .section {{ font-weight: bold; background: #f9f9f9; }}
-                .cost-table .total {{ font-weight: bold; background: #e6ffe6; }}
-                </style>
-                <table class="cost-table">
+                <table class=\"cost-table\">
                     <tr>
                         <th>No</th>
                         <th>Description</th>
@@ -250,9 +241,9 @@ def show():
                         <th>Unit Rate (RM)</th>
                         <th>Total Cost (RM)</th>
                     </tr>
-                    <tr class="section">
+                    <tr class=\"section\">
                         <td>A</td>
-                        <td class="left">A. Energy Consumption kWh</td>
+                        <td class=\"left\">A. Energy Consumption kWh</td>
                         <td>kWh</td>
                         <td>{total_kwh}</td>
                         <td></td>
@@ -260,7 +251,7 @@ def show():
                     </tr>
                     <tr>
                         <td>1</td>
-                        <td class="left">Peak Period Consumption</td>
+                        <td class=\"left\">Peak Period Consumption</td>
                         <td>kWh</td>
                         <td>{peak_kwh}</td>
                         <td>{peak_rate}</td>
@@ -268,7 +259,7 @@ def show():
                     </tr>
                     <tr>
                         <td>2</td>
-                        <td class="left">Off-Peak Consumption</td>
+                        <td class=\"left\">Off-Peak Consumption</td>
                         <td>kWh</td>
                         <td>{offpeak_kwh}</td>
                         <td>{offpeak_rate}</td>
@@ -276,15 +267,15 @@ def show():
                     </tr>
                     <tr>
                         <td>3</td>
-                        <td class="left">AFA Consumption</td>
+                        <td class=\"left\">AFA Consumption</td>
                         <td>kWh</td>
                         <td>{afa_kwh}</td>
                         <td>{afa_rate}</td>
                         <td>{afa_cost}</td>
                     </tr>
-                    <tr class="section">
+                    <tr class=\"section\">
                         <td>B</td>
-                        <td class="left">B. Maximum Demand (Peak Demand)</td>
+                        <td class=\"left\">B. Maximum Demand (Peak Demand)</td>
                         <td>kW</td>
                         <td>{max_demand}</td>
                         <td></td>
@@ -292,7 +283,7 @@ def show():
                     </tr>
                     <tr>
                         <td>1</td>
-                        <td class="left">Network Charge</td>
+                        <td class=\"left\">Network Charge</td>
                         <td>kW</td>
                         <td>{max_demand}</td>
                         <td>{network_rate}</td>
@@ -300,23 +291,23 @@ def show():
                     </tr>
                     <tr>
                         <td>2</td>
-                        <td class="left">Retail Charge</td>
+                        <td class=\"left\">Retail Charge</td>
                         <td>kW</td>
                         <td>{max_demand}</td>
                         <td>{retail_rate}</td>
                         <td>{retail_cost}</td>
                     </tr>
-                    <tr class="section">
+                    <tr class=\"section\">
                         <td>C</td>
-                        <td class="left">Others Charges</td>
+                        <td class=\"left\">Others Charges</td>
                         <td></td>
                         <td></td>
                         <td></td>
                         <td>0</td>
                     </tr>
-                    <tr class="total">
+                    <tr class=\"total\">
                         <td></td>
-                        <td class="left">Total Estimated Cost</td>
+                        <td class=\"left\">Total Estimated Cost</td>
                         <td></td>
                         <td></td>
                         <td></td>
@@ -408,3 +399,7 @@ def show():
                 formulae.append(f"Retail Cost = {cost_breakdown.get('Retail Cost', 0):,.2f}")
             for f in formulae:
                 st.markdown(f"- {f}")
+
+    # Inject custom CSS for table styling
+    with open("assets/style.css") as f:
+        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)

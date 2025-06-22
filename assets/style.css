@@ -1,0 +1,56 @@
+/* Table styles for both light and dark mode */
+.cost-table {
+  border-collapse: collapse;
+  width: 100%;
+  background: #fff;
+  color: #222;
+}
+.cost-table th, .cost-table td {
+  border: 1px solid #bbb;
+  padding: 8px;
+  text-align: right;
+}
+.cost-table th {
+  background-color: #f2f2f2;
+  color: #222;
+  text-align: center;
+}
+.cost-table td.left {
+  text-align: left;
+}
+.cost-table .section {
+  font-weight: bold;
+  background: #e9ecef;
+  color: #222;
+}
+.cost-table .total {
+  font-weight: bold;
+  background: #d4f5dd;
+  color: #222;
+}
+
+/* Dark mode overrides */
+@media (prefers-color-scheme: dark) {
+  .cost-table {
+    background: #18191A;
+    color: #F5F6FA;
+  }
+  .cost-table th {
+    background-color: #23272F;
+    color: #F5F6FA;
+  }
+  .cost-table td.left {
+    color: #F5F6FA;
+  }
+  .cost-table .section {
+    background: #23272F;
+    color: #F5F6FA;
+  }
+  .cost-table .total {
+    background: #1E5128;
+    color: #F5F6FA;
+  }
+  .cost-table th, .cost-table td {
+    border: 1px solid #333;
+  }
+}
