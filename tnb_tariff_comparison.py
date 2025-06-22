@@ -71,7 +71,12 @@ def show():
         st.subheader("Column Selection")
         timestamp_col = st.selectbox("Select timestamp column", df.columns, key="timestamp_col_selector")
         power_col = st.selectbox("Select power (kW) column", df.select_dtypes(include='number').columns, key="power_col_selector")
-
+       # --- Manual input for number of public holidays ---
+        st.subheader("Manual Public Holiday Count")
+        manual_holiday_count = st.number_input(
+            "Enter number of public holidays in the period:",
+            min_value=0, value=1, step=1, key="manual_holiday_count_input"
+        )
         # --- Calculate period of start time and end time ---
         df["Parsed Timestamp"] = pd.to_datetime(df[timestamp_col], errors="coerce")
         df = df.dropna(subset=["Parsed Timestamp"])
@@ -95,12 +100,7 @@ def show():
             col3.metric("Total Energy (kWh)", f"{total_kwh:,.2f}")
             col3.metric("Maximum Demand kW", f"{df[power_col].max():,.2f}")
 
-        # --- Manual input for number of public holidays ---
-        st.subheader("Manual Public Holiday Count")
-        manual_holiday_count = st.number_input(
-            "Enter number of public holidays in the period:",
-            min_value=0, value=0, step=1, key="manual_holiday_count_input"
-        )
+ 
         # Select the first N unique dates as holidays
         unique_dates = df["Parsed Timestamp"].dt.date.unique()
         holidays = set(unique_dates[:manual_holiday_count])
