@@ -7,7 +7,7 @@ from tnb_tariff_comparison import show as show_tnb_tariff_comparison
 
 st.set_page_config(page_title="Load Profile Analysis", layout="wide")
 
-tabs = st.tabs(["Load Profile Analysis", "TNB New Tariff Comparison"])
+tabs = st.tabs(["TNB New Tariff Comparison", "Load Profile Analysis"])
 
 with tabs[1]:
     st.title("Energy Analysis Dashboard")
