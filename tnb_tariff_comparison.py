@@ -16,21 +16,22 @@ def show():
     This tool allows you to compare the new TNB tariffs for different consumer categories. Select your industry and tariff schedule to see a breakdown and comparison of costs under the new tariff structure.
     """)
 
-    # 1. Select Non Domestic (only one option for now)
-    industry_options = ["Non Domestic"]
-    selected_industry = st.selectbox("Select Non Domestic / Domestic", industry_options, index=0)
-
-    # 2. Tariff Industry (keys from rp4_tariffs, e.g. Non Domestic, Specific Agriculture, ...)
+    # Step 1: Select User Type
     tariff_data = get_tariff_data()
-    tariff_industries = list(tariff_data.keys())
-    selected_tariff_industry = st.selectbox("Select Tariff Industry", tariff_industries, index=0)
+    user_types = list(tariff_data.keys())
+    selected_user_type = st.selectbox("Select User Type", user_types, index=0)
 
-    # 3. Voltage and Tariff Type (Tariff names for selected industry)
-    tariff_types = [t["Tariff"] for t in tariff_data[selected_tariff_industry]["Tariffs"]]
+    # Step 2: Select Tariff Group (under selected User Type)
+    tariff_groups = list(tariff_data[selected_user_type]["Tariff Groups"].keys())
+    selected_tariff_group = st.selectbox("Select Tariff Group", tariff_groups, index=0)
+
+    # Step 3: Select Voltage and Tariff Type
+    tariffs = tariff_data[selected_user_type]["Tariff Groups"][selected_tariff_group]["Tariffs"]
+    tariff_types = [t["Tariff"] for t in tariffs]
     selected_tariff_type = st.selectbox("Select Voltage and Tariff Type", tariff_types, index=0)
 
     # Find the selected tariff object
-    selected_tariff_obj = next((t for t in tariff_data[selected_tariff_industry]["Tariffs"] if t["Tariff"] == selected_tariff_type), None)
+    selected_tariff_obj = next((t for t in tariffs if t["Tariff"] == selected_tariff_type), None)
     if not selected_tariff_obj:
         st.error("Selected tariff details not found.")
         return
