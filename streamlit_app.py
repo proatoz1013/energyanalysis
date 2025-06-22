@@ -7,9 +7,9 @@ from tnb_tariff_comparison import show as show_tnb_tariff_comparison
 
 st.set_page_config(page_title="Load Profile Analysis", layout="wide")
 
-tabs = st.tabs(["TNB New Tariff Comparison", "Load Profile Analysis"])
+tabs = st.tabs(["Load Profile Analysis", "TNB New Tariff Comparison"])
 
-with tabs[0]:
+with tabs[1]:
     st.title("Energy Analysis Dashboard")
     st.subheader("Tariff Setup")
 
@@ -592,5 +592,5 @@ with tabs[0]:
             st.error(f"An unexpected error occurred: {e}")
             st.error("Ensure Excel file is correctly formatted and columns are selected.")
 
-with tabs[1]:
+with tabs[0]:
     show_tnb_tariff_comparison()
