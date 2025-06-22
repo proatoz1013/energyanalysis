@@ -93,3 +93,45 @@ def calculate_cost(df, tariff, power_col, holidays=None, afa_kwh=0, afa_rate=0):
         "Total Cost": peak_cost + offpeak_cost + capacity_cost + network_cost + retail_cost + afa_cost
     })
     return breakdown
+
+def format_cost_breakdown(breakdown):
+    """
+    Format the cost breakdown dictionary into a DataFrame matching the requested table format, with improved clarity and formatting.
+    """
+    def fmt(val):
+        if val is None or val == "":
+            return ""
+        if isinstance(val, (int, float)):
+            if abs(val) < 1e-6:
+                return ""
+            return f"{val:,.2f}"
+        return val
+
+    is_tou = "Peak Energy Cost" in breakdown and "Off-Peak Energy Cost" in breakdown
+    if is_tou:
+        total_energy_cost = (breakdown.get("Peak Energy Cost", 0) or 0) + (breakdown.get("Off-Peak Energy Cost", 0) or 0)
+    else:
+        total_energy_cost = breakdown.get("Energy Cost (RM)", "")
+
+    # Section A: Energy Consumption
+    rows = [
+        {"No": "A", "Description": "A. Energy Consumption kWh", "Unit": "kWh", "Value": fmt(breakdown.get("Total kWh", "")), "Unit Rate (RM)": "", "Total Cost (RM)": fmt(total_energy_cost)},
+        {"No": "1", "Description": "Peak Period Consumption", "Unit": "kWh", "Value": fmt(breakdown.get("Peak kWh", "")), "Unit Rate (RM)": fmt(breakdown.get("Peak Rate", "")), "Total Cost (RM)": fmt(breakdown.get("Peak Energy Cost", ""))},
+        {"No": "2", "Description": "Off-Peak Consumption", "Unit": "kWh", "Value": fmt(breakdown.get("Off-Peak kWh", "")), "Unit Rate (RM)": fmt(breakdown.get("Off-Peak Rate", "")), "Total Cost (RM)": fmt(breakdown.get("Off-Peak Energy Cost", ""))},
+        {"No": "3", "Description": "AFA Consumption", "Unit": "kWh", "Value": fmt(breakdown.get("AFA kWh", "")), "Unit Rate (RM)": fmt(breakdown.get("AFA Rate", "")), "Total Cost (RM)": fmt(breakdown.get("AFA Adjustment", ""))},
+    ]
+    # Section B: Maximum Demand
+    rows += [
+        {"No": "B", "Description": "B. Maximum Demand (Peak Demand)", "Unit": "kW", "Value": fmt(breakdown.get("Max Demand (kW)", "")), "Unit Rate (RM)": "", "Total Cost (RM)": fmt(breakdown.get("Capacity Cost", ""))},
+        {"No": "1", "Description": "Network Charge", "Unit": "kW", "Value": fmt(breakdown.get("Max Demand (kW)", "")), "Unit Rate (RM)": fmt(breakdown.get("Network Rate", "")), "Total Cost (RM)": fmt(breakdown.get("Network Cost", ""))},
+        {"No": "2", "Description": "Retail Charge", "Unit": "kW", "Value": fmt(breakdown.get("Max Demand (kW)", "")), "Unit Rate (RM)": fmt(breakdown.get("Retail Rate", "")), "Total Cost (RM)": fmt(breakdown.get("Retail Cost", ""))},
+    ]
+    # Section C: Others Charges
+    rows.append({"No": "C", "Description": "Others Charges", "Unit": "", "Value": "", "Unit Rate (RM)": "", "Total Cost (RM)": fmt(breakdown.get("Others Charges", 0))})
+    # Total row
+    rows.append({"No": "", "Description": "Total Estimated Cost", "Unit": "", "Value": "", "Unit Rate (RM)": "", "Total Cost (RM)": fmt(breakdown.get("Total Cost", ""))})
+
+    df = pd.DataFrame(rows)
+    # Remove the first column (index 0) from the DataFrame before returning
+    df = df.iloc[:, 1:]
+    return df

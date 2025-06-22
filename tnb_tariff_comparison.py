@@ -216,119 +216,170 @@ def show():
         afa_rate = afa_rate_cent / 100  # Convert cent to RM
 
         # --- Cost Calculation and Display ---
-        from utils.cost_calculator import calculate_cost
+        from utils.cost_calculator import calculate_cost, format_cost_breakdown
         st.subheader("Cost Breakdown for Selected Tariff")
         cost_breakdown = calculate_cost(df, selected_tariff_obj, power_col, holidays, afa_rate=afa_rate)
         if "error" in cost_breakdown:
             st.error(cost_breakdown["error"])
         else:
-            # Build a DataFrame with columns: Description, Unit, Value, Unit Rate (RM), Total Cost (RM)
-            table_rows = []
-            def safe_get(d, key, default="–"):
-                return d.get(key, default) if isinstance(d, dict) else default
 
-            # --- Energy Section ---
-            table_rows.append({
-                "Description": "A. Energy Consumption kWh",
-                "Unit": "kWh",
-                "Value": f"{safe_get(cost_breakdown, 'Total kWh', 0):,.2f}",
-                "Unit Rate (RM)": "–",
-                "Total Cost (RM)": f"{safe_get(cost_breakdown, 'Energy Cost', 0):,.2f}"
-            })
-            if "Peak kWh" in cost_breakdown:
-                table_rows.append({
-                    "Description": "Peak Period Consumption",
-                    "Unit": "kWh",
-                    "Value": f"{safe_get(cost_breakdown, 'Peak kWh', 0):,.2f}",
-                    "Unit Rate (RM)": safe_get(cost_breakdown, 'Peak Rate', '–'),
-                    "Total Cost (RM)": f"{safe_get(cost_breakdown, 'Peak Energy Cost', 0):,.2f}"
-                })
-            if "Off-Peak kWh" in cost_breakdown:
-                table_rows.append({
-                    "Description": "Off-Peak Consumption",
-                    "Unit": "kWh",
-                    "Value": f"{safe_get(cost_breakdown, 'Off-Peak kWh', 0):,.2f}",
-                    "Unit Rate (RM)": safe_get(cost_breakdown, 'Off-Peak Rate', '–'),
-                    "Total Cost (RM)": f"{safe_get(cost_breakdown, 'Off-Peak Energy Cost', 0):,.2f}"
-                })
+            # --- HTML Table for Cost Breakdown (before Streamlit table) ---
+            def html_cost_table(breakdown):
+                def fmt(val):
+                    if val is None or val == "":
+                        return ""
+                    if isinstance(val, (int, float)):
+                        return f"{val:,.2f}"
+                    return val
+                # Use double braces to escape curly braces in .format for CSS
+                html = """
+                <style>
+                .cost-table {{ border-collapse: collapse; width: 100%; }}
+                .cost-table th, .cost-table td {{ border: 1px solid #ddd; padding: 8px; text-align: right; }}
+                .cost-table th {{ background-color: #f2f2f2; text-align: center; }}
+                .cost-table td.left {{ text-align: left; }}
+                .cost-table .section {{ font-weight: bold; background: #f9f9f9; }}
+                .cost-table .total {{ font-weight: bold; background: #e6ffe6; }}
+                </style>
+                <table class="cost-table">
+                    <tr>
+                        <th>No</th>
+                        <th>Description</th>
+                        <th>Unit</th>
+                        <th>Value</th>
+                        <th>Unit Rate (RM)</th>
+                        <th>Total Cost (RM)</th>
+                    </tr>
+                    <tr class="section">
+                        <td>A</td>
+                        <td class="left">A. Energy Consumption kWh</td>
+                        <td>kWh</td>
+                        <td>{total_kwh}</td>
+                        <td></td>
+                        <td>{energy_cost}</td>
+                    </tr>
+                    <tr>
+                        <td>1</td>
+                        <td class="left">Peak Period Consumption</td>
+                        <td>kWh</td>
+                        <td>{peak_kwh}</td>
+                        <td>{peak_rate}</td>
+                        <td>{peak_cost}</td>
+                    </tr>
+                    <tr>
+                        <td>2</td>
+                        <td class="left">Off-Peak Consumption</td>
+                        <td>kWh</td>
+                        <td>{offpeak_kwh}</td>
+                        <td>{offpeak_rate}</td>
+                        <td>{offpeak_cost}</td>
+                    </tr>
+                    <tr>
+                        <td>3</td>
+                        <td class="left">AFA Consumption</td>
+                        <td>kWh</td>
+                        <td>{afa_kwh}</td>
+                        <td>{afa_rate}</td>
+                        <td>{afa_cost}</td>
+                    </tr>
+                    <tr class="section">
+                        <td>B</td>
+                        <td class="left">B. Maximum Demand (Peak Demand)</td>
+                        <td>kW</td>
+                        <td>{max_demand}</td>
+                        <td></td>
+                        <td>{capacity_cost}</td>
+                    </tr>
+                    <tr>
+                        <td>1</td>
+                        <td class="left">Network Charge</td>
+                        <td>kW</td>
+                        <td>{max_demand}</td>
+                        <td>{network_rate}</td>
+                        <td>{network_cost}</td>
+                    </tr>
+                    <tr>
+                        <td>2</td>
+                        <td class="left">Retail Charge</td>
+                        <td>kW</td>
+                        <td>{max_demand}</td>
+                        <td>{retail_rate}</td>
+                        <td>{retail_cost}</td>
+                    </tr>
+                    <tr class="section">
+                        <td>C</td>
+                        <td class="left">Others Charges</td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td>0</td>
+                    </tr>
+                    <tr class="total">
+                        <td></td>
+                        <td class="left">Total Estimated Cost</td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td>{total_cost}</td>
+                    </tr>
+                </table>
+                """.format(
+                    total_kwh=fmt(breakdown.get("Total kWh", "")),
+                    energy_cost=fmt(
+                        (breakdown.get("Peak Energy Cost", 0) or 0) +
+                        (breakdown.get("Off-Peak Energy Cost", 0) or 0)
+                        if "Peak Energy Cost" in breakdown else breakdown.get("Energy Cost (RM)", "")
+                    ),
+                    peak_kwh=fmt(breakdown.get("Peak kWh", "")),
+                    peak_rate=fmt(breakdown.get("Peak Rate", "")),
+                    peak_cost=fmt(breakdown.get("Peak Energy Cost", "")),
+                    offpeak_kwh=fmt(breakdown.get("Off-Peak kWh", "")),
+                    offpeak_rate=fmt(breakdown.get("Off-Peak Rate", "")),
+                    offpeak_cost=fmt(breakdown.get("Off-Peak Energy Cost", "")),
+                    afa_kwh=fmt(breakdown.get("AFA kWh", "")),
+                    afa_rate=fmt(breakdown.get("AFA Rate", "")),
+                    afa_cost=fmt(breakdown.get("AFA Adjustment", "")),
+                    max_demand=fmt(breakdown.get("Max Demand (kW)", "")),
+                    capacity_cost=fmt(breakdown.get("Capacity Cost", "")),
+                    network_rate=fmt(breakdown.get("Network Rate", "")),
+                    network_cost=fmt(breakdown.get("Network Cost", "")),
+                    retail_rate=fmt(breakdown.get("Retail Rate", "")),
+                    retail_cost=fmt(breakdown.get("Retail Cost", "")),
+                    total_cost=fmt(breakdown.get("Total Cost", "")),
+                )
+                return html
 
-            # --- AFA Section (if present) ---
-            if "AFA kWh" in cost_breakdown:
-                table_rows.append({
-                    "Description": "AFA Consumption",
-                    "Unit": "kWh",
-                    "Value": f"{safe_get(cost_breakdown, 'AFA kWh', 0):,.2f}",
-                    "Unit Rate (RM)": safe_get(cost_breakdown, 'AFA Rate', '–'),
-                    "Total Cost (RM)": f"{safe_get(cost_breakdown, 'AFA Adjustment', 0):,.2f}"
-                })
-
-            # --- Maximum Demand Section ---
-            table_rows.append({
-                "Description": "B. Maximum Demand",
-                "Unit": "kW",
-                "Value": f"{safe_get(cost_breakdown, 'Max Demand', 0):,.2f}",
-                "Unit Rate (RM)": "–",
-                "Total Cost (RM)": f"{safe_get(cost_breakdown, 'Capacity Cost', 0):,.2f}"
-            })
-            if "Network Cost" in cost_breakdown:
-                table_rows.append({
-                    "Description": "Network Charge",
-                    "Unit": "kW",
-                    "Value": f"{safe_get(cost_breakdown, 'Max Demand', 0):,.2f}",
-                    "Unit Rate (RM)": f"{safe_get(cost_breakdown, 'Network Rate', '–')}",
-                    "Total Cost (RM)": f"{safe_get(cost_breakdown, 'Network Cost', 0):,.2f}"
-                })
-            if "Retail Cost" in cost_breakdown:
-                table_rows.append({
-                    "Description": "Retail Charge",
-                    "Unit": "–",
-                    "Value": "–",
-                    "Unit Rate (RM)": "–",
-                    "Total Cost (RM)": f"{safe_get(cost_breakdown, 'Retail Cost', 0):,.2f}"
-                })
-
-            # --- Blank row for spacing ---
-            table_rows.append({"Description": "", "Unit": "", "Value": "", "Unit Rate (RM)": "", "Total Cost (RM)": ""})
-
-            # --- Total row ---
-            table_rows.append({
-                "Description": "💰 Total Estimated Cost",
-                "Unit": "",
-                "Value": "",
-                "Unit Rate (RM)": "",
-                "Total Cost (RM)": f"{safe_get(cost_breakdown, 'Total Cost', 0):,.2f}"
-            })
-
-            cost_df = pd.DataFrame(table_rows, columns=["Description", "Unit", "Value", "Unit Rate (RM)", "Total Cost (RM)"])
-            st.dataframe(cost_df, use_container_width=True)
+            st.markdown(html_cost_table(cost_breakdown), unsafe_allow_html=True)
 
             # --- Pie Chart for Cost Breakdown ---
             pie_labels = []
             pie_values = []
             pie_colors = []
-            # Only include rows with cost and not blank/total rows
-            for row in table_rows:
-                desc = row["Description"]
-                cost = row["Total Cost (RM)"]
-                if desc and desc not in ["", "💰 Total Estimated Cost"] and cost not in ["", "–"]:
-                    try:
-                        val = float(str(cost).replace(",", ""))
-                        if val > 0:
-                            pie_labels.append(desc)
-                            pie_values.append(val)
-                            # Assign color by type
-                            if "Peak" in desc:
-                                pie_colors.append("orange")
-                            elif "Off-Peak" in desc:
-                                pie_colors.append("blue")
-                            elif "AFA" in desc:
-                                pie_colors.append("green")
-                            elif "Maximum Demand" in desc or "Network" in desc:
-                                pie_colors.append("red")
-                            else:
-                                pie_colors.append("grey")
-                    except Exception:
-                        continue
+            # Use cost_breakdown dict directly for pie chart
+            if "Peak Energy Cost" in cost_breakdown and cost_breakdown.get("Peak Energy Cost", 0):
+                pie_labels.append("Peak Period Consumption")
+                pie_values.append(cost_breakdown.get("Peak Energy Cost", 0))
+                pie_colors.append("orange")
+            if "Off-Peak Energy Cost" in cost_breakdown and cost_breakdown.get("Off-Peak Energy Cost", 0):
+                pie_labels.append("Off-Peak Consumption")
+                pie_values.append(cost_breakdown.get("Off-Peak Energy Cost", 0))
+                pie_colors.append("blue")
+            if "AFA Adjustment" in cost_breakdown and cost_breakdown.get("AFA Adjustment", 0):
+                pie_labels.append("AFA Consumption")
+                pie_values.append(cost_breakdown.get("AFA Adjustment", 0))
+                pie_colors.append("green")
+            if "Capacity Cost" in cost_breakdown and cost_breakdown.get("Capacity Cost", 0):
+                pie_labels.append("Maximum Demand (Peak Demand)")
+                pie_values.append(cost_breakdown.get("Capacity Cost", 0))
+                pie_colors.append("red")
+            if "Network Cost" in cost_breakdown and cost_breakdown.get("Network Cost", 0):
+                pie_labels.append("Network Charge")
+                pie_values.append(cost_breakdown.get("Network Cost", 0))
+                pie_colors.append("red")
+            if "Retail Cost" in cost_breakdown and cost_breakdown.get("Retail Cost", 0):
+                pie_labels.append("Retail Charge")
+                pie_values.append(cost_breakdown.get("Retail Cost", 0))
+                pie_colors.append("grey")
             if pie_labels and pie_values:
                 fig = px.pie(
                     names=pie_labels,
@@ -344,16 +395,16 @@ def show():
             st.subheader("Cost Calculation Formulae")
             formulae = []
             if "Peak kWh" in cost_breakdown:
-                formulae.append(f"Peak Energy Cost = Peak kWh × Peak Rate = {safe_get(cost_breakdown, 'Peak kWh', 0):,.2f} × {safe_get(cost_breakdown, 'Peak Rate', '–')} = {safe_get(cost_breakdown, 'Peak Energy Cost', 0):,.2f}")
+                formulae.append(f"Peak Energy Cost = Peak kWh × Peak Rate = {cost_breakdown.get('Peak kWh', 0):,.2f} × {cost_breakdown.get('Peak Rate', '–')} = {cost_breakdown.get('Peak Energy Cost', 0):,.2f}")
             if "Off-Peak kWh" in cost_breakdown:
-                formulae.append(f"Off-Peak Energy Cost = Off-Peak kWh × Off-Peak Rate = {safe_get(cost_breakdown, 'Off-Peak kWh', 0):,.2f} × {safe_get(cost_breakdown, 'Off-Peak Rate', '–')} = {safe_get(cost_breakdown, 'Off-Peak Energy Cost', 0):,.2f}")
+                formulae.append(f"Off-Peak Energy Cost = Off-Peak kWh × Off-Peak Rate = {cost_breakdown.get('Off-Peak kWh', 0):,.2f} × {cost_breakdown.get('Off-Peak Rate', '–')} = {cost_breakdown.get('Off-Peak Energy Cost', 0):,.2f}")
             if "AFA kWh" in cost_breakdown:
-                formulae.append(f"AFA Adjustment = AFA kWh × AFA Rate = {safe_get(cost_breakdown, 'AFA kWh', 0):,.2f} × {safe_get(cost_breakdown, 'AFA Rate', '–')} = {safe_get(cost_breakdown, 'AFA Adjustment', 0):,.2f}")
-            if "Max Demand" in cost_breakdown:
-                formulae.append(f"Maximum Demand Cost = Max Demand × Capacity Rate = {safe_get(cost_breakdown, 'Max Demand', 0):,.2f} × {safe_get(cost_breakdown, 'Capacity Rate', '–')} = {safe_get(cost_breakdown, 'Capacity Cost', 0):,.2f}")
+                formulae.append(f"AFA Adjustment = AFA kWh × AFA Rate = {cost_breakdown.get('AFA kWh', 0):,.2f} × {cost_breakdown.get('AFA Rate', '–')} = {cost_breakdown.get('AFA Adjustment', 0):,.2f}")
+            if "Max Demand (kW)" in cost_breakdown:
+                formulae.append(f"Maximum Demand Cost = Max Demand × Capacity Rate = {cost_breakdown.get('Max Demand (kW)', 0):,.2f} × {cost_breakdown.get('Capacity Rate', '–')} = {cost_breakdown.get('Capacity Cost', 0):,.2f}")
             if "Network Cost" in cost_breakdown:
-                formulae.append(f"Network Cost = Max Demand × Network Rate = {safe_get(cost_breakdown, 'Max Demand', 0):,.2f} × {safe_get(cost_breakdown, 'Network Rate', '–')} = {safe_get(cost_breakdown, 'Network Cost', 0):,.2f}")
+                formulae.append(f"Network Cost = Max Demand × Network Rate = {cost_breakdown.get('Max Demand (kW)', 0):,.2f} × {cost_breakdown.get('Network Rate', '–')} = {cost_breakdown.get('Network Cost', 0):,.2f}")
             if "Retail Cost" in cost_breakdown:
-                formulae.append(f"Retail Cost = {safe_get(cost_breakdown, 'Retail Cost', 0):,.2f}")
+                formulae.append(f"Retail Cost = {cost_breakdown.get('Retail Cost', 0):,.2f}")
             for f in formulae:
                 st.markdown(f"- {f}")
