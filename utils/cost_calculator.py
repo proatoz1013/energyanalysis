@@ -201,3 +201,21 @@ def format_cost_breakdown(breakdown):
     # Remove the first column (index 0) from the DataFrame before returning
     df = df.iloc[:, 1:]
     return df
+
+def html_cost_table(cost_breakdown):
+    """
+    Generate an HTML table for the cost breakdown.
+    cost_breakdown: dict, the cost breakdown dictionary.
+    Returns: str, HTML string for the table.
+    """
+    rows = []
+    for key, value in cost_breakdown.items():
+        rows.append(f"<tr><td>{key}</td><td>{value}</td></tr>")
+    table_html = (
+        "<table class='cost-table'>"
+        "<thead><tr><th>Description</th><th>Value</th></tr></thead>"
+        "<tbody>"
+        + "".join(rows) +
+        "</tbody></table>"
+    )
+    return table_html
