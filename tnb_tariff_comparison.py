@@ -321,42 +321,13 @@ def show():
 
             # --- Side-by-side Tariff Comparison Section ---
             st.markdown("---")
-            st.subheader("Compare with Another Tariff")
-            st.caption("Select a second tariff to compare cost breakdowns side-by-side. All calculations use the same uploaded data and AFA rate.")
-            comparison_tariff_type = st.selectbox(
-                "Select Comparison Tariff",
-                tariff_types,
-                index=tariff_type_index,
-                key="comparison_tariff_type_selector"
-            )
-            comparison_tariff_obj = next((t for t in tariffs if t["Tariff"] == comparison_tariff_type), None)
-            if comparison_tariff_obj and comparison_tariff_obj != selected_tariff_obj:
-                comparison_cost_breakdown = calculate_cost(df, comparison_tariff_obj, power_col, holidays, afa_rate=afa_rate)
-                # Prepare columns for side-by-side display
-                colA, colB = st.columns(2)
-                with colA:
-                    st.markdown(f"#### {selected_user_type} > {selected_tariff_group} > {selected_tariff_type}")
-                    st.markdown("<b>Cost per kWh (Total Cost / Total kWh):</b> " + (
-                        f"{(cost_breakdown.get('Total Cost',0)/cost_breakdown.get('Total kWh',1)) if cost_breakdown.get('Total kWh',0) else 'N/A'} RM/kWh"
-                    ), unsafe_allow_html=True)
-                    st.markdown(html_cost_table(cost_breakdown), unsafe_allow_html=True)
-                with colB:
-                    st.markdown(f"#### {selected_user_type} > {selected_tariff_group} > {comparison_tariff_type}")
-                    comp_total_kwh = comparison_cost_breakdown.get('Total kWh', None)
-                    comp_total_cost = comparison_cost_breakdown.get('Total Cost', None)
-                    if comp_total_kwh is not None and comp_total_cost is not None and comp_total_kwh != 0:
-                        comp_cost_per_kwh = comp_total_cost / comp_total_kwh
-                        st.markdown(f"<b>Cost per kWh (Total Cost / Total kWh):</b> {comp_cost_per_kwh:,.4f} RM/kWh", unsafe_allow_html=True)
-                    elif comp_total_kwh == 0:
-                        st.markdown(f"<b>Cost per kWh (Total Cost / Total kWh):</b> N/A (0 kWh)", unsafe_allow_html=True)
-                    st.markdown(html_cost_table(comparison_cost_breakdown), unsafe_allow_html=True)
-            else:
-                st.info("Select a different tariff to enable side-by-side comparison.")
-            # --- Add Old Tariff Comparison Table ---
-            st.markdown("---")
-            st.subheader("Compare with Old Tariff (Legacy Rate)")
+            st.subheader("Compare with Selected Tariff and Old Tariff")
+            colA, colB = st.columns(2)
+
+            # Ensure `selected_old_tariff` is defined before use
             from utils.old_cost_calculator import calculate_old_cost
             from old_rate import charging_rates
+
             # Let user select old tariff
             old_tariff_names = list(charging_rates.keys())
             default_old_tariff = old_tariff_names[0]
@@ -366,6 +337,7 @@ def show():
                 index=old_tariff_names.index(default_old_tariff),
                 key="old_tariff_selector"
             )
+
             # Calculate old cost
             old_cost_breakdown = calculate_old_cost(
                 selected_old_tariff,
@@ -374,94 +346,30 @@ def show():
                 peak_kwh=peak_kwh,
                 offpeak_kwh=offpeak_kwh
             )
-            # Display old cost table
-            st.markdown(f"#### Old Tariff: {selected_old_tariff}")
-            if "error" in old_cost_breakdown:
-                st.error(old_cost_breakdown["error"])
-            else:
-                st.markdown(
-                    f"<b>Cost per kWh (Total Cost / Total kWh):</b> "
-                    f"{(old_cost_breakdown.get('Total Cost',0)/total_kwh) if total_kwh else 'N/A'} RM/kWh",
-                    unsafe_allow_html=True
-                )
-                st.write(pd.DataFrame([
-                    {"Description": k, "Value": v}
-                    for k, v in old_cost_breakdown.items() if k != "Tariff"
-                ]))
-            # --- Pie Chart for Cost Breakdown (disabled, enable for future debugging) ---
-            # pie_labels = []
-            # pie_values = []
-            # pie_colors = []
-            # color_map = {
-            #     "Peak Period Consumption": "orange",
-            #     "Off-Peak Consumption": "blue",
-            #     "AFA Consumption": "green",
-            #     "Maximum Demand (Peak Demand)": "red",
-            #     "Capacity Charge": "red",
-            #     "Network Charge": "purple",
-            #     "Retail Charge": "grey",
-            #     "Total Consumption": "orange",  # For General tariffs
-            # }
-            # if cost_breakdown.get("Peak Energy Cost", 0):
-            #     pie_labels.append("Peak Period Consumption")
-            #     pie_values.append(cost_breakdown.get("Peak Energy Cost", 0))
-            #     pie_colors.append(color_map["Peak Period Consumption"])
-            # if cost_breakdown.get("Off-Peak Energy Cost", 0):
-            #     pie_labels.append("Off-Peak Consumption")
-            #     pie_values.append(cost_breakdown.get("Off-Peak Energy Cost", 0))
-            #     pie_colors.append(color_map["Off-Peak Consumption"])
-            # if not ("Peak Energy Cost" in cost_breakdown or "Off-Peak Energy Cost" in cost_breakdown):
-            #     energy_cost = cost_breakdown.get("Energy Cost", cost_breakdown.get("Energy Cost (RM)", 0))
-            #     if energy_cost:
-            #         pie_labels.append("Total Consumption")
-            #         pie_values.append(energy_cost)
-            #         pie_colors.append(color_map["Total Consumption"])
-            #     if cost_breakdown.get("AFA Adjustment", 0):
-            #         pie_labels.append("AFA Consumption")
-            #         pie_values.append(cost_breakdown.get("AFA Adjustment", 0))
-            #         pie_colors.append(color_map["AFA Consumption"])
-            #     if cost_breakdown.get("Capacity Cost", 0):
-            #         pie_labels.append("Capacity Charge")
-            #         pie_values.append(cost_breakdown.get("Capacity Cost", 0))
-            #         pie_colors.append(color_map["Capacity Charge"])
-            #     if cost_breakdown.get("Network Cost", 0):
-            #         pie_labels.append("Network Charge")
-            #         pie_values.append(cost_breakdown.get("Network Cost", 0))
-            #         pie_colors.append(color_map["Network Charge"])
-            #     if cost_breakdown.get("Retail Cost", 0):
-            #         pie_labels.append("Retail Charge")
-            #         pie_values.append(cost_breakdown.get("Retail Cost", 0))
-            #         pie_colors.append(color_map["Retail Charge"])
-            # else:
-            #     if cost_breakdown.get("AFA Adjustment", 0):
-            #         pie_labels.append("AFA Consumption")
-            #         pie_values.append(cost_breakdown.get("AFA Adjustment", 0))
-            #         pie_colors.append(color_map["AFA Consumption"])
-            #     if cost_breakdown.get("Capacity Cost", 0):
-            #         pie_labels.append("Maximum Demand (Peak Demand)")
-            #         pie_values.append(cost_breakdown.get("Capacity Cost", 0))
-            #         pie_colors.append(color_map["Maximum Demand (Peak Demand)"])
-            #     if cost_breakdown.get("Network Cost", 0):
-            #         pie_labels.append("Network Charge")
-            #         pie_values.append(cost_breakdown.get("Network Cost", 0))
-            #         pie_colors.append(color_map["Network Charge"])
-            #     if cost_breakdown.get("Retail Cost", 0):
-            #         pie_labels.append("Retail Charge")
-            #         pie_values.append(cost_breakdown.get("Retail Cost", 0))
-            #         pie_colors.append(color_map["Retail Charge"])
-            # if pie_labels and pie_values:
-            #     fig = px.pie(
-            #         names=pie_labels,
-            #         values=pie_values,
-            #         color=pie_labels,
-            #         color_discrete_sequence=pie_colors,
-            #         title="Cost Breakdown Pie Chart"
-            #     )
-            #     fig.update_traces(textinfo='label+percent', textfont_size=18)
-            #     st.plotly_chart(fig, use_container_width=True)
-            # else:
-            #     st.info("No nonzero cost components to display in the pie chart.")
 
+            # Display selected tariff breakdown
+            with colA:
+                st.markdown(f"#### {selected_user_type} > {selected_tariff_group} > {selected_tariff_type}")
+                st.markdown("<b>Cost per kWh (Total Cost / Total kWh):</b> " + (
+                    f"{(cost_breakdown.get('Total Cost',0)/cost_breakdown.get('Total kWh',1)) if cost_breakdown.get('Total kWh',0) else 'N/A'} RM/kWh"
+                ), unsafe_allow_html=True)
+                st.markdown(html_cost_table(cost_breakdown), unsafe_allow_html=True)
+
+            # Display old tariff breakdown
+            with colB:
+                st.markdown(f"#### Old Tariff: {selected_old_tariff}")
+                if "error" in old_cost_breakdown:
+                    st.error(old_cost_breakdown["error"])
+                else:
+                    st.markdown(
+                        f"<b>Cost per kWh (Total Cost / Total kWh):</b> "
+                        f"{(old_cost_breakdown.get('Total Cost',0)/total_kwh) if total_kwh else 'N/A'} RM/kWh",
+                        unsafe_allow_html=True
+                    )
+                    st.write(pd.DataFrame([
+                        {"Description": k, "Value": v}
+                        for k, v in old_cost_breakdown.items() if k != "Tariff"
+                    ]))
             # --- Regression Formula Display (disabled, enable for future debugging) ---
             # st.subheader("Cost Calculation Formulae")
             # formulae = []
