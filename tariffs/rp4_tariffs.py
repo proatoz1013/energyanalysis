@@ -10,7 +10,8 @@ TARIFF_DATA = {
               "tiered": True,
               "charge_capacity_by": None,
               "charge_network_by": None,
-              "has_peak_split": False
+              "has_peak_split": False,
+              "afa_applicable": False
             }
           }
         ]
@@ -34,7 +35,8 @@ TARIFF_DATA = {
             "Rules": {
               "charge_capacity_by": "kWh",
               "charge_network_by": "kWh",
-              "has_peak_split": False
+              "has_peak_split": False,
+              "afa_applicable": False
             }
           },
           {
@@ -51,7 +53,8 @@ TARIFF_DATA = {
             "Rules": {
               "charge_capacity_by": "kWh",
               "charge_network_by": "kWh",
-              "has_peak_split": True
+              "has_peak_split": True,
+              "afa_applicable": False
             }
           },
           {
@@ -67,7 +70,8 @@ TARIFF_DATA = {
             "Rules": {
               "charge_capacity_by": "kW",
               "charge_network_by": "kW",
-              "has_peak_split": False
+              "has_peak_split": False,
+              "afa_applicable": True
             }
           },
           {
@@ -82,9 +86,10 @@ TARIFF_DATA = {
               "Retail Rate": 200.00
             },
             "Rules": {
-              "charge_capacity_by": "kW",
-              "charge_network_by": "kW",
-              "has_peak_split": True
+              "charge_capacity_by": "kW (peak only)",
+              "charge_network_by": "kW (peak only)",
+              "has_peak_split": True,
+              "afa_applicable": True
             }
           },
           {
@@ -100,7 +105,8 @@ TARIFF_DATA = {
             "Rules": {
               "charge_capacity_by": "kW",
               "charge_network_by": "kW",
-              "has_peak_split": False
+              "has_peak_split": False,
+              "afa_applicable": True
             }
           },
           {
@@ -115,9 +121,10 @@ TARIFF_DATA = {
               "Retail Rate": 250.00
             },
             "Rules": {
-              "charge_capacity_by": "kW",
-              "charge_network_by": "kW",
-              "has_peak_split": True
+              "charge_capacity_by": "kW (peak only)",
+              "charge_network_by": "kW (peak only)",
+              "has_peak_split": True,
+              "afa_applicable": True
             }
           }
         ]
