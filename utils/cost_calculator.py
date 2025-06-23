@@ -36,13 +36,13 @@ def calculate_cost(df, tariff, power_col, holidays=None, afa_kwh=0, afa_rate=0):
             capacity_basis = total_kwh
             show_capacity_demand = False
         else:
-            capacity_basis = max_demand_kw
+            capacity_basis = peak_demand_kw
             show_capacity_demand = True
         if rules.get("charge_network_by", "kWh") == "kWh":
             network_basis = total_kwh
             show_network_demand = False
         else:
-            network_basis = max_demand_kw
+            network_basis = peak_demand_kw
             show_network_demand = True
         capacity_cost = capacity_basis * rates.get("Capacity Rate", 0)
         network_cost = network_basis * rates.get("Network Rate", 0)
@@ -77,9 +77,9 @@ def calculate_cost(df, tariff, power_col, holidays=None, afa_kwh=0, afa_rate=0):
         breakdown["AFA Adjustment"] = breakdown["AFA kWh"] * breakdown["AFA Rate"]
         # Only include demand fields if relevant (kW-based)
         if show_capacity_demand:
-            breakdown["Max Demand (kW)"] = max_demand_kw
+            breakdown["Max Demand (kW)"] = peak_demand_kw
         if show_network_demand and not show_capacity_demand:
-            breakdown["Max Demand (kW)"] = max_demand_kw
+            breakdown["Max Demand (kW)"] = peak_demand_kw
         # --- Add Cost per kWh ---
         if breakdown.get("Total kWh", 0) and breakdown.get("Total Cost", 0):
             try:
