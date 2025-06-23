@@ -233,6 +233,12 @@ def show():
                     if isinstance(val, (int, float)):
                         return f"{val:,.2f}"
                     return val
+                def get_cost(*keys):
+                    for k in keys:
+                        if k in breakdown:
+                            return breakdown[k]
+                    return None
+                is_tou = "Peak kWh" in breakdown or "Off-Peak kWh" in breakdown
                 html = """
                 <table class=\"cost-table\">
                     <tr>
@@ -243,81 +249,42 @@ def show():
                         <th>Unit Rate (RM)</th>
                         <th>Total Cost (RM)</th>
                     </tr>
-                    <tr class=\"section\">
-                        <td>A</td>
-                        <td class=\"left\"><b>A. Energy Consumption kWh</b></td>
-                        <td></td>
-                        <td></td>
-                        <td></td>
-                        <td></td>
-                    </tr>
-                    <tr>
-                        <td>1</td>
-                        <td class=\"left\">Peak Period Consumption</td>
-                        <td>kWh</td>
-                        <td>{peak_kwh}</td>
-                        <td>{peak_rate}</td>
-                        <td>{peak_cost}</td>
-                    </tr>
-                    <tr>
-                        <td>2</td>
-                        <td class=\"left\">Off-Peak Consumption</td>
-                        <td>kWh</td>
-                        <td>{offpeak_kwh}</td>
-                        <td>{offpeak_rate}</td>
-                        <td>{offpeak_cost}</td>
-                    </tr>
-                    <tr>
-                        <td>3</td>
-                        <td class=\"left\">AFA Consumption</td>
-                        <td>kWh</td>
-                        <td>{afa_kwh}</td>
-                        <td>{afa_rate}</td>
-                        <td>{afa_cost}</td>
-                    </tr>
-                    <tr class=\"section\">
-                        <td>B</td>
-                        <td class=\"left\"><b>B. Maximum Demand (Peak Demand)</b></td>
-                        <td></td>
-                        <td></td>
-                        <td></td>
-                        <td></td>
-                    </tr>
-                    <tr>
-                        <td>1</td>
-                        <td class="left">Capacity Charge</td>
-                        <td>kW</td>
-                        <td>{peak_demand}</td>
-                        <td>{capacity_rate}</td>
-                        <td>{capacity_cost}</td>
-                    </tr>
-                    <tr>
-                        <td>2</td>
-                        <td class="left">Network Charge</td>
-                        <td>kW</td>
-                        <td>{peak_demand}</td>
-                        <td>{network_rate}</td>
-                        <td>{network_cost}</td>
-                    </tr>
-                </table>
-                """.format(
-                    peak_kwh=fmt(breakdown.get("Peak kWh", "")),
-                    peak_rate=fmt(breakdown.get("Peak Rate", "")),
-                    peak_cost=fmt(breakdown.get("Peak Energy Cost", "")),
-                    offpeak_kwh=fmt(breakdown.get("Off-Peak kWh", "")),
-                    offpeak_rate=fmt(breakdown.get("Off-Peak Rate", "")),
-                    offpeak_cost=fmt(breakdown.get("Off-Peak Energy Cost", "")),
-                    afa_kwh=fmt(breakdown.get("AFA kWh", "")),
-                    afa_rate=fmt(breakdown.get("AFA Rate", "")),
-                    afa_cost=fmt(breakdown.get("AFA Adjustment", "")),
-                    peak_demand=fmt(breakdown.get("Peak Demand (kW, Peak Period Only)", "")),
-                    network_rate=fmt(breakdown.get("Network Rate", "")),
-                    network_cost=fmt(breakdown.get("Network Cost", "")),
-                    capacity_rate=fmt(breakdown.get("Capacity Rate", "")),
-                    capacity_cost=fmt(breakdown.get("Capacity Cost", "")),
-                    others_charges=fmt(breakdown.get("Others Charges", 0)),
-                    total_cost=fmt(breakdown.get("Total Cost", "")),
-                )
+                """
+                # Section A: Energy Consumption
+                html += "<tr class=\"section\"> <td>A</td> <td class=\"left\"><b>A. Energy Consumption kWh</b></td> <td></td><td></td><td></td><td></td> </tr>"
+                if is_tou:
+                    if breakdown.get('Peak kWh', None) is not None:
+                        html += f"<tr> <td>1</td> <td class=\"left\">Peak Period Consumption</td> <td>kWh</td> <td>{fmt(breakdown.get('Peak kWh'))}</td> <td>{fmt(breakdown.get('Peak Rate'))}</td> <td>{fmt(get_cost('Peak Energy Cost', 'Peak Energy Cost (RM)'))}</td> </tr>"
+                    if breakdown.get('Off-Peak kWh', None) is not None:
+                        html += f"<tr> <td>2</td> <td class=\"left\">Off-Peak Consumption</td> <td>kWh</td> <td>{fmt(breakdown.get('Off-Peak kWh'))}</td> <td>{fmt(breakdown.get('Off-Peak Rate'))}</td> <td>{fmt(get_cost('Off-Peak Energy Cost', 'Off-Peak Energy Cost (RM)'))}</td> </tr>"
+                else:
+                    if breakdown.get('Total kWh', None) is not None:
+                        html += f"<tr> <td>1</td> <td class=\"left\">Total Consumption</td> <td>kWh</td> <td>{fmt(breakdown.get('Total kWh'))}</td> <td>{fmt(breakdown.get('Energy Rate'))}</td> <td>{fmt(get_cost('Energy Cost', 'Energy Cost (RM)'))}</td> </tr>"
+                # AFA row if present
+                if breakdown.get('AFA kWh', None) is not None:
+                    html += f"<tr> <td></td> <td class=\"left\">AFA Consumption</td> <td>kWh</td> <td>{fmt(breakdown.get('AFA kWh'))}</td> <td>{fmt(breakdown.get('AFA Rate'))}</td> <td>{fmt(get_cost('AFA Adjustment', 'AFA Adjustment (RM)'))}</td> </tr>"
+                # Section B: Demand/Capacity/Network charges
+                html += "<tr class=\"section\"> <td>B</td> <td class=\"left\"><b>B. Maximum Demand (Peak Demand)</b></td> <td></td><td></td><td></td><td></td> </tr>"
+                # Capacity Charge
+                cap_val = breakdown.get('Peak Demand (kW, Peak Period Only)', breakdown.get('Max Demand (kW)', None))
+                cap_rate = breakdown.get('Capacity Rate', None)
+                cap_cost = get_cost('Capacity Cost', 'Capacity Cost (RM)')
+                if cap_val is not None or cap_rate is not None or cap_cost is not None:
+                    html += f"<tr> <td>1</td> <td class=\"left\">Capacity Charge</td> <td>kW</td> <td>{fmt(cap_val)}</td> <td>{fmt(cap_rate)}</td> <td>{fmt(cap_cost)}</td> </tr>"
+                # Network Charge
+                net_val = breakdown.get('Peak Demand (kW, Peak Period Only)', breakdown.get('Max Demand (kW)', None))
+                net_rate = breakdown.get('Network Rate', None)
+                net_cost = get_cost('Network Cost', 'Network Cost (RM)')
+                if net_val is not None or net_rate is not None or net_cost is not None:
+                    html += f"<tr> <td>2</td> <td class=\"left\">Network Charge</td> <td>kW</td> <td>{fmt(net_val)}</td> <td>{fmt(net_rate)}</td> <td>{fmt(net_cost)}</td> </tr>"
+                # Retail Charge (if present)
+                if breakdown.get('Retail Cost', None) is not None:
+                    html += f"<tr> <td>3</td> <td class=\"left\">Retail Charge</td> <td></td> <td></td> <td></td> <td>{fmt(breakdown.get('Retail Cost'))}</td> </tr>"
+                # Add any other cost rows if present (future extensibility)
+                # Total Cost row (if present)
+                if get_cost('Total Cost', 'Total Cost (RM)') is not None:
+                    html += f"<tr class=\"section\"><td colspan=5 class=\"left\"><b>Total Cost</b></td><td><b>{fmt(get_cost('Total Cost', 'Total Cost (RM)'))}</b></td></tr>"
+                html += "</table>"
                 return html
 
             st.write("DEBUG: cost_breakdown", cost_breakdown)
