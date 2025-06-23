@@ -307,7 +307,7 @@ def show():
 
             # --- Debug section (disabled, enable for future debugging) ---
             # st.write("DEBUG: cost_breakdown", cost_breakdown)
-            # afa_kwh = cost_breakdown.get('AFA kWh', cost_breakdown.get('Total kWh', None))
+            # afa_kwh = cost_breakdown.get('AFA kwh', cost_breakdown.get('Total kWh', None))
             # afa_rate = cost_breakdown.get('AFA Rate', None)
             # if afa_kwh is not None:
             #     st.write("DEBUG: AFA Value (kWh)", afa_kwh)
@@ -317,84 +317,100 @@ def show():
 
             st.markdown(html_cost_table(cost_breakdown), unsafe_allow_html=True)
 
-            # --- Pie Chart for Cost Breakdown ---
-            pie_labels = []
-            pie_values = []
-            pie_colors = []
-            color_map = {
-                "Peak Period Consumption": "orange",
-                "Off-Peak Consumption": "blue",
-                "AFA Consumption": "green",
-                "Maximum Demand (Peak Demand)": "red",
-                "Network Charge": "red",
-                "Retail Charge": "grey",
-                "Total Consumption": "orange",  # For General tariffs
-            }
-            # Use cost_breakdown dict directly for pie chart, only add if value is nonzero and not None
-            if cost_breakdown.get("Peak Energy Cost", 0):
-                pie_labels.append("Peak Period Consumption")
-                pie_values.append(cost_breakdown.get("Peak Energy Cost", 0))
-                pie_colors.append(color_map["Peak Period Consumption"])
-            if cost_breakdown.get("Off-Peak Energy Cost", 0):
-                pie_labels.append("Off-Peak Consumption")
-                pie_values.append(cost_breakdown.get("Off-Peak Energy Cost", 0))
-                pie_colors.append(color_map["Off-Peak Consumption"])
-            # Add for General tariffs: Energy Cost or Energy Cost (RM)
-            energy_cost = cost_breakdown.get("Energy Cost", cost_breakdown.get("Energy Cost (RM)", 0))
-            if energy_cost:
-                pie_labels.append("Total Consumption")
-                pie_values.append(energy_cost)
-                pie_colors.append(color_map["Total Consumption"])
-            if cost_breakdown.get("AFA Adjustment", 0):
-                pie_labels.append("AFA Consumption")
-                pie_values.append(cost_breakdown.get("AFA Adjustment", 0))
-                pie_colors.append(color_map["AFA Consumption"])
-            if cost_breakdown.get("Capacity Cost", 0):
-                pie_labels.append("Maximum Demand (Peak Demand)")
-                pie_values.append(cost_breakdown.get("Capacity Cost", 0))
-                pie_colors.append(color_map["Maximum Demand (Peak Demand)"])
-            if cost_breakdown.get("Network Cost", 0):
-                pie_labels.append("Network Charge")
-                pie_values.append(cost_breakdown.get("Network Cost", 0))
-                pie_colors.append(color_map["Network Charge"])
-            if cost_breakdown.get("Retail Cost", 0):
-                pie_labels.append("Retail Charge")
-                pie_values.append(cost_breakdown.get("Retail Cost", 0))
-                pie_colors.append(color_map["Retail Charge"])
-            if pie_labels and pie_values:
-                fig = px.pie(
-                    names=pie_labels,
-                    values=pie_values,
-                    color=pie_labels,
-                    color_discrete_sequence=pie_colors,
-                    title="Cost Breakdown Pie Chart"
-                )
-                fig.update_traces(textinfo='label+percent', textfont_size=18)
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("No nonzero cost components to display in the pie chart.")
+            # --- Pie Chart for Cost Breakdown (disabled, enable for future debugging) ---
+            # pie_labels = []
+            # pie_values = []
+            # pie_colors = []
+            # color_map = {
+            #     "Peak Period Consumption": "orange",
+            #     "Off-Peak Consumption": "blue",
+            #     "AFA Consumption": "green",
+            #     "Maximum Demand (Peak Demand)": "red",
+            #     "Capacity Charge": "red",
+            #     "Network Charge": "purple",
+            #     "Retail Charge": "grey",
+            #     "Total Consumption": "orange",  # For General tariffs
+            # }
+            # if cost_breakdown.get("Peak Energy Cost", 0):
+            #     pie_labels.append("Peak Period Consumption")
+            #     pie_values.append(cost_breakdown.get("Peak Energy Cost", 0))
+            #     pie_colors.append(color_map["Peak Period Consumption"])
+            # if cost_breakdown.get("Off-Peak Energy Cost", 0):
+            #     pie_labels.append("Off-Peak Consumption")
+            #     pie_values.append(cost_breakdown.get("Off-Peak Energy Cost", 0))
+            #     pie_colors.append(color_map["Off-Peak Consumption"])
+            # if not ("Peak Energy Cost" in cost_breakdown or "Off-Peak Energy Cost" in cost_breakdown):
+            #     energy_cost = cost_breakdown.get("Energy Cost", cost_breakdown.get("Energy Cost (RM)", 0))
+            #     if energy_cost:
+            #         pie_labels.append("Total Consumption")
+            #         pie_values.append(energy_cost)
+            #         pie_colors.append(color_map["Total Consumption"])
+            #     if cost_breakdown.get("AFA Adjustment", 0):
+            #         pie_labels.append("AFA Consumption")
+            #         pie_values.append(cost_breakdown.get("AFA Adjustment", 0))
+            #         pie_colors.append(color_map["AFA Consumption"])
+            #     if cost_breakdown.get("Capacity Cost", 0):
+            #         pie_labels.append("Capacity Charge")
+            #         pie_values.append(cost_breakdown.get("Capacity Cost", 0))
+            #         pie_colors.append(color_map["Capacity Charge"])
+            #     if cost_breakdown.get("Network Cost", 0):
+            #         pie_labels.append("Network Charge")
+            #         pie_values.append(cost_breakdown.get("Network Cost", 0))
+            #         pie_colors.append(color_map["Network Charge"])
+            #     if cost_breakdown.get("Retail Cost", 0):
+            #         pie_labels.append("Retail Charge")
+            #         pie_values.append(cost_breakdown.get("Retail Cost", 0))
+            #         pie_colors.append(color_map["Retail Charge"])
+            # else:
+            #     if cost_breakdown.get("AFA Adjustment", 0):
+            #         pie_labels.append("AFA Consumption")
+            #         pie_values.append(cost_breakdown.get("AFA Adjustment", 0))
+            #         pie_colors.append(color_map["AFA Consumption"])
+            #     if cost_breakdown.get("Capacity Cost", 0):
+            #         pie_labels.append("Maximum Demand (Peak Demand)")
+            #         pie_values.append(cost_breakdown.get("Capacity Cost", 0))
+            #         pie_colors.append(color_map["Maximum Demand (Peak Demand)"])
+            #     if cost_breakdown.get("Network Cost", 0):
+            #         pie_labels.append("Network Charge")
+            #         pie_values.append(cost_breakdown.get("Network Cost", 0))
+            #         pie_colors.append(color_map["Network Charge"])
+            #     if cost_breakdown.get("Retail Cost", 0):
+            #         pie_labels.append("Retail Charge")
+            #         pie_values.append(cost_breakdown.get("Retail Cost", 0))
+            #         pie_colors.append(color_map["Retail Charge"])
+            # if pie_labels and pie_values:
+            #     fig = px.pie(
+            #         names=pie_labels,
+            #         values=pie_values,
+            #         color=pie_labels,
+            #         color_discrete_sequence=pie_colors,
+            #         title="Cost Breakdown Pie Chart"
+            #     )
+            #     fig.update_traces(textinfo='label+percent', textfont_size=18)
+            #     st.plotly_chart(fig, use_container_width=True)
+            # else:
+            #     st.info("No nonzero cost components to display in the pie chart.")
 
-            # --- Regression Formula Display ---
-            st.subheader("Cost Calculation Formulae")
-            formulae = []
-            if "Peak kWh" in cost_breakdown:
-                formulae.append(f"Peak Energy Cost = Peak kWh × Peak Rate = {cost_breakdown.get('Peak kWh', 0):,.2f} × {cost_breakdown.get('Peak Rate', '–')} = {cost_breakdown.get('Peak Energy Cost', 0):,.2f}")
-            if "Off-Peak kWh" in cost_breakdown:
-                formulae.append(f"Off-Peak Energy Cost = Off-Peak kWh × Off-Peak Rate = {cost_breakdown.get('Off-Peak kWh', 0):,.2f} × {cost_breakdown.get('Off-Peak Rate', '–')} = {cost_breakdown.get('Off-Peak Energy Cost', 0):,.2f}")
-            # Add AFA rule: AFA Adjustment = AFA value (Total kWh) × AFA Rate
-            afa_kwh = cost_breakdown.get('AFA kWh', cost_breakdown.get('Total kWh', 0))
-            afa_rate = cost_breakdown.get('AFA Rate', '–')
-            afa_cost = cost_breakdown.get('AFA Adjustment', 0)
-            if afa_kwh and afa_rate != '–':
-                formulae.append(f"AFA Adjustment = AFA Value × AFA Rate = {afa_kwh:,.2f} × {afa_rate} = {afa_cost:,.2f}")
-            if "Max Demand (kW)" in cost_breakdown:
-                formulae.append(f"Maximum Demand Cost = Max Demand × Capacity Rate = {cost_breakdown.get('Max Demand (kW)', 0):,.2f} × {cost_breakdown.get('Capacity Rate', '–')} = {cost_breakdown.get('Capacity Cost', 0):,.2f}")
-            if "Network Cost" in cost_breakdown:
-                formulae.append(f"Network Cost = Max Demand × Network Rate = {cost_breakdown.get('Max Demand (kW)', 0):,.2f} × {cost_breakdown.get('Network Rate', '–')} = {cost_breakdown.get('Network Cost', 0):,.2f}")
-            if "Retail Cost" in cost_breakdown:
-                formulae.append(f"Retail Cost = {cost_breakdown.get('Retail Cost', 0):,.2f}")
-            for f in formulae:
-                st.markdown(f"- {f}")
+            # --- Regression Formula Display (disabled, enable for future debugging) ---
+            # st.subheader("Cost Calculation Formulae")
+            # formulae = []
+            # if "Peak kWh" in cost_breakdown:
+            #     formulae.append(f"Peak Energy Cost = Peak kWh × Peak Rate = {cost_breakdown.get('Peak kWh', 0):,.2f} × {cost_breakdown.get('Peak Rate', '–')} = {cost_breakdown.get('Peak Energy Cost', 0):,.2f}")
+            # if "Off-Peak kWh" in cost_breakdown:
+            #     formulae.append(f"Off-Peak Energy Cost = Off-Peak kWh × Off-Peak Rate = {cost_breakdown.get('Off-Peak kWh', 0):,.2f} × {cost_breakdown.get('Off-Peak Rate', '–')} = {cost_breakdown.get('Off-Peak Energy Cost', 0):,.2f}")
+            # afa_kwh = cost_breakdown.get('AFA kWh', cost_breakdown.get('Total kWh', 0))
+            # afa_rate = cost_breakdown.get('AFA Rate', '–')
+            # afa_cost = cost_breakdown.get('AFA Adjustment', 0)
+            # if afa_kwh and afa_rate != '–':
+            #     formulae.append(f"AFA Adjustment = AFA Value × AFA Rate = {afa_kwh:,.2f} × {afa_rate} = {afa_cost:,.2f}")
+            # if "Max Demand (kW)" in cost_breakdown:
+            #     formulae.append(f"Maximum Demand Cost = Max Demand × Capacity Rate = {cost_breakdown.get('Max Demand (kW)', 0):,.2f} × {cost_breakdown.get('Capacity Rate', '–')} = {cost_breakdown.get('Capacity Cost', 0):,.2f}")
+            # if "Network Cost" in cost_breakdown:
+            #     formulae.append(f"Network Cost = Max Demand × Network Rate = {cost_breakdown.get('Max Demand (kW)', 0):,.2f} × {cost_breakdown.get('Network Rate', '–')} = {cost_breakdown.get('Network Cost', 0):,.2f}")
+            # if "Retail Cost" in cost_breakdown:
+            #     formulae.append(f"Retail Cost = {cost_breakdown.get('Retail Cost', 0):,.2f}")
+            # for f in formulae:
+            #     st.markdown(f"- {f}")
 
             
 def get_peak_demand(df, power_col, holidays):
