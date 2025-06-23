@@ -208,7 +208,7 @@ def show():
             col4.metric("Total Days", total_days)
             st.caption("Total = Weekdays + Weekends + Holidays")
 
-        # --- AFA Input ---
+        # --- AFA (Additional Fuel Adjustment) Rate ---
         st.markdown("**AFA (Additional Fuel Adjustment) Rate**")
         st.caption("Maximum allowable AFA is 3 cents (0.03 RM/kWh). Any value above requires government approval.")
         afa_rate_cent = st.number_input(
@@ -252,6 +252,13 @@ def show():
                 """
                 # Section A: Energy Consumption
                 html += "<tr class=\"section\"> <td>A</td> <td class=\"left\"><b>A. Energy Consumption kWh</b></td> <td></td><td></td><td></td><td></td> </tr>"
+                # Determine if AFA is applicable (not for Low Voltage General)
+                selected_tariff_name = selected_tariff_obj.get('Tariff', '').lower() if selected_tariff_obj else ''
+                afa_applicable = not (selected_tariff_name.startswith('low voltage') and 'general' in selected_tariff_name)
+                # Check if AFA row should be shown (if applicable and either kWh or adjustment value exists)
+                afa_kwh = breakdown.get('AFA kWh', None)
+                afa_rate = breakdown.get('AFA Rate', None)
+                afa_cost = get_cost('AFA Adjustment', 'AFA Adjustment (RM)')
                 if is_tou:
                     if breakdown.get('Peak kWh', None) is not None:
                         html += f"<tr> <td>1</td> <td class=\"left\">Peak Period Consumption</td> <td>kWh</td> <td>{fmt(breakdown.get('Peak kWh'))}</td> <td>{fmt(breakdown.get('Peak Rate'))}</td> <td>{fmt(get_cost('Peak Energy Cost', 'Peak Energy Cost (RM)'))}</td> </tr>"
@@ -260,9 +267,9 @@ def show():
                 else:
                     if breakdown.get('Total kWh', None) is not None:
                         html += f"<tr> <td>1</td> <td class=\"left\">Total Consumption</td> <td>kWh</td> <td>{fmt(breakdown.get('Total kWh'))}</td> <td>{fmt(breakdown.get('Energy Rate'))}</td> <td>{fmt(get_cost('Energy Cost', 'Energy Cost (RM)'))}</td> </tr>"
-                # AFA row if present
-                if breakdown.get('AFA kWh', None) is not None:
-                    html += f"<tr> <td></td> <td class=\"left\">AFA Consumption</td> <td>kWh</td> <td>{fmt(breakdown.get('AFA kWh'))}</td> <td>{fmt(breakdown.get('AFA Rate'))}</td> <td>{fmt(get_cost('AFA Adjustment', 'AFA Adjustment (RM)'))}</td> </tr>"
+                # AFA row if present and applicable (show if either kWh or adjustment value exists)
+                if afa_applicable and (afa_kwh is not None or afa_cost is not None):
+                    html += f"<tr> <td></td> <td class=\"left\">AFA Consumption</td> <td>kWh</td> <td>{fmt(afa_kwh)}</td> <td>{fmt(afa_rate)}</td> <td>{fmt(afa_cost)}</td> </tr>"
                 # Section B: Demand/Capacity/Network charges
                 html += "<tr class=\"section\"> <td>B</td> <td class=\"left\"><b>B. Maximum Demand (Peak Demand)</b></td> <td></td><td></td><td></td><td></td> </tr>"
                 # Capacity Charge
@@ -288,6 +295,13 @@ def show():
                 return html
 
             st.write("DEBUG: cost_breakdown", cost_breakdown)
+            # Add AFA value and AFA rate to debug output if present
+            afa_kwh = cost_breakdown.get('AFA kWh', cost_breakdown.get('Total kWh', None))
+            afa_rate = cost_breakdown.get('AFA Rate', None)
+            if afa_kwh is not None:
+                st.write("DEBUG: AFA Value (kWh)", afa_kwh)
+            if afa_rate is not None:
+                st.write("DEBUG: AFA Rate (RM/kWh)", afa_rate)
             st.markdown(html_cost_table(cost_breakdown), unsafe_allow_html=True)
 
             # --- Pie Chart for Cost Breakdown ---
@@ -337,8 +351,12 @@ def show():
                 formulae.append(f"Peak Energy Cost = Peak kWh × Peak Rate = {cost_breakdown.get('Peak kWh', 0):,.2f} × {cost_breakdown.get('Peak Rate', '–')} = {cost_breakdown.get('Peak Energy Cost', 0):,.2f}")
             if "Off-Peak kWh" in cost_breakdown:
                 formulae.append(f"Off-Peak Energy Cost = Off-Peak kWh × Off-Peak Rate = {cost_breakdown.get('Off-Peak kWh', 0):,.2f} × {cost_breakdown.get('Off-Peak Rate', '–')} = {cost_breakdown.get('Off-Peak Energy Cost', 0):,.2f}")
-            if "AFA kWh" in cost_breakdown:
-                formulae.append(f"AFA Adjustment = AFA kWh × AFA Rate = {cost_breakdown.get('AFA kWh', 0):,.2f} × {cost_breakdown.get('AFA Rate', '–')} = {cost_breakdown.get('AFA Adjustment', 0):,.2f}")
+            # Add AFA rule: AFA Adjustment = AFA value (Total kWh) × AFA Rate
+            afa_kwh = cost_breakdown.get('AFA kWh', cost_breakdown.get('Total kWh', 0))
+            afa_rate = cost_breakdown.get('AFA Rate', '–')
+            afa_cost = cost_breakdown.get('AFA Adjustment', 0)
+            if afa_kwh and afa_rate != '–':
+                formulae.append(f"AFA Adjustment = AFA Value × AFA Rate = {afa_kwh:,.2f} × {afa_rate} = {afa_cost:,.2f}")
             if "Max Demand (kW)" in cost_breakdown:
                 formulae.append(f"Maximum Demand Cost = Max Demand × Capacity Rate = {cost_breakdown.get('Max Demand (kW)', 0):,.2f} × {cost_breakdown.get('Capacity Rate', '–')} = {cost_breakdown.get('Capacity Cost', 0):,.2f}")
             if "Network Cost" in cost_breakdown:

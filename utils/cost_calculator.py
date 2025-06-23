@@ -69,6 +69,12 @@ def calculate_cost(df, tariff, power_col, holidays=None, afa_kwh=0, afa_rate=0):
             "AFA Adjustment": afa_cost,
             "Total Cost": energy_cost + capacity_cost + network_cost + retail_cost + afa_cost
         }
+        # --- Add AFA kWh and AFA Rate ---
+        breakdown["AFA kWh"] = total_kwh
+        breakdown["AFA Rate"] = afa_rate
+
+        # --- Calculate AFA Adjustment ---
+        breakdown["AFA Adjustment"] = breakdown["AFA kWh"] * breakdown["AFA Rate"]
         # Only include demand fields if relevant (kW-based)
         if show_capacity_demand:
             breakdown["Max Demand (kW)"] = max_demand_kw
