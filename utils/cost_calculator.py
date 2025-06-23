@@ -80,6 +80,14 @@ def calculate_cost(df, tariff, power_col, holidays=None, afa_kwh=0, afa_rate=0):
             breakdown["Max Demand (kW)"] = max_demand_kw
         if show_network_demand and not show_capacity_demand:
             breakdown["Max Demand (kW)"] = max_demand_kw
+        # --- Add Cost per kWh ---
+        if breakdown.get("Total kWh", 0) and breakdown.get("Total Cost", 0):
+            try:
+                breakdown["Cost per kWh (Total Cost / Total kWh)"] = breakdown["Total Cost"] / breakdown["Total kWh"]
+            except ZeroDivisionError:
+                breakdown["Cost per kWh (Total Cost / Total kWh)"] = None
+        else:
+            breakdown["Cost per kWh (Total Cost / Total kWh)"] = None
         return breakdown
     # TOU Tariff (split peak/off-peak)
     is_peak = df["Parsed Timestamp"].apply(lambda ts: is_peak_rp4(ts, holidays or set()))
@@ -138,6 +146,16 @@ def calculate_cost(df, tariff, power_col, holidays=None, afa_kwh=0, afa_rate=0):
         breakdown["Peak Demand (kW, Peak Period Only)"] = peak_demand_kw
     if show_network_demand and not show_capacity_demand:
         breakdown["Max Demand (kW)"] = max_demand_kw
+    # --- Add Total kWh for TOU (needed for cost per kWh) ---
+    breakdown["Total kWh"] = total_kwh
+    # --- Add Cost per kWh ---
+    if breakdown.get("Total Cost", 0) and total_kwh:
+        try:
+            breakdown["Cost per kWh (Total Cost / Total kWh)"] = breakdown["Total Cost"] / total_kwh
+        except ZeroDivisionError:
+            breakdown["Cost per kWh (Total Cost / Total kWh)"] = None
+    else:
+        breakdown["Cost per kWh (Total Cost / Total kWh)"] = None
     return breakdown
 
 def format_cost_breakdown(breakdown):
