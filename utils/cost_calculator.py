@@ -26,34 +26,54 @@ def calculate_cost(df, tariff, power_col, holidays=None, afa_kwh=0, afa_rate=0):
     is_peak = df["Parsed Timestamp"].apply(lambda ts: is_peak_rp4(ts, holidays or set()))
     peak_demand_kw = df.loc[is_peak, power_col].max() if is_peak.any() else 0
     breakdown = {}
-    voltage = tariff.get("Voltage", "Low Voltage")
     rules = tariff.get("Rules", {})
     rates = tariff.get("Rates", {})
     # General Tariff (not split)
     if not rules.get("has_peak_split", False):
         energy_cost = total_kwh * rates.get("Energy Rate", 0)
-        if voltage == "Low Voltage":
-            capacity_cost = total_kwh * rates.get("Capacity Rate", 0)
-            network_cost = total_kwh * rates.get("Network Rate", 0)
+        # Use rules for capacity and network charge basis
+        if rules.get("charge_capacity_by", "kWh") == "kWh":
+            capacity_basis = total_kwh
+            show_capacity_demand = False
         else:
-            capacity_cost = max_demand_kw * rates.get("Capacity Rate", 0)
-            network_cost = max_demand_kw * rates.get("Network Rate", 0)
+            capacity_basis = max_demand_kw
+            show_capacity_demand = True
+        if rules.get("charge_network_by", "kWh") == "kWh":
+            network_basis = total_kwh
+            show_network_demand = False
+        else:
+            network_basis = max_demand_kw
+            show_network_demand = True
+        capacity_cost = capacity_basis * rates.get("Capacity Rate", 0)
+        network_cost = network_basis * rates.get("Network Rate", 0)
         retail_cost = rates.get("Retail Rate", 0)
-        # Calculate AFA adjustment cost
-        # If afa_kwh is not provided, use total_kwh
-        if afa_kwh == 0:
-            afa_kwh = total_kwh
-        afa_cost = afa_kwh * afa_rate if afa_rate else 0
-        breakdown.update({
+        # Calculate AFA adjustment cost only if applicable
+        afa_cost = 0
+        if rules.get("afa_applicable", False):
+            if afa_kwh == 0:
+                afa_kwh = total_kwh
+            afa_cost = afa_kwh * afa_rate if afa_rate else 0
+        else:
+            afa_kwh = 0
+            afa_rate = 0
+        breakdown = {
             "Total kWh": total_kwh,
-            "Max Demand (kW)": max_demand_kw,
+            "Energy Rate": rates.get("Energy Rate", 0),
+            "Capacity Rate": rates.get("Capacity Rate", 0),
+            "Network Rate": rates.get("Network Rate", 0),
+            "Retail Rate": rates.get("Retail Rate", 0),
             "Energy Cost (RM)": energy_cost,
             "Capacity Cost (RM)": capacity_cost,
             "Network Cost (RM)": network_cost,
             "Retail Cost": retail_cost,
             "AFA Adjustment": afa_cost,
             "Total Cost": energy_cost + capacity_cost + network_cost + retail_cost + afa_cost
-        })
+        }
+        # Only include demand fields if relevant (kW-based)
+        if show_capacity_demand:
+            breakdown["Max Demand (kW)"] = max_demand_kw
+        if show_network_demand and not show_capacity_demand:
+            breakdown["Max Demand (kW)"] = max_demand_kw
         return breakdown
     # TOU Tariff (split peak/off-peak)
     is_peak = df["Parsed Timestamp"].apply(lambda ts: is_peak_rp4(ts, holidays or set()))
@@ -63,19 +83,32 @@ def calculate_cost(df, tariff, power_col, holidays=None, afa_kwh=0, afa_rate=0):
     offpeak_rate = rates.get("Off-Peak Rate", rates.get("OffPeak Rate", 0))
     peak_cost = peak_kwh * peak_rate
     offpeak_cost = offpeak_kwh * offpeak_rate
-    if voltage == "Low Voltage":
-        capacity_cost = total_kwh * rates.get("Capacity Rate", 0)
-        network_cost = total_kwh * rates.get("Network Rate", 0)
+    # Use rules for capacity and network charge basis
+    if rules.get("charge_capacity_by", "kWh") == "kWh":
+        capacity_basis = total_kwh
+        show_capacity_demand = False
     else:
-        capacity_cost = max_demand_kw * rates.get("Capacity Rate", 0)
-        network_cost = max_demand_kw * rates.get("Network Rate", 0)
+        capacity_basis = max_demand_kw
+        show_capacity_demand = True
+    if rules.get("charge_network_by", "kWh") == "kWh":
+        network_basis = total_kwh
+        show_network_demand = False
+    else:
+        network_basis = max_demand_kw
+        show_network_demand = True
+    capacity_cost = capacity_basis * rates.get("Capacity Rate", 0)
+    network_cost = network_basis * rates.get("Network Rate", 0)
     retail_cost = rates.get("Retail Rate", 0)
-    # Calculate AFA adjustment cost
-    # If afa_kwh is not provided, use total_kwh
-    if afa_kwh == 0:
-        afa_kwh = total_kwh
-    afa_cost = afa_kwh * afa_rate if afa_rate else 0
-    breakdown.update({
+    # Calculate AFA adjustment cost only if applicable
+    afa_cost = 0
+    if rules.get("afa_applicable", False):
+        if afa_kwh == 0:
+            afa_kwh = total_kwh
+        afa_cost = afa_kwh * afa_rate if afa_rate else 0
+    else:
+        afa_kwh = 0
+        afa_rate = 0
+    breakdown = {
         "Peak kWh": peak_kwh,
         "Off-Peak kWh": offpeak_kwh,
         "Peak Rate": peak_rate,
@@ -85,17 +118,20 @@ def calculate_cost(df, tariff, power_col, holidays=None, afa_kwh=0, afa_rate=0):
         "Retail Rate": retail_cost,
         "Peak Energy Cost": peak_cost,
         "Off-Peak Energy Cost": offpeak_cost,
-        "AFA kWh": afa_kwh,
-        "AFA Rate": afa_rate,
+        "AFA kWh": afa_kwh if rules.get("afa_applicable", False) else 0,
+        "AFA Rate": afa_rate if rules.get("afa_applicable", False) else 0,
         "AFA Adjustment": afa_cost,
-        "Max Demand (kW)": max_demand_kw,
-        "Peak Demand (kW, Peak Period Only)": peak_demand_kw,
         "Capacity Cost": capacity_cost,
         "Network Cost": network_cost,
         "Retail Cost": retail_cost,
-        # Add AFA adjustment to total cost
         "Total Cost": peak_cost + offpeak_cost + capacity_cost + network_cost + retail_cost + afa_cost
-    })
+    }
+    # Only include demand fields if relevant (kW-based)
+    if show_capacity_demand:
+        breakdown["Max Demand (kW)"] = max_demand_kw
+        breakdown["Peak Demand (kW, Peak Period Only)"] = peak_demand_kw
+    if show_network_demand and not show_capacity_demand:
+        breakdown["Max Demand (kW)"] = max_demand_kw
     return breakdown
 
 def format_cost_breakdown(breakdown):
