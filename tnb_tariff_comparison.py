@@ -294,7 +294,18 @@ def show():
                 html += "</table>"
                 return html
 
+
+           # --- Section: Total kWh / Total Cost ---
+            total_kwh = cost_breakdown.get('Total kWh', None)
+            total_cost = cost_breakdown.get('Total Cost', None)
+            if total_kwh and total_cost:
+                cost_per_kwh = total_cost / total_kwh if total_kwh != 0 else None
+                st.markdown(f"<span style='font-size:2.4em'><b>Cost per kWh (Total Cost / Total kWh):</b> {cost_per_kwh:,.4f} RM/kWh</span>", unsafe_allow_html=True)
+
             st.write("DEBUG: cost_breakdown", cost_breakdown)
+            
+ 
+
             # Add AFA value and AFA rate to debug output if present
             afa_kwh = cost_breakdown.get('AFA kWh', cost_breakdown.get('Total kWh', None))
             afa_rate = cost_breakdown.get('AFA Rate', None)
@@ -366,6 +377,7 @@ def show():
             for f in formulae:
                 st.markdown(f"- {f}")
 
+            
 def get_peak_demand(df, power_col, holidays):
     """
     Returns the maximum demand (kW) during peak periods only.
