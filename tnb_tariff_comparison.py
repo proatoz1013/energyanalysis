@@ -219,6 +219,8 @@ def show():
 
         # --- Cost Calculation and Display ---
         from utils.cost_calculator import calculate_cost, format_cost_breakdown
+        # Add dynamic title reflecting the selected tariff
+        st.markdown(f"### {selected_user_type} > {selected_tariff_group} > {selected_tariff_type}")
         st.subheader("Cost Breakdown for Selected Tariff")
         cost_breakdown = calculate_cost(df, selected_tariff_obj, power_col, holidays, afa_rate=afa_rate)
         if "error" in cost_breakdown:
@@ -317,6 +319,75 @@ def show():
 
             st.markdown(html_cost_table(cost_breakdown), unsafe_allow_html=True)
 
+            # --- Side-by-side Tariff Comparison Section ---
+            st.markdown("---")
+            st.subheader("Compare with Another Tariff")
+            st.caption("Select a second tariff to compare cost breakdowns side-by-side. All calculations use the same uploaded data and AFA rate.")
+            comparison_tariff_type = st.selectbox(
+                "Select Comparison Tariff",
+                tariff_types,
+                index=tariff_type_index,
+                key="comparison_tariff_type_selector"
+            )
+            comparison_tariff_obj = next((t for t in tariffs if t["Tariff"] == comparison_tariff_type), None)
+            if comparison_tariff_obj and comparison_tariff_obj != selected_tariff_obj:
+                comparison_cost_breakdown = calculate_cost(df, comparison_tariff_obj, power_col, holidays, afa_rate=afa_rate)
+                # Prepare columns for side-by-side display
+                colA, colB = st.columns(2)
+                with colA:
+                    st.markdown(f"#### {selected_user_type} > {selected_tariff_group} > {selected_tariff_type}")
+                    st.markdown("<b>Cost per kWh (Total Cost / Total kWh):</b> " + (
+                        f"{(cost_breakdown.get('Total Cost',0)/cost_breakdown.get('Total kWh',1)) if cost_breakdown.get('Total kWh',0) else 'N/A'} RM/kWh"
+                    ), unsafe_allow_html=True)
+                    st.markdown(html_cost_table(cost_breakdown), unsafe_allow_html=True)
+                with colB:
+                    st.markdown(f"#### {selected_user_type} > {selected_tariff_group} > {comparison_tariff_type}")
+                    comp_total_kwh = comparison_cost_breakdown.get('Total kWh', None)
+                    comp_total_cost = comparison_cost_breakdown.get('Total Cost', None)
+                    if comp_total_kwh is not None and comp_total_cost is not None and comp_total_kwh != 0:
+                        comp_cost_per_kwh = comp_total_cost / comp_total_kwh
+                        st.markdown(f"<b>Cost per kWh (Total Cost / Total kWh):</b> {comp_cost_per_kwh:,.4f} RM/kWh", unsafe_allow_html=True)
+                    elif comp_total_kwh == 0:
+                        st.markdown(f"<b>Cost per kWh (Total Cost / Total kWh):</b> N/A (0 kWh)", unsafe_allow_html=True)
+                    st.markdown(html_cost_table(comparison_cost_breakdown), unsafe_allow_html=True)
+            else:
+                st.info("Select a different tariff to enable side-by-side comparison.")
+            # --- Add Old Tariff Comparison Table ---
+            st.markdown("---")
+            st.subheader("Compare with Old Tariff (Legacy Rate)")
+            from utils.old_cost_calculator import calculate_old_cost
+            from old_rate import charging_rates
+            # Let user select old tariff
+            old_tariff_names = list(charging_rates.keys())
+            default_old_tariff = old_tariff_names[0]
+            selected_old_tariff = st.selectbox(
+                "Select Old Tariff for Comparison",
+                old_tariff_names,
+                index=old_tariff_names.index(default_old_tariff),
+                key="old_tariff_selector"
+            )
+            # Calculate old cost
+            old_cost_breakdown = calculate_old_cost(
+                selected_old_tariff,
+                total_kwh=total_kwh,
+                max_demand_kw=peak_demand if peak_demand is not None else 0,
+                peak_kwh=peak_kwh,
+                offpeak_kwh=offpeak_kwh
+            )
+            # Display old cost table
+            st.markdown(f"#### Old Tariff: {selected_old_tariff}")
+            if "error" in old_cost_breakdown:
+                st.error(old_cost_breakdown["error"])
+            else:
+                st.markdown(
+                    f"<b>Cost per kWh (Total Cost / Total kWh):</b> "
+                    f"{(old_cost_breakdown.get('Total Cost',0)/total_kwh) if total_kwh else 'N/A'} RM/kWh",
+                    unsafe_allow_html=True
+                )
+                st.write(pd.DataFrame([
+                    {"Description": k, "Value": v}
+                    for k, v in old_cost_breakdown.items() if k != "Tariff"
+                ]))
             # --- Pie Chart for Cost Breakdown (disabled, enable for future debugging) ---
             # pie_labels = []
             # pie_values = []
