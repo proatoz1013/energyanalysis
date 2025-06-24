@@ -7,7 +7,7 @@ from tnb_tariff_comparison import show as show_tnb_tariff_comparison
 
 st.set_page_config(page_title="Load Profile Analysis", layout="wide")
 
-tabs = st.tabs(["TNB New Tariff Comparison", "Load Profile Analysis"])
+tabs = st.tabs(["TNB New Tariff Comparison", "Load Profile Analysis", "Advanced Energy Analysis"])
 
 with tabs[1]:
     st.title("Energy Analysis Dashboard")
@@ -631,3 +631,389 @@ with tabs[1]:
 
 with tabs[0]:
     show_tnb_tariff_comparison()
+
+with tabs[2]:
+    st.title("Advanced Energy Analysis with RP4 Integration")
+    st.markdown("""
+    This advanced analysis uses the latest RP4 tariff structure with accurate peak/off-peak logic 
+    and current MD rates for sophisticated energy management insights.
+    """)
+    
+    # Import the RP4 functions for accurate peak determination
+    from tariffs.rp4_tariffs import get_tariff_data
+    from tariffs.peak_logic import is_peak_rp4
+    
+    uploaded_file = st.file_uploader("Upload your Excel file", type=["xlsx"], key="advanced_file_uploader")
+    
+    if uploaded_file:
+        try:
+            df = pd.read_excel(uploaded_file)
+            st.success("File uploaded successfully!")
+            
+            # Column Selection
+            st.subheader("Data Configuration")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                timestamp_col = st.selectbox("Select timestamp column", df.columns, key="adv_timestamp_col")
+                power_col = st.selectbox("Select power (kW) column", 
+                                       df.select_dtypes(include='number').columns, key="adv_power_col")
+            
+            with col2:
+                # Manual holiday selection
+                st.markdown("**Public Holidays**")
+                if not df.empty and timestamp_col in df.columns:
+                    df_temp = df.copy()
+                    df_temp["Parsed Timestamp"] = pd.to_datetime(df_temp[timestamp_col], errors="coerce")
+                    df_temp = df_temp.dropna(subset=["Parsed Timestamp"])
+                    
+                    if not df_temp.empty:
+                        min_date = df_temp["Parsed Timestamp"].min().date()
+                        max_date = df_temp["Parsed Timestamp"].max().date()
+                        unique_dates = pd.date_range(min_date, max_date).date
+                        
+                        holiday_options = [d.strftime('%A, %d %B %Y') for d in unique_dates]
+                        selected_labels = st.multiselect(
+                            "Select public holidays:",
+                            options=holiday_options,
+                            default=[],
+                            key="adv_holidays",
+                            help="Select all public holidays in the data period"
+                        )
+                        
+                        # Convert back to date objects
+                        label_to_date = {d.strftime('%A, %d %B %Y'): d for d in unique_dates}
+                        holidays = set(label_to_date[label] for label in selected_labels)
+                    else:
+                        holidays = set()
+                else:
+                    holidays = set()
+            
+            # Process data
+            df["Parsed Timestamp"] = pd.to_datetime(df[timestamp_col], errors="coerce")
+            df = df.dropna(subset=["Parsed Timestamp"]).set_index("Parsed Timestamp")
+            
+            if not df.empty and power_col in df.columns:
+                
+                # ===============================
+                # TARIFF SELECTION WITH RP4 DATA
+                # ===============================
+                st.subheader("Tariff Configuration")
+                tariff_data = get_tariff_data()
+                
+                # User Type Selection
+                user_types = list(tariff_data.keys())
+                selected_user_type = st.selectbox("Select User Type", user_types, key="adv_user_type")
+                
+                # Tariff Group Selection
+                tariff_groups = list(tariff_data[selected_user_type]["Tariff Groups"].keys())
+                selected_tariff_group = st.selectbox("Select Tariff Group", tariff_groups, key="adv_tariff_group")
+                
+                # Specific Tariff Selection
+                tariffs = tariff_data[selected_user_type]["Tariff Groups"][selected_tariff_group]["Tariffs"]
+                tariff_names = [t["Tariff"] for t in tariffs]
+                selected_tariff_name = st.selectbox("Select Specific Tariff", tariff_names, key="adv_specific_tariff")
+                
+                # Get the selected tariff object
+                selected_tariff = next((t for t in tariffs if t["Tariff"] == selected_tariff_name), None)
+                
+                if selected_tariff:
+                    # Display tariff info
+                    st.info(f"**Selected:** {selected_user_type} > {selected_tariff_group} > {selected_tariff_name}")
+                    
+                    # ===============================
+                    # PEAK/OFF-PEAK ANALYSIS WITH RP4 LOGIC
+                    # ===============================
+                    st.subheader("1. Peak/Off-Peak Analysis (RP4 Logic)")
+                    
+                    # Calculate peak/off-peak using RP4 logic
+                    is_peak_series = df.index.to_series().apply(lambda ts: is_peak_rp4(ts, holidays))
+                    df_peak_analysis = df[[power_col]].copy()
+                    df_peak_analysis['Is_Peak'] = is_peak_series
+                    
+                    # Calculate energy consumption by period
+                    time_deltas = df.index.to_series().diff().dt.total_seconds().div(3600).fillna(0)
+                    df_peak_analysis['Interval_Hours'] = time_deltas
+                    df_peak_analysis['Energy_kWh'] = df_peak_analysis[power_col] * df_peak_analysis['Interval_Hours']
+                    
+                    peak_kwh = df_peak_analysis[df_peak_analysis['Is_Peak']]['Energy_kWh'].sum()
+                    offpeak_kwh = df_peak_analysis[~df_peak_analysis['Is_Peak']]['Energy_kWh'].sum()
+                    total_kwh = peak_kwh + offpeak_kwh
+                    
+                    # Get peak demand (max during peak periods only)
+                    peak_demand_kw = df_peak_analysis[df_peak_analysis['Is_Peak']][power_col].max() if df_peak_analysis['Is_Peak'].any() else 0
+                    overall_max_demand = df_peak_analysis[power_col].max()
+                    
+                    # Display metrics
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("Peak Energy", f"{peak_kwh:,.2f} kWh")
+                    col2.metric("Off-Peak Energy", f"{offpeak_kwh:,.2f} kWh") 
+                    col3.metric("Peak Demand (Peak Periods)", f"{peak_demand_kw:.2f} kW")
+                    col4.metric("Overall Max Demand", f"{overall_max_demand:.2f} kW")
+                    
+                    # Visualization
+                    period_df = pd.DataFrame({
+                        'Period': ['Peak', 'Off-Peak'],
+                        'Energy (kWh)': [peak_kwh, offpeak_kwh],
+                        'Percentage': [peak_kwh/total_kwh*100 if total_kwh > 0 else 0, 
+                                     offpeak_kwh/total_kwh*100 if total_kwh > 0 else 0]
+                    })
+                    
+                    fig_period = px.bar(period_df, x='Period', y='Energy (kWh)', 
+                                      text=[f"{row['Energy (kWh)']:,.0f} kWh ({row['Percentage']:.1f}%)" 
+                                            for _, row in period_df.iterrows()],
+                                      color='Period',
+                                      color_discrete_map={'Peak': 'orange', 'Off-Peak': 'blue'},
+                                      title='Energy Consumption by Period (RP4 Logic)')
+                    fig_period.update_traces(textposition='outside')
+                    st.plotly_chart(fig_period, use_container_width=True)
+                    
+                    # ===============================
+                    # COST CALCULATION WITH RP4 RATES
+                    # ===============================
+                    st.subheader("2. Cost Analysis with Current RP4 Rates")
+                    
+                    from utils.cost_calculator import calculate_cost
+                    
+                    # AFA Rate input
+                    afa_rate_cent = st.number_input("AFA Rate (cent/kWh)", 
+                                                  min_value=-10.0, max_value=10.0, 
+                                                  value=3.0, step=0.1, key="adv_afa_rate")
+                    afa_rate = afa_rate_cent / 100
+                    
+                    # Calculate cost using the integrated cost calculator
+                    cost_breakdown = calculate_cost(df.reset_index(), selected_tariff, power_col, holidays, afa_rate=afa_rate)
+                    
+                    if "error" not in cost_breakdown:
+                        # Display cost breakdown
+                        col1, col2, col3 = st.columns(3)
+                        
+                        total_cost = cost_breakdown.get('Total Cost', 0)
+                        energy_cost = cost_breakdown.get('Peak Energy Cost', 0) + cost_breakdown.get('Off-Peak Energy Cost', 0) if 'Peak Energy Cost' in cost_breakdown else cost_breakdown.get('Energy Cost', 0)
+                        demand_cost = cost_breakdown.get('Capacity Cost', 0) + cost_breakdown.get('Network Cost', 0)
+                        
+                        col1.metric("Total Cost", f"RM {total_cost:,.2f}")
+                        col2.metric("Energy Cost", f"RM {energy_cost:,.2f}")
+                        col3.metric("Demand Cost", f"RM {demand_cost:,.2f}")
+                        
+                        # Cost breakdown chart
+                        cost_categories = []
+                        cost_values = []
+                        
+                        if 'Peak Energy Cost' in cost_breakdown:
+                            cost_categories.extend(['Peak Energy', 'Off-Peak Energy'])
+                            cost_values.extend([cost_breakdown.get('Peak Energy Cost', 0), 
+                                              cost_breakdown.get('Off-Peak Energy Cost', 0)])
+                        else:
+                            cost_categories.append('Energy')
+                            cost_values.append(cost_breakdown.get('Energy Cost', 0))
+                        
+                        if cost_breakdown.get('Capacity Cost', 0) > 0:
+                            cost_categories.append('Capacity')
+                            cost_values.append(cost_breakdown.get('Capacity Cost', 0))
+                        
+                        if cost_breakdown.get('Network Cost', 0) > 0:
+                            cost_categories.append('Network')
+                            cost_values.append(cost_breakdown.get('Network Cost', 0))
+                        
+                        if cost_breakdown.get('ICPT Cost', 0) != 0:
+                            cost_categories.append('ICPT')
+                            cost_values.append(cost_breakdown.get('ICPT Cost', 0))
+                        
+                        if cost_categories and cost_values:
+                            fig_cost = px.pie(values=cost_values, names=cost_categories, 
+                                            title='Cost Breakdown by Component')
+                            st.plotly_chart(fig_cost, use_container_width=True)
+                    
+                    # ===============================
+                    # ADVANCED PEAK EVENT DETECTION
+                    # ===============================
+                    st.subheader("3. Advanced Peak Event Detection")
+                    
+                    # Target demand setting
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        target_demand_percent = st.slider("Target Max Demand (% of current max)", 
+                                                        50, 100, 90, 1, key="adv_target_percent")
+                        target_demand = overall_max_demand * (target_demand_percent / 100)
+                        st.info(f"Target: {target_demand:.2f} kW ({target_demand_percent}% of {overall_max_demand:.2f} kW)")
+                    
+                    with col2:
+                        # Get MD rate from tariff (Capacity + Network rates)
+                        capacity_rate = selected_tariff.get('Rates', {}).get('Capacity Rate', 0)
+                        network_rate = selected_tariff.get('Rates', {}).get('Network Rate', 0)
+                        total_md_rate = capacity_rate + network_rate
+                        
+                        if total_md_rate > 0:
+                            st.metric("MD Rate (Capacity + Network)", f"RM {total_md_rate:.2f}/kW")
+                            st.caption(f"Capacity: RM {capacity_rate:.2f}/kW + Network: RM {network_rate:.2f}/kW")
+                            potential_saving = (overall_max_demand - target_demand) * total_md_rate
+                            st.success(f"Potential Monthly Saving: RM {potential_saving:,.2f}")
+                        else:
+                            st.warning("No MD rate available for this tariff")
+                    
+                    # Detect peak events above target
+                    df_events = df[[power_col]].copy()
+                    df_events['Above_Target'] = df_events[power_col] > target_demand
+                    df_events['Event_ID'] = (df_events['Above_Target'] != df_events['Above_Target'].shift()).cumsum()
+                    
+                    event_summaries = []
+                    for event_id, group in df_events.groupby('Event_ID'):
+                        if not group['Above_Target'].iloc[0]:
+                            continue
+                        
+                        start_time = group.index[0]
+                        end_time = group.index[-1]
+                        peak_load = group[power_col].max()
+                        excess = peak_load - target_demand
+                        duration_minutes = (end_time - start_time).total_seconds() / 60
+                        
+                        # Calculate energy to shave
+                        group_above = group[group[power_col] > target_demand]
+                        if len(group_above) > 1:
+                            interval_minutes = (group_above.index[1] - group_above.index[0]).total_seconds() / 60
+                        else:
+                            interval_minutes = 1
+                        interval_hours = interval_minutes / 60
+                        energy_to_shave = ((group_above[power_col] - target_demand) * interval_hours).sum()
+                        
+                        # Cost impact
+                        total_md_rate = capacity_rate + network_rate  # Use the rates calculated above
+                        md_cost_impact = excess * total_md_rate if total_md_rate > 0 else 0
+                        
+                        event_summaries.append({
+                            'Date': start_time.date(),
+                            'Start Time': start_time.strftime('%H:%M'),
+                            'End Time': end_time.strftime('%H:%M'),
+                            'Peak Load (kW)': peak_load,
+                            'Excess (kW)': excess,
+                            'Duration (min)': duration_minutes,
+                            'Energy to Shave (kWh)': energy_to_shave,
+                            'MD Cost Impact (RM)': md_cost_impact
+                        })
+                    
+                    if event_summaries:
+                        df_events_summary = pd.DataFrame(event_summaries)
+                        st.dataframe(df_events_summary.style.format({
+                            'Peak Load (kW)': '{:,.2f}',
+                            'Excess (kW)': '{:,.2f}',
+                            'Duration (min)': '{:,.1f}',
+                            'Energy to Shave (kWh)': '{:,.2f}',
+                            'MD Cost Impact (RM)': 'RM {:,.2f}'
+                        }), use_container_width=True)
+                        
+                        # Visualization of events
+                        fig_events = go.Figure()
+                        fig_events.add_trace(go.Scatter(
+                            x=df.index, y=df[power_col],
+                            mode='lines', name='Power Consumption',
+                            line=dict(color='blue', width=1)
+                        ))
+                        
+                        # Highlight peak events
+                        for event in event_summaries:
+                            event_mask = (df.index.date == event['Date']) & \
+                                        (df.index.strftime('%H:%M') >= event['Start Time']) & \
+                                        (df.index.strftime('%H:%M') <= event['End Time'])
+                            if event_mask.any():
+                                fig_events.add_trace(go.Scatter(
+                                    x=df.index[event_mask],
+                                    y=df[power_col][event_mask],
+                                    mode='lines', name=f"Peak Event ({event['Date']})",
+                                    line=dict(color='red', width=3),
+                                    showlegend=False
+                                ))
+                        
+                        # Add target line
+                        fig_events.add_hline(y=target_demand, line_dash="dot", line_color="orange",
+                                           annotation_text=f"Target: {target_demand:.2f} kW")
+                        
+                        fig_events.update_layout(
+                            title="Power Consumption with Peak Events Highlighted",
+                            xaxis_title="Time", yaxis_title="Power (kW)", height=500
+                        )
+                        st.plotly_chart(fig_events, use_container_width=True)
+                        
+                        # Summary metrics
+                        total_events = len(event_summaries)
+                        total_excess_energy = sum(e['Energy to Shave (kWh)'] for e in event_summaries)
+                        total_cost_impact = sum(e['MD Cost Impact (RM)'] for e in event_summaries)
+                        
+                        col1, col2, col3 = st.columns(3)
+                        col1.metric("Total Peak Events", total_events)
+                        col2.metric("Total Energy to Shave", f"{total_excess_energy:.2f} kWh")
+                        col3.metric("Total Cost Impact", f"RM {total_cost_impact:.2f}")
+                        
+                    else:
+                        st.success(f"No peak events detected above target demand of {target_demand:.2f} kW")
+                    
+                    # ===============================
+                    # LOAD DURATION CURVE WITH RP4 LOGIC
+                    # ===============================
+                    st.subheader("4. Load Duration Curve Analysis")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        ldc_period = st.radio("Time Range for LDC", 
+                                            ["All", "Peak Only", "Off-Peak Only"], 
+                                            horizontal=True, key="adv_ldc_period")
+                    with col2:
+                        top_percent = st.number_input("Show Top % of Readings", 
+                                                    0.1, 100.0, 100.0, 0.1, 
+                                                    key="adv_ldc_percent")
+                    
+                    # Prepare LDC data
+                    if ldc_period == "Peak Only":
+                        ldc_df = df[df_peak_analysis['Is_Peak']][[power_col]].copy()
+                    elif ldc_period == "Off-Peak Only":
+                        ldc_df = df[~df_peak_analysis['Is_Peak']][[power_col]].copy()
+                    else:
+                        ldc_df = df[[power_col]].copy()
+                    
+                    if not ldc_df.empty:
+                        # Sort for LDC
+                        ldc_sorted = ldc_df.sort_values(by=power_col, ascending=False).reset_index(drop=True)
+                        
+                        # Apply percentage filter
+                        if top_percent < 100.0:
+                            num_points = max(1, int(np.ceil(len(ldc_sorted) * (top_percent / 100.0))))
+                            ldc_plot = ldc_sorted.head(num_points).copy()
+                        else:
+                            ldc_plot = ldc_sorted.copy()
+                        
+                        ldc_plot["Percentage Time"] = (ldc_plot.index + 1) / len(ldc_plot) * 100
+                        
+                        # Create LDC plot
+                        fig_ldc = px.line(ldc_plot, x="Percentage Time", y=power_col,
+                                        title=f"Load Duration Curve - {ldc_period} (Top {top_percent}%)",
+                                        labels={"Percentage Time": "% of Time", power_col: "Power (kW)"})
+                        fig_ldc.update_traces(mode="lines+markers")
+                        fig_ldc.update_layout(height=500)
+                        st.plotly_chart(fig_ldc, use_container_width=True)
+                        
+                        # LDC Analysis
+                        if len(ldc_plot) >= 5:
+                            p_peak = ldc_plot[power_col].iloc[0]
+                            p_shoulder_idx = min(max(1, int(0.05 * len(ldc_plot))), len(ldc_plot) - 1)
+                            p_shoulder = ldc_plot[power_col].iloc[p_shoulder_idx]
+                            
+                            shave_potential = p_peak - p_shoulder
+                            relative_potential = shave_potential / p_peak if p_peak > 0 else 0
+                            
+                            if shave_potential > 10 and relative_potential > 0.15:
+                                st.success(f"""
+                                **LDC Analysis: EXCELLENT for Demand Shaving**
+                                - Peak: {p_peak:,.2f} kW
+                                - Shoulder (5%): {p_shoulder:,.2f} kW  
+                                - Shaving Potential: {shave_potential:,.2f} kW ({relative_potential:.1%})
+                                """)
+                                
+                                if total_md_rate > 0:
+                                    monthly_saving = shave_potential * total_md_rate
+                                    st.info(f"**Estimated Monthly Saving: RM {monthly_saving:,.2f}**")
+                            else:
+                                st.warning("LDC Analysis: Limited demand shaving potential")
+                    
+        except Exception as e:
+            st.error(f"Error processing file: {str(e)}")
+            st.error("Please ensure your Excel file has proper timestamp and power columns.")
