@@ -241,6 +241,16 @@ def show():
             key="unique_old_tariff_selector"
         )
 
+        # Add a new selector for selecting new tariffs for comparison based on rp4_tariff options
+        new_tariff_names = [tariff["Tariff"] for tariff in tariffs]
+        default_new_tariff = new_tariff_names[0]
+        selected_new_tariff = st.selectbox(
+            "Select New Tariff for Comparison",
+            new_tariff_names,
+            index=new_tariff_names.index(default_new_tariff),
+            key="unique_new_tariff_selector"
+        )
+
         # --- Cost Calculation and Display ---
         from utils.cost_calculator import calculate_cost, format_cost_breakdown
         # Add dynamic title reflecting the selected tariff
@@ -339,7 +349,7 @@ def show():
             # --- Side-by-side Tariff Comparison Section ---
             st.markdown("---")
             st.subheader("Compare with Selected Tariff and Old Tariff")
-            colA, colB = st.columns(2)
+            colA, colB, colC = st.columns(3)
 
             # Display selected tariff breakdown
             with colA:
@@ -374,6 +384,22 @@ def show():
                         for k, v in old_cost_breakdown.items() if k != "Tariff"
                     ]
                     st.write(pd.DataFrame(old_cost_breakdown_formatted))
+
+            # Add colC to display the breakdown for the new tariff
+            with colC:
+                st.markdown(f"#### New Tariff: {selected_new_tariff}")
+                new_tariff_obj = next((t for t in tariffs if t["Tariff"] == selected_new_tariff), None)
+                if not new_tariff_obj:
+                    st.error("Selected new tariff details not found.")
+                else:
+                    new_cost_breakdown = calculate_cost(df, new_tariff_obj, power_col, holidays, afa_rate=afa_rate)
+                    if "error" in new_cost_breakdown:
+                        st.error(new_cost_breakdown["error"])
+                    else:
+                        st.markdown("<b>Cost per kWh (Total Cost / Total kWh):</b> " + (
+                            f"{(new_cost_breakdown.get('Total Cost',0)/new_cost_breakdown.get('Total kWh',1)) if new_cost_breakdown.get('Total kWh',0) else 'N/A'} RM/kWh"
+                        ), unsafe_allow_html=True)
+                        st.markdown(html_cost_table(new_cost_breakdown), unsafe_allow_html=True)
             # --- Regression Formula Display (disabled, enable for future debugging) ---
             # st.subheader("Cost Calculation Formulae")
             # formulae = []
