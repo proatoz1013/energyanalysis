@@ -1,0 +1,12 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"type": "shell",
+			"label": "Run Streamlit App",
+			"command": "streamlit run tnb_tariff_comparison.py",
+			"group": "build",
+			"isBackground": true
+		}
+	]
+}

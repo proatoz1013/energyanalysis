@@ -234,7 +234,9 @@ def show():
                     if val is None or val == "":
                         return ""
                     if isinstance(val, (int, float)):
-                        return f"{val:,.0f}"  # Format numbers with commas for thousands separators.
+                        if val < 1:
+                            return f"{val:,.4f}"  # Format numbers with 4 decimal places if less than RM1.
+                        return f"{val:,.2f}"  # Format numbers with 2 decimal places if RM1 or greater.
                     return val
 
                 def get_cost(*keys):
@@ -365,7 +367,9 @@ def show():
                             if val is None or val == "":
                                 return ""
                             if isinstance(val, (int, float)):
-                                return f"{val:,.0f}"  # Format numbers with commas for thousands separators.
+                                if val < 1:
+                                    return f"{val:,.4f}"  # Format numbers with 4 decimal places if less than RM1.
+                                return f"{val:,.2f}"  # Format numbers with 2 decimal places if RM1 or greater.
                             return val
 
                         # Apply the updated formatting function to the Old Tariff breakdown table.
