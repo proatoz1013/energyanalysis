@@ -634,7 +634,7 @@ with tabs[1]:
                     min_val = st.number_input("Minimum kW for heatmap color scale", value=min_val_default, step=10.0, key="proc_min_heatmap")
                     max_val = st.number_input("Maximum kW for heatmap color scale", value=max_val_default, step=10.0, key="proc_max_heatmap")
                     fig_proc_heatmap = px.imshow(pivot_proc.sort_index(), labels=dict(x="Date", y="30-Minute Interval", color="Average Power (kW)"), aspect="auto",
-                                                 color_continuous_scale=[[0, "#ffffcc"], [0.3, "#ffeda0"], [0.6, "#feb24c"], [0.9, "#f03b20"], [1, "#bd0026"]],
+                                                 color_continuous_scale="Viridis",  # Better for accessibility and both light/dark modes
                                                  title="Heatmap of Averaged 30-Minute Power Data")
                     fig_proc_heatmap.update_coloraxes(colorbar_title="Average Power (kW)", cmin=min_val, cmax=max_val)
                     fig_proc_heatmap.update_layout(height=600, yaxis={'title': '30-Minute Interval Starting'})
@@ -750,18 +750,27 @@ with tabs[2]:
                 st.subheader("Tariff Configuration")
                 tariff_data = get_tariff_data()
                 
-                # User Type Selection
+                # User Type Selection (Default: Business)
                 user_types = list(tariff_data.keys())
-                selected_user_type = st.selectbox("Select User Type", user_types, key="adv_user_type")
+                default_user_type = 'Business' if 'Business' in user_types else user_types[0]
+                user_type_index = user_types.index(default_user_type)
+                selected_user_type = st.selectbox("Select User Type", user_types, 
+                                                index=user_type_index, key="adv_user_type")
                 
-                # Tariff Group Selection
+                # Tariff Group Selection (Default: Non Domestic)
                 tariff_groups = list(tariff_data[selected_user_type]["Tariff Groups"].keys())
-                selected_tariff_group = st.selectbox("Select Tariff Group", tariff_groups, key="adv_tariff_group")
+                default_tariff_group = 'Non Domestic' if 'Non Domestic' in tariff_groups else tariff_groups[0]
+                tariff_group_index = tariff_groups.index(default_tariff_group)
+                selected_tariff_group = st.selectbox("Select Tariff Group", tariff_groups, 
+                                                   index=tariff_group_index, key="adv_tariff_group")
                 
-                # Specific Tariff Selection
+                # Specific Tariff Selection (Default: Medium Voltage TOU)
                 tariffs = tariff_data[selected_user_type]["Tariff Groups"][selected_tariff_group]["Tariffs"]
                 tariff_names = [t["Tariff"] for t in tariffs]
-                selected_tariff_name = st.selectbox("Select Specific Tariff", tariff_names, key="adv_specific_tariff")
+                default_tariff_name = 'Medium Voltage TOU' if 'Medium Voltage TOU' in tariff_names else tariff_names[0]
+                tariff_name_index = tariff_names.index(default_tariff_name)
+                selected_tariff_name = st.selectbox("Select Specific Tariff", tariff_names, 
+                                                  index=tariff_name_index, key="adv_specific_tariff")
                 
                 # Get the selected tariff object
                 selected_tariff = next((t for t in tariffs if t["Tariff"] == selected_tariff_name), None)
@@ -981,18 +990,263 @@ with tabs[2]:
                         )
                         st.plotly_chart(fig_events, use_container_width=True)
                         
-                        # Summary metrics
-                        total_events = len(event_summaries)
-                        total_excess_energy = sum(e['Energy to Shave (kWh)'] for e in event_summaries)
-                        total_cost_impact = sum(e['MD Cost Impact (RM)'] for e in event_summaries)
+                        # ===============================
+                        # PEAK EVENT SUMMARY & ANALYSIS
+                        # ===============================
+                        st.markdown("---")
+                        st.markdown("#### Peak Event Summary & Threshold Analysis")
                         
-                        col1, col2, col3 = st.columns(3)
-                        col1.metric("Total Peak Events", total_events)
-                        col2.metric("Total Energy to Shave", f"{total_excess_energy:.2f} kWh")
-                        col3.metric("Total Cost Impact", f"RM {total_cost_impact:.2f}")
+                        # Enhanced MD-focused summary metrics
+                        total_events = len(event_summaries)
+                        
+                        if total_events > 0:
+                            # Group events by day to get better statistics
+                            daily_events = {}
+                            daily_kwh_ranges = []
+                            
+                            for event in event_summaries:
+                                date = event['Date']
+                                if date not in daily_events:
+                                    daily_events[date] = []
+                                daily_events[date].append(event)
+                            
+                            # Calculate daily kWh ranges and total demand cost impact
+                            total_md_cost_monthly = 0
+                            max_daily_excess = 0
+                            
+                            for date, day_events in daily_events.items():
+                                daily_kwh_total = sum(e['Energy to Shave (kWh)'] for e in day_events)
+                                daily_kwh_ranges.append(daily_kwh_total)
+                                
+                                # For MD cost calculation: only the highest demand of the day matters
+                                # since MD is recorded every 30 minutes and only the highest counts
+                                daily_max_excess = max(e['Excess (kW)'] for e in day_events)
+                                max_daily_excess = max(max_daily_excess, daily_max_excess)
+                                
+                                # MD cost impact is based on the single highest reading of the month
+                                if daily_max_excess > max_daily_excess:
+                                    max_daily_excess = daily_max_excess
+                            
+                            # Proper MD cost calculation: only the highest MD event of the month
+                            total_md_cost_monthly = max_daily_excess * total_md_rate if total_md_rate > 0 else 0
+                            
+                            # Statistics for daily kWh ranges
+                            min_daily_kwh = min(daily_kwh_ranges) if daily_kwh_ranges else 0
+                            max_daily_kwh = max(daily_kwh_ranges) if daily_kwh_ranges else 0
+                            avg_events_per_day = total_events / len(daily_events) if daily_events else 0
+                            
+                            # Days with peak events (accounting for 30-min MD recording intervals)
+                            days_with_events = len(daily_events)
+                            
+                            # Display enhanced summary
+                            col1, col2, col3, col4 = st.columns(4)
+                            col1.metric("Days with Peak Events", f"{days_with_events}")
+                            col2.metric("Max MD Impact (Monthly)", f"RM {total_md_cost_monthly:.2f}")
+                            col3.metric("Avg Events/Day", f"{avg_events_per_day:.1f}")
+                            col4.metric("Daily kWh Range", f"{min_daily_kwh:.1f} - {max_daily_kwh:.1f}")
+                            
+                            # Additional insights in expandable section
+                            with st.expander("📊 Detailed MD Management Insights"):
+                                insight_col1, insight_col2 = st.columns(2)
+                                
+                                with insight_col1:
+                                    st.markdown("**🎯 Peak Events Analysis:**")
+                                    st.write(f"• Total events detected: {total_events}")
+                                    st.write(f"• Events span across: {days_with_events} days")
+                                    st.write(f"• Highest single excess: {max_daily_excess:.2f} kW")
+                                    
+                                    # 30-minute interval consideration
+                                    total_30min_intervals = total_events
+                                    st.write(f"• Peak intervals (30-min blocks): {total_30min_intervals}")
+                                
+                                with insight_col2:
+                                    st.markdown("**💰 MD Cost Strategy:**")
+                                    st.write(f"• MD charges only highest demand")
+                                    st.write(f"• Monthly impact: RM {total_md_cost_monthly:.2f}")
+                                    
+                                    if days_with_events > 0:
+                                        potential_daily_saving = total_md_cost_monthly / days_with_events
+                                        st.write(f"• Focus on worst day saves: RM {total_md_cost_monthly:.2f}")
+                                        st.write(f"• Multiple events/day = same MD cost")
+                                    
+                                    # Efficiency insight
+                                    if max_daily_kwh > 0:
+                                        efficiency_ratio = total_md_cost_monthly / max_daily_kwh if max_daily_kwh > 0 else 0
+                                        st.write(f"• Cost per kWh shaved: RM {efficiency_ratio:.2f}")
+                        
+                        else:
+                            # No events detected
+                            col1, col2, col3, col4 = st.columns(4)
+                            col1.metric("Days with Peak Events", "0")
+                            col2.metric("MD Cost Impact", "RM 0.00")
+                            col3.metric("Target Status", "✅ Met")
+                            col4.metric("Optimization Needed", "None")
+                        
+                        # Threshold sensitivity analysis
+                        st.markdown("#### Threshold Sensitivity Analysis")
+                        st.markdown("*How changing the target threshold affects the number of peak events and shaving requirements*")
+                        
+                        # Create analysis for different threshold percentages
+                        threshold_analysis = []
+                        test_percentages = [70, 75, 80, 85, 90, 95]
+                        
+                        for pct in test_percentages:
+                            test_target = overall_max_demand * (pct / 100)
+                            test_events = []
+                            
+                            # Recalculate events for this threshold
+                            df_test = df[[power_col]].copy()
+                            df_test['Above_Target'] = df_test[power_col] > test_target
+                            df_test['Event_ID'] = (df_test['Above_Target'] != df_test['Above_Target'].shift()).cumsum()
+                            
+                            for event_id, group in df_test.groupby('Event_ID'):
+                                if not group['Above_Target'].iloc[0]:
+                                    continue
+                                
+                                peak_load = group[power_col].max()
+                                excess = peak_load - test_target
+                                
+                                # Calculate energy to shave for this threshold
+                                group_above = group[group[power_col] > test_target]
+                                if len(group_above) > 1:
+                                    interval_minutes = (group_above.index[1] - group_above.index[0]).total_seconds() / 60
+                                else:
+                                    interval_minutes = 1
+                                interval_hours = interval_minutes / 60
+                                energy_to_shave = ((group_above[power_col] - test_target) * interval_hours).sum()
+                                
+                                test_events.append({
+                                    'excess': excess,
+                                    'energy': energy_to_shave
+                                })
+                            
+                            # Calculate totals for this threshold
+                            total_test_events = len(test_events)
+                            total_test_energy = sum(e['energy'] for e in test_events)
+                            
+                            # CORRECTED MD cost calculation: only highest excess of the month matters
+                            max_excess_for_month = max(e['excess'] for e in test_events) if test_events else 0
+                            monthly_md_cost = max_excess_for_month * total_md_rate if total_md_rate > 0 else 0
+                            potential_monthly_saving = (overall_max_demand - test_target) * total_md_rate if total_md_rate > 0 else 0
+                            
+                            threshold_analysis.append({
+                                'Target (% of Max)': f"{pct}%",
+                                'Target (kW)': test_target,
+                                'Peak Events Count': total_test_events,
+                                'Total Energy to Shave (kWh)': total_test_energy,
+                                'Monthly MD Cost (RM)': monthly_md_cost,
+                                'Monthly MD Saving (RM)': potential_monthly_saving,
+                                'Difficulty Level': 'Easy' if pct >= 90 else 'Medium' if pct >= 80 else 'Hard'
+                            })
+                        
+                        # Display threshold analysis table
+                        df_threshold_analysis = pd.DataFrame(threshold_analysis)
+                        
+                        # Format and style the table
+                        styled_analysis = df_threshold_analysis.style.format({
+                            'Target (kW)': '{:.2f}',
+                            'Total Energy to Shave (kWh)': '{:.2f}',
+                            'Monthly MD Cost (RM)': 'RM {:.2f}',
+                            'Monthly MD Saving (RM)': 'RM {:.2f}'
+                        }).apply(lambda x: ['background-color: rgba(40, 167, 69, 0.1)' if 'Easy' in str(v) 
+                                         else 'background-color: rgba(255, 193, 7, 0.1)' if 'Medium' in str(v)
+                                         else 'background-color: rgba(220, 53, 69, 0.1)' if 'Hard' in str(v)
+                                         else '' for v in x], axis=0)
+                        
+                        st.dataframe(styled_analysis, use_container_width=True)
+                        
+                        # Key insights
+                        st.markdown("#### Key Insights")
+                        
+                        # Relationship analysis
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.markdown("**📊 Threshold-Event Relationship:**")
+                            lowest_threshold = df_threshold_analysis.iloc[-1]  # 70%
+                            highest_threshold = df_threshold_analysis.iloc[0]   # 95%
+                            
+                            event_increase = lowest_threshold['Peak Events Count'] - highest_threshold['Peak Events Count']
+                            energy_increase = lowest_threshold['Total Energy to Shave (kWh)'] - highest_threshold['Total Energy to Shave (kWh)']
+                            
+                            if event_increase > 0:
+                                st.success(f"✅ **Lower thresholds = More events**: Reducing from 95% to 70% increases events by {event_increase}")
+                            
+                            if energy_increase > 0:
+                                st.info(f"📈 **Energy impact**: {energy_increase:.2f} kWh more energy needs shaving at lower thresholds")
+                        
+                        with col2:
+                            st.markdown("**💡 Recommended Strategy:**")
+                            
+                            # Find optimal balance (around 85-90%)
+                            optimal_row = df_threshold_analysis[df_threshold_analysis['Target (% of Max)'].isin(['85%', '90%'])]
+                            if not optimal_row.empty:
+                                best_option = optimal_row.iloc[0]
+                                st.success(f"🎯 **Recommended**: {best_option['Target (% of Max)']} target")
+                                st.write(f"• Events: {best_option['Peak Events Count']}")
+                                st.write(f"• Monthly saving: RM {best_option['Monthly MD Saving (RM)']:.2f}")
+                                st.write(f"• Difficulty: {best_option['Difficulty Level']}")
+                        
+                        # Visualization of threshold vs events relationship
+                        fig_threshold = go.Figure()
+                        
+                        # Add events count line
+                        fig_threshold.add_trace(go.Scatter(
+                            x=[int(x.rstrip('%')) for x in df_threshold_analysis['Target (% of Max)']],
+                            y=df_threshold_analysis['Peak Events Count'],
+                            mode='lines+markers',
+                            name='Peak Events Count',
+                            line=dict(color='#FF6B6B', width=3),
+                            marker=dict(size=8)
+                        ))
+                        
+                        # Add MD cost on secondary y-axis (corrected calculation)
+                        fig_threshold.add_trace(go.Scatter(
+                            x=[int(x.rstrip('%')) for x in df_threshold_analysis['Target (% of Max)']],
+                            y=df_threshold_analysis['Monthly MD Cost (RM)'],
+                            mode='lines+markers',
+                            name='Monthly MD Cost (RM)',
+                            line=dict(color='#FFA500', width=3),
+                            marker=dict(size=8),
+                            yaxis='y2'
+                        ))
+                        
+                        # Update layout for dual y-axis
+                        fig_threshold.update_layout(
+                            title='Peak Events vs Target Threshold Analysis',
+                            xaxis_title='Target Threshold (% of Max Demand)',
+                            yaxis=dict(title='Number of Peak Events', side='left'),
+                            yaxis2=dict(title='Monthly MD Cost (RM)', side='right', overlaying='y'),
+                            height=500,
+                            hovermode='x unified'
+                        )
+                        
+                        st.plotly_chart(fig_threshold, use_container_width=True)
+                        
+                        # Important MD calculation explanation
+                        st.info("""
+                        **💡 MD Cost Calculation Methodology:**
+                        
+                        The Monthly MD Cost shown represents the **correct** way MD charges are calculated:
+                        • TNB records maximum demand every **30 minutes** during peak periods
+                        • Only the **single highest** 30-minute reading of the month is charged
+                        • Multiple peak events on the same day = same MD cost (if highest event is the same)
+                        • Focus should be on reducing the **worst single event** rather than total event count
+                        """)
                         
                     else:
-                        st.success(f"No peak events detected above target demand of {target_demand:.2f} kW")
+                        st.info(f"🎉 No peak events detected above target demand of {target_demand:.2f} kW")
+                        st.success("✅ Current demand profile is already within target limits!")
+                        
+                        # Still show what would happen with lower thresholds
+                        st.markdown("#### What if we set a lower target?")
+                        lower_target = overall_max_demand * 0.8  # 80% threshold
+                        
+                        df_test = df[[power_col]].copy()
+                        df_test['Above_Target'] = df_test[power_col] > lower_target
+                        test_events_count = len(df_test[df_test['Above_Target'] == True].groupby((df_test['Above_Target'] != df_test['Above_Target'].shift()).cumsum()).filter(lambda x: x['Above_Target'].iloc[0]))
+                        
+                        st.info(f"At 80% threshold ({lower_target:.2f} kW): {test_events_count} events would be detected")
                     
                     # ===============================
                     # LOAD DURATION CURVE WITH RP4 LOGIC
@@ -1353,7 +1607,7 @@ with tabs[3]:
                             'New Total Cost (RM)': 'RM {:,.2f}',
                             'Difference (RM)': 'RM {:+,.2f}',
                             'Change (%)': '{:+.1f}%'
-                        }).apply(lambda x: ['background-color: #d4edda' if v < 0 else 'background-color: #f8d7da' if v > 0 else '' 
+                        }).apply(lambda x: ['background-color: rgba(40, 167, 69, 0.2)' if v < 0 else 'background-color: rgba(220, 53, 69, 0.2)' if v > 0 else '' 
                                          for v in df_summary['Difference (RM)']], axis=0)
                         
                         st.dataframe(formatted_summary, use_container_width=True)
@@ -1522,7 +1776,7 @@ with tabs[3]:
                         'New Total Cost (RM)': 'RM {:,.2f}',
                         'Difference (RM)': 'RM {:+,.2f}',
                         'Change (%)': '{:+.1f}%'
-                    }).apply(lambda x: ['background-color: #d4edda' if v < 0 else 'background-color: #f8d7da' if v > 0 else '' 
+                    }).apply(lambda x: ['background-color: rgba(40, 167, 69, 0.2)' if v < 0 else 'background-color: rgba(220, 53, 69, 0.2)' if v > 0 else '' 
                                      for v in df_display['Difference (RM)']], axis=0)
                     
                     st.dataframe(formatted_df, use_container_width=True)
@@ -1538,13 +1792,13 @@ with tabs[3]:
                         name='Old Tariff',
                         x=df_monthly['Month'],
                         y=df_monthly['Old Total Cost (RM)'],
-                        marker_color='lightcoral'
+                        marker_color='#FF6B6B'  # Modern coral - works in both light/dark
                     ))
                     fig_cost.add_trace(go.Bar(
                         name='New Tariff (RP4)',
                         x=df_monthly['Month'],
                         y=df_monthly['New Total Cost (RM)'],
-                        marker_color='lightblue'
+                        marker_color='#4ECDC4'  # Modern teal - works in both light/dark
                     ))
                     
                     fig_cost.update_layout(
