@@ -110,16 +110,17 @@ with tabs[1]:
 
             tariff_data = {
                 "Industrial": [
-                    {"Tariff": "E1 - Medium Voltage General", "Voltage": "Medium Voltage", "Base Rate": 0.337, "MD Rate": 29.60, "ICPT": 0, "Split": False, "Tiered": False},
-                    {"Tariff": "E2 - Medium Voltage Peak/Off-Peak", "Voltage": "Medium Voltage", "Peak Rate": 0.355, "OffPeak Rate": 0.219, "MD Rate": 37.00, "ICPT": 0, "Split": True, "Tiered": False},
-                    {"Tariff": "E3 - High Voltage Peak/Off-Peak", "Voltage": "High Voltage", "Peak Rate": 0.337, "OffPeak Rate": 0.202, "MD Rate": 35.50, "ICPT": 0, "Split": True, "Tiered": False},
-                    {"Tariff": "D - Low Voltage Industrial", "Voltage": "Low Voltage", "Tier1 Rate": 0.38, "Tier1 Limit": 200, "Tier2 Rate": 0.441, "MD Rate": 0, "ICPT": 0, "Split": False, "Tiered": True}
+                    {"Tariff": "E1 - Medium Voltage General", "Voltage": "Medium Voltage", "Base Rate": 0.337, "MD Rate": 29.60, "ICPT": 0.16, "Split": False, "Tiered": False},
+                    {"Tariff": "E2 - Medium Voltage Peak/Off-Peak", "Voltage": "Medium Voltage", "Peak Rate": 0.355, "OffPeak Rate": 0.219, "MD Rate": 37.00, "ICPT": 0.16, "Split": True, "Tiered": False},
+                    {"Tariff": "E3 - High Voltage Peak/Off-Peak", "Voltage": "High Voltage", "Peak Rate": 0.337, "OffPeak Rate": 0.202, "MD Rate": 35.50, "ICPT": 0.16, "Split": True, "Tiered": False},
+                    {"Tariff": "D - Low Voltage Industrial", "Voltage": "Low Voltage", "Tier1 Rate": 0.38, "Tier1 Limit": 200, "Tier2 Rate": 0.441, "MD Rate": 0, "ICPT": 0.027, "Split": False, "Tiered": True}
                 ],
                 "Commercial": [
                     {"Tariff": "C1 - Low Voltage Commercial", "Voltage": "Low Voltage", "Base Rate": 0.435, "MD Rate": 0, "ICPT": 0.027, "Split": False, "Tiered": False},
                     {"Tariff": "C2 - Medium Voltage Commercial", "Voltage": "Medium Voltage", "Base Rate": 0.385, "MD Rate": 25, "ICPT": 0.16, "Split": False, "Tiered": False}
                 ]
             }
+            
             filtered_tariffs = [t for t in tariff_data.get(industry, []) if t["Voltage"] == voltage_level]
             if filtered_tariffs:
                 cost_table_data = []
@@ -134,6 +135,7 @@ with tabs[1]:
                             energy_cost = (t_info["Tier1 Limit"] * t_info["Tier1 Rate"]) + ((total_energy_cost_calc - t_info["Tier1 Limit"]) * t_info["Tier2 Rate"])
                     else:
                         energy_cost = total_energy_cost_calc * t_info.get("Base Rate", 0)
+                    
                     md_cost = max_demand * t_info.get("MD Rate", 0)
                     icpt_cost = total_energy_cost_calc * t_info.get("ICPT", 0)
                     total_bill = energy_cost + md_cost + icpt_cost
