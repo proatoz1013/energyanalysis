@@ -228,20 +228,7 @@ def show():
         )
         afa_rate = afa_rate_cent / 100  # Convert cent to RM
 
-        # Let user select old tariff
-        from utils.old_cost_calculator import calculate_old_cost
-        from old_rate import charging_rates
-
-        old_tariff_names = list(charging_rates.keys())
-        default_old_tariff = old_tariff_names[0]
-        selected_old_tariff = st.selectbox(
-            "Select Old Tariff for Comparison",
-            old_tariff_names,
-            index=old_tariff_names.index(default_old_tariff),
-            key="unique_old_tariff_selector"
-        )
-
-        # Add a new selector for selecting new tariffs for comparison based on rp4_tariff options
+        # Move the 'Select New Tariff for Comparison' selector here
         new_tariff_names = [tariff["Tariff"] for tariff in tariffs]
         default_new_tariff = new_tariff_names[0]
         selected_new_tariff = st.selectbox(
@@ -348,8 +335,8 @@ def show():
 
             # --- Side-by-side Tariff Comparison Section ---
             st.markdown("---")
-            st.subheader("Compare with Selected Tariff and Old Tariff")
-            colA, colB, colC = st.columns(3)
+            st.subheader("Compare with Selected Tariff and New Tariff")
+            colA, colC = st.columns([1, 1])  # Remove colB, only show colA and colC
 
             # Display selected tariff breakdown
             with colA:
@@ -359,46 +346,7 @@ def show():
                 ), unsafe_allow_html=True)
                 st.markdown(html_cost_table(cost_breakdown), unsafe_allow_html=True)
 
-            # Calculate old cost using the first selector
-            old_cost_breakdown = calculate_old_cost(
-                selected_old_tariff,  # Use the first selector's value
-                total_kwh=total_kwh,
-                max_demand_kw=peak_demand if peak_demand is not None else 0,
-                peak_kwh=peak_kwh,
-                offpeak_kwh=offpeak_kwh
-            )
-
-            # Display old tariff breakdown
-            with colB:
-                st.markdown(f"#### Old Tariff: {selected_old_tariff}")
-                if "error" in old_cost_breakdown:
-                    st.error(old_cost_breakdown["error"])
-                else:
-                    st.markdown(
-                        f"<b>Cost per kWh (Total Cost / Total kWh):</b> "
-                        f"{(old_cost_breakdown.get('Total Cost',0)/total_kwh) if total_kwh else 'N/A'} RM/kWh",
-                        unsafe_allow_html=True
-                    )
-                    def html_old_cost_table(breakdown):
-                        html = """
-                        <table class=\"cost-table\">
-                            <tr>
-                                <th>Description</th>
-                                <th>Value</th>
-                                <th>Unit Rate (RM)</th>
-                                <th>Total Cost (RM)</th>
-                            </tr>
-                        """
-                        for key, value in breakdown.items():
-                            if key != "Tariff":
-                                unit_rate = charging_rates.get(selected_old_tariff, "").split(", ")
-                                rate = next((r.split(": ")[1] for r in unit_rate if key.lower() in r.lower()), "N/A")
-                                html += f"<tr><td>{key}</td><td></td><td>{rate}</td><td>{fmt(value)}</td></tr>"
-                        html += "</table>"
-                        return html
-                    st.markdown(html_old_cost_table(old_cost_breakdown), unsafe_allow_html=True)
-
-            # Add colC to display the breakdown for the new tariff
+            # Only display colC (New Tariff)
             with colC:
                 st.markdown(f"#### New Tariff: {selected_new_tariff}")
                 new_tariff_obj = next((t for t in tariffs if t["Tariff"] == selected_new_tariff), None)
