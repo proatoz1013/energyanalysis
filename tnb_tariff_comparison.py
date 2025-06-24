@@ -434,7 +434,11 @@ def show():
             # for f in formulae:
             #     st.markdown(f"- {f}")
 
-            
+    # Remove the time interval input and all related debug and calculation logic
+    # (No more st.subheader("Enter Time Interval"), st.number_input for time_interval, or any interval-based kWh/cost debug)
+
+    # ...existing code...
+
 def get_peak_demand(df, power_col, holidays):
     """
     Returns the maximum demand (kW) during peak periods only.
