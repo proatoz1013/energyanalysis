@@ -7,6 +7,55 @@ from tnb_tariff_comparison import show as show_tnb_tariff_comparison
 
 st.set_page_config(page_title="Load Profile Analysis", layout="wide")
 
+# Sidebar Configuration
+st.sidebar.title("🔧 Configuration")
+st.sidebar.markdown("---")
+
+# AFA Rate Configuration (Global setting)
+st.sidebar.markdown("### AFA Rate Setting")
+st.sidebar.caption("Alternative Fuel Agent rate for RP4 calculations")
+
+if 'global_afa_rate' not in st.session_state:
+    st.session_state.global_afa_rate = 3.0
+
+global_afa_rate_cent = st.sidebar.number_input(
+    "AFA Rate (cent/kWh)", 
+    min_value=-10.0, 
+    max_value=10.0, 
+    value=st.session_state.global_afa_rate, 
+    step=0.1,
+    help="Current AFA rate in cents per kWh. Used for RP4 tariff calculations."
+)
+
+# Update session state
+st.session_state.global_afa_rate = global_afa_rate_cent
+global_afa_rate = global_afa_rate_cent / 100
+
+st.sidebar.markdown("---")
+st.sidebar.info(f"**Current AFA Rate:** {global_afa_rate_cent:+.1f} cent/kWh")
+if global_afa_rate_cent >= 0:
+    st.sidebar.success("✅ AFA adds to electricity cost")
+else:
+    st.sidebar.warning("⚠️ AFA reduces electricity cost")
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 📚 About")
+st.sidebar.markdown("""
+**Energy Analysis Dashboard**
+
+This tool provides comprehensive analysis of:
+- TNB tariff comparisons
+- Load profile analysis  
+- Advanced RP4 integration
+- Monthly rate impact analysis
+
+**RP4 Features:**
+- Holiday-aware peak/off-peak logic
+- Accurate capacity + network MD rates
+- AFA rate integration
+- Demand shaving analysis
+""")
+
 tabs = st.tabs(["TNB New Tariff Comparison", "Load Profile Analysis", "Advanced Energy Analysis", "Monthly Rate Impact Analysis"])
 
 with tabs[1]:
@@ -775,11 +824,9 @@ with tabs[2]:
                     
                     from utils.cost_calculator import calculate_cost
                     
-                    # AFA Rate input
-                    afa_rate_cent = st.number_input("AFA Rate (cent/kWh)", 
-                                                  min_value=-10.0, max_value=10.0, 
-                                                  value=3.0, step=0.1, key="adv_afa_rate")
-                    afa_rate = afa_rate_cent / 100
+                    # AFA Rate (use global setting from sidebar)
+                    afa_rate = global_afa_rate
+                    st.info(f"Using AFA Rate: {global_afa_rate_cent:+.1f} cent/kWh (configured in sidebar)")
                     
                     # Calculate cost using the integrated cost calculator
                     cost_breakdown = calculate_cost(df.reset_index(), selected_tariff, power_col, holidays, afa_rate=afa_rate)
@@ -1187,30 +1234,62 @@ with tabs[3]:
                         # Need to reset index for the cost calculator
                         month_data_reset = month_data.reset_index()
                         
-                        # AFA rate input (will apply to all months)
-                        if 'afa_rate' not in st.session_state:
-                            st.session_state.afa_rate = 0.03
+                        # AFA rate (use global setting from sidebar)
+                        afa_rate = global_afa_rate
                         
                         new_cost = calculate_cost(
                             df=month_data_reset, 
                             tariff=selected_new_tariff, 
                             power_col=power_col, 
                             holidays=holidays,
-                            afa_rate=st.session_state.afa_rate
+                            afa_rate=afa_rate
                         )
                         
-                        # Extract costs
+                        # Extract detailed costs for breakdown
                         old_total = old_cost.get('Total Cost', 0)
                         new_total = new_cost.get('Total Cost', 0)
                         difference = new_total - old_total
                         percentage_change = (difference / old_total * 100) if old_total > 0 else 0
                         
+                        # Detailed OLD tariff breakdown
+                        old_peak_kwh = old_cost.get('Peak Energy (kWh)', 0)
+                        old_offpeak_kwh = old_cost.get('Off-Peak Energy (kWh)', 0)
+                        old_peak_cost = old_cost.get('Peak Energy Cost', 0)
+                        old_offpeak_cost = old_cost.get('Off-Peak Energy Cost', 0)
+                        old_icpt_cost = old_cost.get('ICPT Cost', 0)
+                        old_md_cost = old_cost.get('MD Cost', 0)
+                        
+                        # Detailed NEW tariff breakdown
+                        new_peak_kwh = new_cost.get('Peak Energy (kWh)', 0)
+                        new_offpeak_kwh = new_cost.get('Off-Peak Energy (kWh)', 0)
+                        new_peak_cost = new_cost.get('Peak Energy Cost', 0)
+                        new_offpeak_cost = new_cost.get('Off-Peak Energy Cost', 0)
+                        new_afa_cost = new_cost.get('AFA Cost', 0)
+                        new_capacity_cost = new_cost.get('Capacity Cost', 0)
+                        new_network_cost = new_cost.get('Network Cost', 0)
+                        new_total_md_cost = new_capacity_cost + new_network_cost
+                        
                         monthly_results.append({
                             'Month': month_str,
                             'Total Energy (kWh)': total_kwh,
                             'Max Demand (kW)': max_demand_kw,
-                            'Old Tariff Cost (RM)': old_total,
-                            'New Tariff Cost (RM)': new_total,
+                            # OLD Tariff Details
+                            'Old Peak Energy (kWh)': old_peak_kwh,
+                            'Old Off-Peak Energy (kWh)': old_offpeak_kwh,
+                            'Old Peak Cost (RM)': old_peak_cost,
+                            'Old Off-Peak Cost (RM)': old_offpeak_cost,
+                            'Old ICPT Cost (RM)': old_icpt_cost,
+                            'Old MD Cost (RM)': old_md_cost,
+                            'Old Total Cost (RM)': old_total,
+                            # NEW Tariff Details
+                            'New Peak Energy (kWh)': new_peak_kwh,
+                            'New Off-Peak Energy (kWh)': new_offpeak_kwh,
+                            'New Peak Cost (RM)': new_peak_cost,
+                            'New Off-Peak Cost (RM)': new_offpeak_cost,
+                            'New AFA Cost (RM)': new_afa_cost,
+                            'New MD Cost (RM)': new_total_md_cost,
+                            'New Total Cost (RM)': new_total,
+                            # Comparison
                             'Difference (RM)': difference,
                             'Change (%)': percentage_change,
                             'Status': '✅ Savings' if difference < 0 else '❌ Higher' if difference > 0 else '➖ Same'
@@ -1222,8 +1301,8 @@ with tabs[3]:
                     # ===============================
                     df_monthly = pd.DataFrame(monthly_results)
                     
-                    total_old_cost = df_monthly['Old Tariff Cost (RM)'].sum()
-                    total_new_cost = df_monthly['New Tariff Cost (RM)'].sum()
+                    total_old_cost = df_monthly['Old Total Cost (RM)'].sum()
+                    total_new_cost = df_monthly['New Total Cost (RM)'].sum()
                     total_difference = total_new_cost - total_old_cost
                     avg_percentage_change = (total_difference / total_old_cost * 100) if total_old_cost > 0 else 0
                     
@@ -1241,17 +1320,196 @@ with tabs[3]:
                         col4.info("➖ No Change")
                     
                     # ===============================
-                    # MONTHLY BREAKDOWN TABLE
+                    # DETAILED COST BREAKDOWN
                     # ===============================
-                    st.subheader("Monthly Breakdown")
+                    st.subheader("Detailed Cost Breakdown")
                     
-                    # Format the dataframe for display
-                    df_display = df_monthly.copy()
+                    # Create tabs for detailed breakdown
+                    breakdown_tabs = st.tabs(["📊 Summary Comparison", "🔴 Old Tariff Details", "🔵 New Tariff (RP4) Details"])
+                    
+                    with breakdown_tabs[0]:
+                        st.markdown("#### Summary Cost Comparison")
+                        
+                        # Summary comparison table
+                        summary_columns = ['Month', 'Total Energy (kWh)', 'Max Demand (kW)', 
+                                         'Old Total Cost (RM)', 'New Total Cost (RM)', 
+                                         'Difference (RM)', 'Change (%)', 'Status']
+                        df_summary = df_monthly[summary_columns].copy()
+                        
+                        formatted_summary = df_summary.style.format({
+                            'Total Energy (kWh)': '{:,.0f}',
+                            'Max Demand (kW)': '{:,.2f}',
+                            'Old Total Cost (RM)': 'RM {:,.2f}',
+                            'New Total Cost (RM)': 'RM {:,.2f}',
+                            'Difference (RM)': 'RM {:+,.2f}',
+                            'Change (%)': '{:+.1f}%'
+                        }).apply(lambda x: ['background-color: #d4edda' if v < 0 else 'background-color: #f8d7da' if v > 0 else '' 
+                                         for v in df_summary['Difference (RM)']], axis=0)
+                        
+                        st.dataframe(formatted_summary, use_container_width=True)
+                    
+                    with breakdown_tabs[1]:
+                        st.markdown("#### Old Tariff Structure Breakdown")
+                        st.caption("Legacy TNB tariff with traditional peak/off-peak logic")
+                        
+                        # Old tariff breakdown table
+                        old_columns = ['Month', 'Old Peak Energy (kWh)', 'Old Off-Peak Energy (kWh)',
+                                     'Old Peak Cost (RM)', 'Old Off-Peak Cost (RM)', 
+                                     'Old ICPT Cost (RM)', 'Old MD Cost (RM)', 'Old Total Cost (RM)']
+                        df_old = df_monthly[old_columns].copy()
+                        
+                        formatted_old = df_old.style.format({
+                            'Old Peak Energy (kWh)': '{:,.0f}',
+                            'Old Off-Peak Energy (kWh)': '{:,.0f}',
+                            'Old Peak Cost (RM)': 'RM {:,.2f}',
+                            'Old Off-Peak Cost (RM)': 'RM {:,.2f}',
+                            'Old ICPT Cost (RM)': 'RM {:,.2f}',
+                            'Old MD Cost (RM)': 'RM {:,.2f}',
+                            'Old Total Cost (RM)': 'RM {:,.2f}'
+                        })
+                        
+                        st.dataframe(formatted_old, use_container_width=True)
+                        
+                        # Old tariff totals
+                        col1, col2, col3, col4 = st.columns(4)
+                        col1.metric("Total Peak Energy", f"{df_monthly['Old Peak Energy (kWh)'].sum():,.0f} kWh")
+                        col2.metric("Total Off-Peak Energy", f"{df_monthly['Old Off-Peak Energy (kWh)'].sum():,.0f} kWh")
+                        col3.metric("Total Energy Cost", f"RM {(df_monthly['Old Peak Cost (RM)'].sum() + df_monthly['Old Off-Peak Cost (RM)'].sum()):,.2f}")
+                        col4.metric("Total ICPT + MD", f"RM {(df_monthly['Old ICPT Cost (RM)'].sum() + df_monthly['Old MD Cost (RM)'].sum()):,.2f}")
+                    
+                    with breakdown_tabs[2]:
+                        st.markdown("#### New RP4 Tariff Structure Breakdown")
+                        st.caption("New RP4 tariff with holiday-aware peak/off-peak logic and separate capacity/network rates")
+                        
+                        # New tariff breakdown table
+                        new_columns = ['Month', 'New Peak Energy (kWh)', 'New Off-Peak Energy (kWh)',
+                                     'New Peak Cost (RM)', 'New Off-Peak Cost (RM)', 
+                                     'New AFA Cost (RM)', 'New MD Cost (RM)', 'New Total Cost (RM)']
+                        df_new = df_monthly[new_columns].copy()
+                        
+                        formatted_new = df_new.style.format({
+                            'New Peak Energy (kWh)': '{:,.0f}',
+                            'New Off-Peak Energy (kWh)': '{:,.0f}',
+                            'New Peak Cost (RM)': 'RM {:,.2f}',
+                            'New Off-Peak Cost (RM)': 'RM {:,.2f}',
+                            'New AFA Cost (RM)': 'RM {:,.2f}',
+                            'New MD Cost (RM)': 'RM {:,.2f}',
+                            'New Total Cost (RM)': 'RM {:,.2f}'
+                        })
+                        
+                        st.dataframe(formatted_new, use_container_width=True)
+                        
+                        # New tariff totals
+                        col1, col2, col3, col4 = st.columns(4)
+                        col1.metric("Total Peak Energy", f"{df_monthly['New Peak Energy (kWh)'].sum():,.0f} kWh")
+                        col2.metric("Total Off-Peak Energy", f"{df_monthly['New Off-Peak Energy (kWh)'].sum():,.0f} kWh")
+                        col3.metric("Total Energy Cost", f"RM {(df_monthly['New Peak Cost (RM)'].sum() + df_monthly['New Off-Peak Cost (RM)'].sum()):,.2f}")
+                        col4.metric("Total AFA + MD", f"RM {(df_monthly['New AFA Cost (RM)'].sum() + df_monthly['New MD Cost (RM)'].sum()):,.2f}")
+                    
+                    # ===============================
+                    # COMPONENT-WISE COMPARISON CHARTS
+                    # ===============================
+                    st.subheader("Component-wise Cost Analysis")
+                    
+                    # Create comparison charts
+                    chart_tabs = st.tabs(["Energy Costs", "Additional Charges", "Peak vs Off-Peak Energy"])
+                    
+                    with chart_tabs[0]:
+                        # Energy cost comparison
+                        energy_comparison_data = []
+                        for _, row in df_monthly.iterrows():
+                            energy_comparison_data.extend([
+                                {'Month': row['Month'], 'Tariff': 'Old', 'Component': 'Peak Energy', 'Cost': row['Old Peak Cost (RM)']},
+                                {'Month': row['Month'], 'Tariff': 'Old', 'Component': 'Off-Peak Energy', 'Cost': row['Old Off-Peak Cost (RM)']},
+                                {'Month': row['Month'], 'Tariff': 'New (RP4)', 'Component': 'Peak Energy', 'Cost': row['New Peak Cost (RM)']},
+                                {'Month': row['Month'], 'Tariff': 'New (RP4)', 'Component': 'Off-Peak Energy', 'Cost': row['New Off-Peak Cost (RM)']}
+                            ])
+                        
+                        df_energy_comp = pd.DataFrame(energy_comparison_data)
+                        fig_energy = px.bar(df_energy_comp, x='Month', y='Cost', color='Component', 
+                                          facet_col='Tariff', title='Energy Cost Comparison: Peak vs Off-Peak',
+                                          labels={'Cost': 'Cost (RM)'})
+                        fig_energy.update_layout(height=500)
+                        st.plotly_chart(fig_energy, use_container_width=True)
+                    
+                    with chart_tabs[1]:
+                        # Additional charges comparison (ICPT/AFA + MD)
+                        charges_comparison_data = []
+                        for _, row in df_monthly.iterrows():
+                            charges_comparison_data.extend([
+                                {'Month': row['Month'], 'Tariff': 'Old', 'Component': 'ICPT', 'Cost': row['Old ICPT Cost (RM)']},
+                                {'Month': row['Month'], 'Tariff': 'Old', 'Component': 'MD', 'Cost': row['Old MD Cost (RM)']},
+                                {'Month': row['Month'], 'Tariff': 'New (RP4)', 'Component': 'AFA', 'Cost': row['New AFA Cost (RM)']},
+                                {'Month': row['Month'], 'Tariff': 'New (RP4)', 'Component': 'MD (Capacity+Network)', 'Cost': row['New MD Cost (RM)']}
+                            ])
+                        
+                        df_charges_comp = pd.DataFrame(charges_comparison_data)
+                        fig_charges = px.bar(df_charges_comp, x='Month', y='Cost', color='Component', 
+                                           facet_col='Tariff', title='Additional Charges Comparison: ICPT/AFA and MD',
+                                           labels={'Cost': 'Cost (RM)'})
+                        fig_charges.update_layout(height=500)
+                        st.plotly_chart(fig_charges, use_container_width=True)
+                    
+                    with chart_tabs[2]:
+                        # Peak vs Off-Peak energy consumption comparison
+                        energy_kwh_data = []
+                        for _, row in df_monthly.iterrows():
+                            energy_kwh_data.extend([
+                                {'Month': row['Month'], 'Tariff': 'Old Logic', 'Period': 'Peak', 'Energy (kWh)': row['Old Peak Energy (kWh)']},
+                                {'Month': row['Month'], 'Tariff': 'Old Logic', 'Period': 'Off-Peak', 'Energy (kWh)': row['Old Off-Peak Energy (kWh)']},
+                                {'Month': row['Month'], 'Tariff': 'RP4 Logic', 'Period': 'Peak', 'Energy (kWh)': row['New Peak Energy (kWh)']},
+                                {'Month': row['Month'], 'Tariff': 'RP4 Logic', 'Period': 'Off-Peak', 'Energy (kWh)': row['New Off-Peak Energy (kWh)']}
+                            ])
+                        
+                        df_energy_kwh = pd.DataFrame(energy_kwh_data)
+                        fig_energy_kwh = px.bar(df_energy_kwh, x='Month', y='Energy (kWh)', color='Period', 
+                                              facet_col='Tariff', title='Energy Consumption: Old vs RP4 Peak/Off-Peak Logic',
+                                              labels={'Energy (kWh)': 'Energy Consumption (kWh)'})
+                        fig_energy_kwh.update_layout(height=500)
+                        st.plotly_chart(fig_energy_kwh, use_container_width=True)
+                        
+                        # Show the difference in peak/off-peak classification
+                        st.markdown("#### Peak/Off-Peak Classification Differences")
+                        classification_data = []
+                        for _, row in df_monthly.iterrows():
+                            peak_diff = row['New Peak Energy (kWh)'] - row['Old Peak Energy (kWh)']
+                            offpeak_diff = row['New Off-Peak Energy (kWh)'] - row['Old Off-Peak Energy (kWh)']
+                            classification_data.append({
+                                'Month': row['Month'],
+                                'Peak Energy Difference (kWh)': peak_diff,
+                                'Off-Peak Energy Difference (kWh)': offpeak_diff,
+                                'Net Classification Change': '⬆️ More Peak' if peak_diff > 0 else '⬇️ More Off-Peak' if peak_diff < 0 else '➖ Same'
+                            })
+                        
+                        df_classification = pd.DataFrame(classification_data)
+                        formatted_classification = df_classification.style.format({
+                            'Peak Energy Difference (kWh)': '{:+,.0f}',
+                            'Off-Peak Energy Difference (kWh)': '{:+,.0f}'
+                        })
+                        st.dataframe(formatted_classification, use_container_width=True)
+                        
+                        st.info("""
+                        **Note:** Differences in peak/off-peak energy classification between old and RP4 logic are due to:
+                        - **Holiday consideration**: RP4 treats public holidays as off-peak periods
+                        - **Weekend classification**: Different treatment of Saturday/Sunday periods
+                        - **Time boundary differences**: Slight variations in peak period definitions
+                        """)
+
+                    # ===============================
+                    # MONTHLY BREAKDOWN TABLE (ORIGINAL)
+                    # ===============================
+                    st.subheader("Monthly Summary Table")
+                    
+                    # Format the dataframe for display (simplified summary)
+                    summary_display_columns = ['Month', 'Total Energy (kWh)', 'Max Demand (kW)', 
+                                             'Old Total Cost (RM)', 'New Total Cost (RM)', 
+                                             'Difference (RM)', 'Change (%)', 'Status']
+                    df_display = df_monthly[summary_display_columns].copy()
                     formatted_df = df_display.style.format({
                         'Total Energy (kWh)': '{:,.0f}',
                         'Max Demand (kW)': '{:,.2f}',
-                        'Old Tariff Cost (RM)': 'RM {:,.2f}',
-                        'New Tariff Cost (RM)': 'RM {:,.2f}',
+                        'Old Total Cost (RM)': 'RM {:,.2f}',
+                        'New Total Cost (RM)': 'RM {:,.2f}',
                         'Difference (RM)': 'RM {:+,.2f}',
                         'Change (%)': '{:+.1f}%'
                     }).apply(lambda x: ['background-color: #d4edda' if v < 0 else 'background-color: #f8d7da' if v > 0 else '' 
@@ -1269,13 +1527,13 @@ with tabs[3]:
                     fig_cost.add_trace(go.Bar(
                         name='Old Tariff',
                         x=df_monthly['Month'],
-                        y=df_monthly['Old Tariff Cost (RM)'],
+                        y=df_monthly['Old Total Cost (RM)'],
                         marker_color='lightcoral'
                     ))
                     fig_cost.add_trace(go.Bar(
                         name='New Tariff (RP4)',
                         x=df_monthly['Month'],
-                        y=df_monthly['New Tariff Cost (RM)'],
+                        y=df_monthly['New Total Cost (RM)'],
                         marker_color='lightblue'
                     ))
                     
