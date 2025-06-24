@@ -39,6 +39,7 @@ with tabs[1]:
 
     uploaded_file = st.file_uploader("Upload your Excel file", type=["xlsx"])
 
+    # Add preprocessing logic to handle any type of timestamp format
     if uploaded_file:
         try:
             df = pd.read_excel(uploaded_file)
@@ -47,10 +48,34 @@ with tabs[1]:
             st.subheader("Raw Data Preview")
             st.dataframe(df.head(), use_container_width=True)
 
-            st.subheader("Column Selection")
-            timestamp_col = st.selectbox("Select timestamp column", df.columns, key="timestamp_col_selector")
-            power_col = st.selectbox("Select power (kW) column", df.select_dtypes(include='number').columns, key="power_col_selector")
+            # Ensure unique keys for Streamlit widgets
+            # Update the keys for timestamp and power column selection
 
+            # Column Selection
+            st.subheader("Column Selection")
+            timestamp_col = st.selectbox("Select timestamp column", df.columns, key="unique_timestamp_col_selector")
+            power_col = st.selectbox("Select power (kW) column", df.select_dtypes(include='number').columns, key="unique_power_col_selector")
+
+            # Preprocess timestamp column to handle various formats
+            def preprocess_timestamp_column(column):
+                # Remove leading/trailing spaces
+                column = column.str.strip()
+                # Replace text-based months with numeric equivalents (e.g., Jan -> 01)
+                column = column.str.replace(r'\bJan\b', '01', regex=True)
+                column = column.str.replace(r'\bFeb\b', '02', regex=True)
+                column = column.str.replace(r'\bMar\b', '03', regex=True)
+                column = column.str.replace(r'\bApr\b', '04', regex=True)
+                column = column.str.replace(r'\bMay\b', '05', regex=True)
+                column = column.str.replace(r'\bJun\b', '06', regex=True)
+                column = column.str.replace(r'\bJul\b', '07', regex=True)
+                column = column.str.replace(r'\bAug\b', '08', regex=True)
+                column = column.str.replace(r'\bSep\b', '09', regex=True)
+                column = column.str.replace(r'\bOct\b', '10', regex=True)
+                column = column.str.replace(r'\bNov\b', '11', regex=True)
+                column = column.str.replace(r'\bDec\b', '12', regex=True)
+                return column
+
+            df[timestamp_col] = preprocess_timestamp_column(df[timestamp_col])
             df["Parsed Timestamp"] = pd.to_datetime(df[timestamp_col], errors="coerce")
             df = df.dropna(subset=["Parsed Timestamp"])
             df = df.set_index("Parsed Timestamp")
@@ -64,73 +89,83 @@ with tabs[1]:
             st.subheader("0. Cost Comparison by Tariff")
             voltage_level = st.selectbox("Select Voltage Level", ["Low Voltage", "Medium Voltage", "High Voltage"], key="voltage_level_selector_cost_comp")
 
-            # Cost calculation logic
-            if st.button("Calculate Cost"):
-                df_energy_for_cost_kwh = df[[power_col]].copy()
-                df_energy_for_cost_kwh["Energy (kWh)"] = df_energy_for_cost_kwh[power_col] * (1/60)
-                peak_energy_cost_calc = df_energy_for_cost_kwh.between_time("08:00", "21:59")["Energy (kWh)"].sum()
-                offpeak_energy_cost_calc = df_energy_for_cost_kwh.between_time("00:00", "07:59")["Energy (kWh)"].sum() + df_energy_for_cost_kwh.between_time("22:00", "23:59")["Energy (kWh)"].sum()
-                total_energy_cost_calc = peak_energy_cost_calc + offpeak_energy_cost_calc
-                max_demand = df[power_col].rolling('30T', min_periods=1).mean().max()
+            # Debugging statements to verify data structures
+            st.write("Uploaded DataFrame:", df.head())
+            st.write("Selected Timestamp Column:", timestamp_col)
+            st.write("Selected Power Column:", power_col)
 
-                tariff_data = {
-                    "Industrial": [
-                        {"Tariff": "E1 - Medium Voltage General", "Voltage": "Medium Voltage", "Base Rate": 0.337, "MD Rate": 29.60, "ICPT": 0, "Split": False, "Tiered": False},
-                        {"Tariff": "E2 - Medium Voltage Peak/Off-Peak", "Voltage": "Medium Voltage", "Peak Rate": 0.355, "OffPeak Rate": 0.219, "MD Rate": 37.00, "ICPT": 0, "Split": True, "Tiered": False},
-                        {"Tariff": "E3 - High Voltage Peak/Off-Peak", "Voltage": "High Voltage", "Peak Rate": 0.337, "OffPeak Rate": 0.202, "MD Rate": 35.50, "ICPT": 0, "Split": True, "Tiered": False},
-                        {"Tariff": "D - Low Voltage Industrial", "Voltage": "Low Voltage", "Tier1 Rate": 0.38, "Tier1 Limit": 200, "Tier2 Rate": 0.441, "MD Rate": 0, "ICPT": 0, "Split": False, "Tiered": True}
-                    ],
-                    "Commercial": [
-                        {"Tariff": "C1 - Low Voltage Commercial", "Voltage": "Low Voltage", "Base Rate": 0.435, "MD Rate": 0, "ICPT": 0.027, "Split": False, "Tiered": False},
-                        {"Tariff": "C2 - Medium Voltage Commercial", "Voltage": "Medium Voltage", "Base Rate": 0.385, "MD Rate": 25, "ICPT": 0.16, "Split": False, "Tiered": False}
-                    ]
-                }
-                filtered_tariffs = [t for t in tariff_data.get(industry, []) if t["Voltage"] == voltage_level]
-                if filtered_tariffs:
-                    cost_table_data = []
-                    for t_info in filtered_tariffs:
-                        energy_cost = 0
-                        if t_info.get("Split"):
-                            energy_cost = (peak_energy_cost_calc * t_info["Peak Rate"]) + (offpeak_energy_cost_calc * t_info["OffPeak Rate"])
-                        elif t_info.get("Tiered"):
-                            if total_energy_cost_calc <= t_info["Tier1 Limit"]:
-                                energy_cost = total_energy_cost_calc * t_info["Tier1 Rate"]
-                            else:
-                                energy_cost = (t_info["Tier1 Limit"] * t_info["Tier1 Rate"]) + ((total_energy_cost_calc - t_info["Tier1 Limit"]) * t_info["Tier2 Rate"])
+            # Cost calculation logic
+            # Replace slider with a number input for selecting the time interval
+            time_interval = st.number_input("Enter time interval (minutes)", min_value=0, max_value=60, value=1, step=1)
+
+            # Automatically update energy calculation formula based on selected time interval
+            df_energy_for_cost_kwh = df[[power_col]].copy()
+            df_energy_for_cost_kwh["Energy (kWh)"] = df_energy_for_cost_kwh[power_col] * (time_interval / 60)
+
+            # Automatically update cost calculation logic to use the selected time interval
+            peak_energy_cost_calc = df_energy_for_cost_kwh.between_time("08:00", "21:59")["Energy (kWh)"].sum()
+            offpeak_energy_cost_calc = df_energy_for_cost_kwh.between_time("00:00", "07:59")["Energy (kWh)"].sum() + df_energy_for_cost_kwh.between_time("22:00", "23:59")["Energy (kWh)"].sum()
+            total_energy_cost_calc = peak_energy_cost_calc + offpeak_energy_cost_calc
+            max_demand = df[power_col].rolling('30T', min_periods=1).mean().max()
+
+            tariff_data = {
+                "Industrial": [
+                    {"Tariff": "E1 - Medium Voltage General", "Voltage": "Medium Voltage", "Base Rate": 0.337, "MD Rate": 29.60, "ICPT": 0, "Split": False, "Tiered": False},
+                    {"Tariff": "E2 - Medium Voltage Peak/Off-Peak", "Voltage": "Medium Voltage", "Peak Rate": 0.355, "OffPeak Rate": 0.219, "MD Rate": 37.00, "ICPT": 0, "Split": True, "Tiered": False},
+                    {"Tariff": "E3 - High Voltage Peak/Off-Peak", "Voltage": "High Voltage", "Peak Rate": 0.337, "OffPeak Rate": 0.202, "MD Rate": 35.50, "ICPT": 0, "Split": True, "Tiered": False},
+                    {"Tariff": "D - Low Voltage Industrial", "Voltage": "Low Voltage", "Tier1 Rate": 0.38, "Tier1 Limit": 200, "Tier2 Rate": 0.441, "MD Rate": 0, "ICPT": 0, "Split": False, "Tiered": True}
+                ],
+                "Commercial": [
+                    {"Tariff": "C1 - Low Voltage Commercial", "Voltage": "Low Voltage", "Base Rate": 0.435, "MD Rate": 0, "ICPT": 0.027, "Split": False, "Tiered": False},
+                    {"Tariff": "C2 - Medium Voltage Commercial", "Voltage": "Medium Voltage", "Base Rate": 0.385, "MD Rate": 25, "ICPT": 0.16, "Split": False, "Tiered": False}
+                ]
+            }
+            filtered_tariffs = [t for t in tariff_data.get(industry, []) if t["Voltage"] == voltage_level]
+            if filtered_tariffs:
+                cost_table_data = []
+                for t_info in filtered_tariffs:
+                    energy_cost = 0
+                    if t_info.get("Split"):
+                        energy_cost = (peak_energy_cost_calc * t_info["Peak Rate"]) + (offpeak_energy_cost_calc * t_info["OffPeak Rate"])
+                    elif t_info.get("Tiered"):
+                        if total_energy_cost_calc <= t_info["Tier1 Limit"]:
+                            energy_cost = total_energy_cost_calc * t_info["Tier1 Rate"]
                         else:
-                            energy_cost = total_energy_cost_calc * t_info.get("Base Rate", 0)
-                        md_cost = max_demand * t_info.get("MD Rate", 0)
-                        icpt_cost = total_energy_cost_calc * t_info.get("ICPT", 0)
-                        total_bill = energy_cost + md_cost + icpt_cost
-                        cost_table_data.append({
-                            "Tariff": t_info["Tariff"],
-                            "Peak Energy (kWh)": peak_energy_cost_calc,
-                            "Off Peak Energy (kWh)": offpeak_energy_cost_calc,
-                            "Total Energy (kWh)": total_energy_cost_calc,
-                            "MD (kW)": max_demand,
-                            "Energy Cost (RM)": energy_cost,
-                            "MD Cost (RM)": md_cost,
-                            "ICPT (RM)": icpt_cost,
-                            "Total Estimated Bill (RM)": total_bill
-                        })
-                    if cost_table_data:
-                        cost_table = pd.DataFrame(cost_table_data)
-                        min_cost = cost_table["Total Estimated Bill (RM)"].min()
-                        cost_table["Best Option"] = cost_table["Total Estimated Bill (RM)"].apply(lambda x: "✅ Lowest" if x == min_cost else "")
-                        display_cols = [
-                            "Tariff", "Peak Energy (kWh)", "Off Peak Energy (kWh)", "Total Energy (kWh)", "MD (kW)",
-                            "Energy Cost (RM)", "MD Cost (RM)", "ICPT (RM)", "Total Estimated Bill (RM)", "Best Option"
-                        ]
-                        cost_table_display = cost_table[display_cols].copy()
-                        st.dataframe(cost_table_display.style.format({
-                            "Peak Energy (kWh)": "{:,.2f}", "Off Peak Energy (kWh)": "{:,.2f}", "Total Energy (kWh)": "{:,.2f}",
-                            "MD (kW)": "{:,.2f}", "Energy Cost (RM)": "{:,.2f}", "MD Cost (RM)": "{:,.2f}",
-                            "ICPT (RM)": "{:,.2f}", "Total Estimated Bill (RM)": "{:,.2f}"
-                        }), use_container_width=True)
+                            energy_cost = (t_info["Tier1 Limit"] * t_info["Tier1 Rate"]) + ((total_energy_cost_calc - t_info["Tier1 Limit"]) * t_info["Tier2 Rate"])
                     else:
-                        st.info("No applicable tariffs found for cost calculation.")
+                        energy_cost = total_energy_cost_calc * t_info.get("Base Rate", 0)
+                    md_cost = max_demand * t_info.get("MD Rate", 0)
+                    icpt_cost = total_energy_cost_calc * t_info.get("ICPT", 0)
+                    total_bill = energy_cost + md_cost + icpt_cost
+                    cost_table_data.append({
+                        "Tariff": t_info["Tariff"],
+                        "Peak Energy (kWh)": peak_energy_cost_calc,
+                        "Off Peak Energy (kWh)": offpeak_energy_cost_calc,
+                        "Total Energy (kWh)": total_energy_cost_calc,
+                        "MD (kW)": max_demand,
+                        "Energy Cost (RM)": energy_cost,
+                        "MD Cost (RM)": md_cost,
+                        "ICPT (RM)": icpt_cost,
+                        "Total Estimated Bill (RM)": total_bill
+                    })
+                if cost_table_data:
+                    cost_table = pd.DataFrame(cost_table_data)
+                    min_cost = cost_table["Total Estimated Bill (RM)"].min()
+                    cost_table["Best Option"] = cost_table["Total Estimated Bill (RM)"].apply(lambda x: "✅ Lowest" if x == min_cost else "")
+                    display_cols = [
+                        "Tariff", "Peak Energy (kWh)", "Off Peak Energy (kWh)", "Total Energy (kWh)", "MD (kW)",
+                        "Energy Cost (RM)", "MD Cost (RM)", "ICPT (RM)", "Total Estimated Bill (RM)", "Best Option"
+                    ]
+                    cost_table_display = cost_table[display_cols].copy()
+                    st.dataframe(cost_table_display.style.format({
+                        "Peak Energy (kWh)": "{:,.2f}", "Off Peak Energy (kWh)": "{:,.2f}", "Total Energy (kWh)": "{:,.2f}",
+                        "MD (kW)": "{:,.2f}", "Energy Cost (RM)": "{:,.2f}", "MD Cost (RM)": "{:,.2f}",
+                        "ICPT (RM)": "{:,.2f}", "Total Estimated Bill (RM)": "{:,.2f}"
+                    }), use_container_width=True)
                 else:
-                    st.info(f"No tariffs for Industry: '{industry}', Voltage: '{voltage_level}'.")
+                    st.info("No applicable tariffs found for cost calculation.")
+            else:
+                st.info(f"No tariffs for Industry: '{industry}', Voltage: '{voltage_level}'.")
 
             # -----------------------------
             # SECTION: Energy Consumption Over Time
