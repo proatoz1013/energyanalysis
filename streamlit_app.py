@@ -7,7 +7,7 @@ from tnb_tariff_comparison import show as show_tnb_tariff_comparison
 
 st.set_page_config(page_title="Load Profile Analysis", layout="wide")
 
-tabs = st.tabs(["TNB New Tariff Comparison", "Load Profile Analysis", "Advanced Energy Analysis"])
+tabs = st.tabs(["TNB New Tariff Comparison", "Load Profile Analysis", "Advanced Energy Analysis", "Monthly Rate Impact Analysis"])
 
 with tabs[1]:
     st.title("Energy Analysis Dashboard")
@@ -1017,3 +1017,371 @@ with tabs[2]:
         except Exception as e:
             st.error(f"Error processing file: {str(e)}")
             st.error("Please ensure your Excel file has proper timestamp and power columns.")
+
+with tabs[3]:
+    st.title("Monthly Rate Impact Analysis")
+    st.markdown("""
+    Compare the financial impact of old TNB tariffs vs new RP4 tariffs on a **monthly basis**. 
+    This analysis is perfect for understanding cost differences and identifying optimization opportunities 
+    when switching from legacy tariffs to the new RP4 structure.
+    """)
+    
+    # Import required modules
+    from tariffs.rp4_tariffs import get_tariff_data
+    from tariffs.peak_logic import is_peak_rp4
+    from utils.cost_calculator import calculate_cost
+    from utils.old_cost_calculator import calculate_old_cost
+    from old_rate import charging_rates, old_to_new_tariff_map
+    
+    uploaded_file = st.file_uploader("Upload your Excel file for monthly analysis", type=["xlsx"], key="monthly_file_uploader")
+    
+    if uploaded_file:
+        try:
+            df = pd.read_excel(uploaded_file)
+            st.success("File uploaded successfully!")
+            
+            # Data Configuration
+            st.subheader("Data Configuration")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                timestamp_col = st.selectbox("Select timestamp column", df.columns, key="monthly_timestamp_col")
+                power_col = st.selectbox("Select power (kW) column", 
+                                       df.select_dtypes(include='number').columns, key="monthly_power_col")
+            
+            with col2:
+                # Holiday selection for RP4 calculations
+                st.markdown("**Public Holidays (for RP4 peak logic)**")
+                holidays = set()  # Default empty set
+                
+                # Simple holiday input - user can add holidays manually
+                holiday_input = st.text_area(
+                    "Enter holidays (one per line, YYYY-MM-DD format):",
+                    placeholder="2024-01-01\n2024-02-10\n2024-04-10",
+                    key="monthly_holidays_input"
+                )
+                
+                if holiday_input.strip():
+                    try:
+                        holiday_lines = [line.strip() for line in holiday_input.split('\n') if line.strip()]
+                        holidays = set()
+                        for date_str in holiday_lines:
+                            holidays.add(pd.to_datetime(date_str).date())
+                        st.success(f"Added {len(holidays)} holidays")
+                    except Exception as e:
+                        st.warning(f"Some holiday dates couldn't be parsed: {e}")
+            
+            # Process data
+            df["Parsed Timestamp"] = pd.to_datetime(df[timestamp_col], errors="coerce")
+            df = df.dropna(subset=["Parsed Timestamp"]).set_index("Parsed Timestamp")
+            
+            if not df.empty and power_col in df.columns:
+                
+                # ===============================
+                # TARIFF SELECTION
+                # ===============================
+                st.subheader("Tariff Selection")
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("**Old Tariff (Legacy)**")
+                    old_tariff_options = list(charging_rates.keys())
+                    selected_old_tariff = st.selectbox("Select your current tariff:", old_tariff_options, key="monthly_old_tariff")
+                    
+                    # Show old tariff details
+                    st.info(f"**Rate:** {charging_rates[selected_old_tariff]}")
+                
+                with col2:
+                    st.markdown("**New Tariff (RP4)**")
+                    
+                    # Get suggested new tariff based on mapping
+                    suggested_new = old_to_new_tariff_map.get(selected_old_tariff, "Medium Voltage General")
+                    
+                    # Load RP4 tariff data
+                    rp4_data = get_tariff_data()
+                    
+                    # User Type Selection
+                    user_types = list(rp4_data.keys())
+                    selected_user_type = st.selectbox("Select User Type", user_types, 
+                                                    index=1 if "Business" in user_types else 0, key="monthly_user_type")
+                    
+                    # Tariff Group Selection  
+                    tariff_groups = list(rp4_data[selected_user_type]["Tariff Groups"].keys())
+                    selected_tariff_group = st.selectbox("Select Tariff Group", tariff_groups, key="monthly_tariff_group")
+                    
+                    # Specific Tariff Selection
+                    tariffs = rp4_data[selected_user_type]["Tariff Groups"][selected_tariff_group]["Tariffs"]
+                    tariff_names = [t["Tariff"] for t in tariffs]
+                    
+                    # Try to find suggested tariff in the list
+                    suggested_index = 0
+                    for i, name in enumerate(tariff_names):
+                        if suggested_new.lower() in name.lower():
+                            suggested_index = i
+                            break
+                    
+                    selected_new_tariff_name = st.selectbox("Select Specific Tariff", tariff_names, 
+                                                          index=suggested_index, key="monthly_new_tariff")
+                    
+                    # Get the selected new tariff object
+                    selected_new_tariff = next((t for t in tariffs if t["Tariff"] == selected_new_tariff_name), None)
+                    
+                    if selected_new_tariff:
+                        # Show new tariff details
+                        rates = selected_new_tariff.get('Rates', {})
+                        if rates.get('Peak Rate') and rates.get('OffPeak Rate'):
+                            st.info(f"**Peak:** RM {rates['Peak Rate']:.4f}/kWh  \n**Off-Peak:** RM {rates['OffPeak Rate']:.4f}/kWh  \n**Capacity:** RM {rates.get('Capacity Rate', 0):.2f}/kW  \n**Network:** RM {rates.get('Network Rate', 0):.2f}/kW")
+                        else:
+                            st.info(f"**Energy:** RM {rates.get('Energy Rate', 0):.4f}/kWh  \n**Capacity:** RM {rates.get('Capacity Rate', 0):.2f}/kW  \n**Network:** RM {rates.get('Network Rate', 0):.2f}/kW")
+                
+                # ===============================
+                # MONTHLY ANALYSIS
+                # ===============================
+                st.subheader("Monthly Comparison Analysis")
+                
+                # Check data timespan
+                min_date = df.index.min()
+                max_date = df.index.max()
+                total_days = (max_date - min_date).days
+                
+                st.info(f"**Data Period:** {min_date.strftime('%Y-%m-%d')} to {max_date.strftime('%Y-%m-%d')} ({total_days} days)")
+                
+                # Group data by month
+                df['Year_Month'] = df.index.to_period('M')
+                monthly_groups = df.groupby('Year_Month')
+                
+                # Calculate monthly comparisons
+                monthly_results = []
+                
+                for month_period, month_data in monthly_groups:
+                    if len(month_data) < 24:  # Skip months with very little data
+                        continue
+                    
+                    month_str = str(month_period)
+                    
+                    # Calculate time intervals for energy calculation
+                    if len(month_data) > 1:
+                        time_deltas = month_data.index.to_series().diff().dt.total_seconds().div(3600).fillna(0)
+                        interval_kwh = month_data[power_col] * time_deltas
+                        total_kwh = interval_kwh.sum()
+                        max_demand_kw = month_data[power_col].max()
+                        
+                        # Peak/Off-peak split for old tariff (simple time-based)
+                        peak_mask_old = month_data.index.to_series().apply(
+                            lambda ts: ts.weekday() < 5 and 8 <= ts.hour < 22
+                        )
+                        peak_kwh_old = (month_data[power_col] * time_deltas)[peak_mask_old].sum()
+                        offpeak_kwh_old = total_kwh - peak_kwh_old
+                        
+                        # Calculate OLD tariff cost
+                        old_cost = calculate_old_cost(
+                            tariff_name=selected_old_tariff,
+                            total_kwh=total_kwh,
+                            max_demand_kw=max_demand_kw,
+                            peak_kwh=peak_kwh_old,
+                            offpeak_kwh=offpeak_kwh_old,
+                            icpt=0.16  # Standard ICPT
+                        )
+                        
+                        # Calculate NEW tariff cost (RP4)
+                        # Need to reset index for the cost calculator
+                        month_data_reset = month_data.reset_index()
+                        
+                        # AFA rate input (will apply to all months)
+                        if 'afa_rate' not in st.session_state:
+                            st.session_state.afa_rate = 0.03
+                        
+                        new_cost = calculate_cost(
+                            df=month_data_reset, 
+                            tariff=selected_new_tariff, 
+                            power_col=power_col, 
+                            holidays=holidays,
+                            afa_rate=st.session_state.afa_rate
+                        )
+                        
+                        # Extract costs
+                        old_total = old_cost.get('Total Cost', 0)
+                        new_total = new_cost.get('Total Cost', 0)
+                        difference = new_total - old_total
+                        percentage_change = (difference / old_total * 100) if old_total > 0 else 0
+                        
+                        monthly_results.append({
+                            'Month': month_str,
+                            'Total Energy (kWh)': total_kwh,
+                            'Max Demand (kW)': max_demand_kw,
+                            'Old Tariff Cost (RM)': old_total,
+                            'New Tariff Cost (RM)': new_total,
+                            'Difference (RM)': difference,
+                            'Change (%)': percentage_change,
+                            'Status': '✅ Savings' if difference < 0 else '❌ Higher' if difference > 0 else '➖ Same'
+                        })
+                
+                if monthly_results:
+                    # ===============================
+                    # SUMMARY METRICS
+                    # ===============================
+                    df_monthly = pd.DataFrame(monthly_results)
+                    
+                    total_old_cost = df_monthly['Old Tariff Cost (RM)'].sum()
+                    total_new_cost = df_monthly['New Tariff Cost (RM)'].sum()
+                    total_difference = total_new_cost - total_old_cost
+                    avg_percentage_change = (total_difference / total_old_cost * 100) if total_old_cost > 0 else 0
+                    
+                    # Display summary metrics
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("Total Old Cost", f"RM {total_old_cost:,.2f}")
+                    col2.metric("Total New Cost", f"RM {total_new_cost:,.2f}")
+                    col3.metric("Total Difference", f"RM {total_difference:,.2f}", f"{avg_percentage_change:+.1f}%")
+                    
+                    if total_difference < 0:
+                        col4.success(f"💰 Annual Savings: RM {abs(total_difference):,.2f}")
+                    elif total_difference > 0:
+                        col4.error(f"📈 Annual Increase: RM {total_difference:,.2f}")
+                    else:
+                        col4.info("➖ No Change")
+                    
+                    # ===============================
+                    # MONTHLY BREAKDOWN TABLE
+                    # ===============================
+                    st.subheader("Monthly Breakdown")
+                    
+                    # Format the dataframe for display
+                    df_display = df_monthly.copy()
+                    formatted_df = df_display.style.format({
+                        'Total Energy (kWh)': '{:,.0f}',
+                        'Max Demand (kW)': '{:,.2f}',
+                        'Old Tariff Cost (RM)': 'RM {:,.2f}',
+                        'New Tariff Cost (RM)': 'RM {:,.2f}',
+                        'Difference (RM)': 'RM {:+,.2f}',
+                        'Change (%)': '{:+.1f}%'
+                    }).apply(lambda x: ['background-color: #d4edda' if v < 0 else 'background-color: #f8d7da' if v > 0 else '' 
+                                     for v in df_display['Difference (RM)']], axis=0)
+                    
+                    st.dataframe(formatted_df, use_container_width=True)
+                    
+                    # ===============================
+                    # VISUALIZATIONS
+                    # ===============================
+                    st.subheader("Visual Analysis")
+                    
+                    # Cost comparison chart
+                    fig_cost = go.Figure()
+                    fig_cost.add_trace(go.Bar(
+                        name='Old Tariff',
+                        x=df_monthly['Month'],
+                        y=df_monthly['Old Tariff Cost (RM)'],
+                        marker_color='lightcoral'
+                    ))
+                    fig_cost.add_trace(go.Bar(
+                        name='New Tariff (RP4)',
+                        x=df_monthly['Month'],
+                        y=df_monthly['New Tariff Cost (RM)'],
+                        marker_color='lightblue'
+                    ))
+                    
+                    fig_cost.update_layout(
+                        title='Monthly Cost Comparison: Old vs New Tariff',
+                        xaxis_title='Month',
+                        yaxis_title='Cost (RM)',
+                        barmode='group',
+                        height=500
+                    )
+                    st.plotly_chart(fig_cost, use_container_width=True)
+                    
+                    # Difference trend chart
+                    fig_diff = px.line(df_monthly, x='Month', y='Difference (RM)', 
+                                     title='Monthly Cost Difference Trend',
+                                     labels={'Difference (RM)': 'Cost Difference (RM)'})
+                    fig_diff.add_hline(y=0, line_dash="dash", line_color="gray", 
+                                     annotation_text="Break-even")
+                    fig_diff.update_traces(mode="markers+lines", marker=dict(size=8))
+                    st.plotly_chart(fig_diff, use_container_width=True)
+                    
+                    # ===============================
+                    # INSIGHTS & RECOMMENDATIONS
+                    # ===============================
+                    st.subheader("Key Insights & Recommendations")
+                    
+                    # Calculate insights
+                    months_with_savings = len(df_monthly[df_monthly['Difference (RM)'] < 0])
+                    months_with_increase = len(df_monthly[df_monthly['Difference (RM)'] > 0])
+                    total_months = len(df_monthly)
+                    avg_monthly_difference = df_monthly['Difference (RM)'].mean()
+                    
+                    # Display insights
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.markdown("**📊 Performance Summary:**")
+                        st.write(f"• **{months_with_savings}/{total_months}** months show savings")
+                        st.write(f"• **{months_with_increase}/{total_months}** months show cost increase")
+                        st.write(f"• **Average monthly difference:** RM {avg_monthly_difference:+,.2f}")
+                        
+                        if avg_monthly_difference < -10:
+                            st.success("🎯 **Strong case for switching to RP4 tariff**")
+                        elif avg_monthly_difference < 0:
+                            st.info("💡 **Moderate savings with RP4 tariff**")
+                        elif avg_monthly_difference > 10:
+                            st.warning("⚠️ **RP4 may be more expensive - review strategy**")
+                        else:
+                            st.info("📊 **Costs are roughly equivalent**")
+                    
+                    with col2:
+                        st.markdown("**🔧 Optimization Recommendations:**")
+                        
+                        # Peak demand analysis
+                        highest_md_month = df_monthly.loc[df_monthly['Max Demand (kW)'].idxmax()]
+                        st.write(f"• **Highest demand month:** {highest_md_month['Month']} ({highest_md_month['Max Demand (kW)']:.1f} kW)")
+                        
+                        # Cost variation analysis
+                        cost_std = df_monthly['Difference (RM)'].std()
+                        if cost_std > 50:
+                            st.write("• **High cost variation** - focus on demand management")
+                        
+                        # Seasonal insights
+                        if total_months >= 6:
+                            seasonal_pattern = df_monthly['Difference (RM)'].rolling(3).mean().std()
+                            if seasonal_pattern > 20:
+                                st.write("• **Seasonal patterns detected** - consider seasonal strategies")
+                        
+                        # General recommendations
+                        if avg_percentage_change > 5:
+                            st.write("• Consider **demand shaving** during peak periods")
+                            st.write("• Review **load scheduling** opportunities")
+                        elif avg_percentage_change < -5:
+                            st.write("• **Proceed with RP4 migration** - clear benefits")
+                            st.write("• Monitor **peak period** consumption patterns")
+                
+                else:
+                    st.warning("No sufficient monthly data found for analysis. Please ensure your data spans at least one full month.")
+                
+        except Exception as e:
+            st.error(f"Error processing file: {str(e)}")
+            st.error("Please ensure your Excel file has proper timestamp and power columns.")
+    
+    else:
+        st.info("👆 Upload an Excel file with load profile data to start the monthly analysis.")
+        
+        # Show example of expected data format
+        with st.expander("📋 Expected Data Format"):
+            st.markdown("""
+            Your Excel file should contain:
+            
+            **Required Columns:**
+            - **Timestamp**: Date and time (e.g., "2024-01-01 00:00:00")
+            - **Power (kW)**: Power consumption values
+            
+            **Example:**
+            ```
+            Timestamp               | Power (kW)
+            2024-01-01 00:00:00    | 150.5
+            2024-01-01 00:15:00    | 145.2
+            2024-01-01 00:30:00    | 148.7
+            ...
+            ```
+            
+            **Tips:**
+            - Data can be at any interval (15min, 30min, 1hr, etc.)
+            - Multiple months of data will provide better insights
+            - Include public holidays for accurate RP4 peak/off-peak calculation
+            """)
