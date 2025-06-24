@@ -6,6 +6,17 @@ from tariffs.rp4_tariffs import get_tariff_data
 from tariffs.peak_logic import is_peak_rp4
 
 
+# Ensure the `fmt` function is defined at the top level for accessibility
+def fmt(val):
+    if val is None or val == "":
+        return ""
+    if isinstance(val, (int, float)):
+        if val < 1:
+            return f"{val:,.4f}"  # Format numbers with 4 decimal places if less than RM1.
+        return f"{val:,.2f}"  # Format numbers with 2 decimal places if RM1 or greater.
+    return val
+
+
 def show():
     st.title("TNB New Tariff Comparison")
     # Inject custom CSS for table styling at the very top
@@ -217,6 +228,19 @@ def show():
         )
         afa_rate = afa_rate_cent / 100  # Convert cent to RM
 
+        # Let user select old tariff
+        from utils.old_cost_calculator import calculate_old_cost
+        from old_rate import charging_rates
+
+        old_tariff_names = list(charging_rates.keys())
+        default_old_tariff = old_tariff_names[0]
+        selected_old_tariff = st.selectbox(
+            "Select Old Tariff for Comparison",
+            old_tariff_names,
+            index=old_tariff_names.index(default_old_tariff),
+            key="unique_old_tariff_selector"
+        )
+
         # --- Cost Calculation and Display ---
         from utils.cost_calculator import calculate_cost, format_cost_breakdown
         # Add dynamic title reflecting the selected tariff
@@ -304,7 +328,7 @@ def show():
 
             # --- Debug section (disabled, enable for future debugging) ---
             # st.write("DEBUG: cost_breakdown", cost_breakdown)
-            # afa_kwh = cost_breakdown.get('AFA kwh', cost_breakdown.get('Total kWh', None))
+            # afa_kwh = cost_breakdown.get('AFA kwh', cost_breakdown.get('Total KWh', None))
             # afa_rate = cost_breakdown.get('AFA Rate', None)
             # if afa_kwh is not None:
             #     st.write("DEBUG: AFA Value (kWh)", afa_kwh)
@@ -317,11 +341,6 @@ def show():
             st.subheader("Compare with Selected Tariff and Old Tariff")
             colA, colB = st.columns(2)
 
-            # Ensure `selected_old_tariff` is defined before use
-            from utils.old_cost_calculator import calculate_old_cost
-            from old_rate import charging_rates
-
-            
             # Display selected tariff breakdown
             with colA:
                 st.markdown(f"#### {selected_user_type} > {selected_tariff_group} > {selected_tariff_type}")
@@ -330,54 +349,31 @@ def show():
                 ), unsafe_allow_html=True)
                 st.markdown(html_cost_table(cost_breakdown), unsafe_allow_html=True)
 
-            # Move the old tariff selection and cost calculation into colB
+            # Calculate old cost using the first selector
+            old_cost_breakdown = calculate_old_cost(
+                selected_old_tariff,  # Use the first selector's value
+                total_kwh=total_kwh,
+                max_demand_kw=peak_demand if peak_demand is not None else 0,
+                peak_kwh=peak_kwh,
+                offpeak_kwh=offpeak_kwh
+            )
+
+            # Display old tariff breakdown
             with colB:
-                # Let user select old tariff
-                old_tariff_names = list(charging_rates.keys())
-                default_old_tariff = old_tariff_names[0]
-                selected_old_tariff = st.selectbox(
-                    "Select Old Tariff for Comparison",
-                    old_tariff_names,
-                    index=old_tariff_names.index(default_old_tariff),
-                    key="old_tariff_selector"
-                )
-
-                # Calculate old cost
-                old_cost_breakdown = calculate_old_cost(
-                    selected_old_tariff,
-                    total_kwh=total_kwh,
-                    max_demand_kw=peak_demand if peak_demand is not None else 0,
-                    peak_kwh=peak_kwh,
-                    offpeak_kwh=offpeak_kwh
-                )
-
-                # Display old tariff breakdown
-                with colB:
-                    st.markdown(f"#### Old Tariff: {selected_old_tariff}")
-                    if "error" in old_cost_breakdown:
-                        st.error(old_cost_breakdown["error"])
-                    else:
-                        st.markdown(
-                            f"<b>Cost per kWh (Total Cost / Total kWh):</b> "
-                            f"{(old_cost_breakdown.get('Total Cost',0)/total_kwh) if total_kwh else 'N/A'} RM/kWh",
-                            unsafe_allow_html=True
-                        )
-                        # Update the formatting function to ensure numbers are displayed with commas for thousands separators.
-                        def fmt(val):
-                            if val is None or val == "":
-                                return ""
-                            if isinstance(val, (int, float)):
-                                if val < 1:
-                                    return f"{val:,.4f}"  # Format numbers with 4 decimal places if less than RM1.
-                                return f"{val:,.2f}"  # Format numbers with 2 decimal places if RM1 or greater.
-                            return val
-
-                        # Apply the updated formatting function to the Old Tariff breakdown table.
-                        old_cost_breakdown_formatted = [
-                            {"Description": k, "Value": fmt(v)}
-                            for k, v in old_cost_breakdown.items() if k != "Tariff"
-                        ]
-                        st.write(pd.DataFrame(old_cost_breakdown_formatted))
+                st.markdown(f"#### Old Tariff: {selected_old_tariff}")
+                if "error" in old_cost_breakdown:
+                    st.error(old_cost_breakdown["error"])
+                else:
+                    st.markdown(
+                        f"<b>Cost per kWh (Total Cost / Total kWh):</b> "
+                        f"{(old_cost_breakdown.get('Total Cost',0)/total_kwh) if total_kwh else 'N/A'} RM/kWh",
+                        unsafe_allow_html=True
+                    )
+                    old_cost_breakdown_formatted = [
+                        {"Description": k, "Value": fmt(v)}
+                        for k, v in old_cost_breakdown.items() if k != "Tariff"
+                    ]
+                    st.write(pd.DataFrame(old_cost_breakdown_formatted))
             # --- Regression Formula Display (disabled, enable for future debugging) ---
             # st.subheader("Cost Calculation Formulae")
             # formulae = []
@@ -385,7 +381,7 @@ def show():
             #     formulae.append(f"Peak Energy Cost = Peak kWh × Peak Rate = {cost_breakdown.get('Peak kWh', 0):,.2f} × {cost_breakdown.get('Peak Rate', '–')} = {cost_breakdown.get('Peak Energy Cost', 0):,.2f}")
             # if "Off-Peak kWh" in cost_breakdown:
             #     formulae.append(f"Off-Peak Energy Cost = Off-Peak kWh × Off-Peak Rate = {cost_breakdown.get('Off-Peak kWh', 0):,.2f} × {cost_breakdown.get('Off-Peak Rate', '–')} = {cost_breakdown.get('Off-Peak Energy Cost', 0):,.2f}")
-            # afa_kwh = cost_breakdown.get('AFA kWh', cost_breakdown.get('Total kWh', 0))
+            # afa_kwh = cost_breakdown.get('AFA kWh', cost_breakdown.get('Total KWh', 0))
             # afa_rate = cost_breakdown.get('AFA Rate', '–')
             # afa_cost = cost_breakdown.get('AFA Adjustment', 0)
             # if afa_kwh and afa_rate != '–':
