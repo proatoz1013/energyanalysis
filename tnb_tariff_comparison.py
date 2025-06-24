@@ -379,11 +379,24 @@ def show():
                         f"{(old_cost_breakdown.get('Total Cost',0)/total_kwh) if total_kwh else 'N/A'} RM/kWh",
                         unsafe_allow_html=True
                     )
-                    old_cost_breakdown_formatted = [
-                        {"Description": k, "Value": fmt(v)}
-                        for k, v in old_cost_breakdown.items() if k != "Tariff"
-                    ]
-                    st.write(pd.DataFrame(old_cost_breakdown_formatted))
+                    def html_old_cost_table(breakdown):
+                        html = """
+                        <table class=\"cost-table\">
+                            <tr>
+                                <th>Description</th>
+                                <th>Value</th>
+                                <th>Unit Rate (RM)</th>
+                                <th>Total Cost (RM)</th>
+                            </tr>
+                        """
+                        for key, value in breakdown.items():
+                            if key != "Tariff":
+                                unit_rate = charging_rates.get(selected_old_tariff, "").split(", ")
+                                rate = next((r.split(": ")[1] for r in unit_rate if key.lower() in r.lower()), "N/A")
+                                html += f"<tr><td>{key}</td><td></td><td>{rate}</td><td>{fmt(value)}</td></tr>"
+                        html += "</table>"
+                        return html
+                    st.markdown(html_old_cost_table(old_cost_breakdown), unsafe_allow_html=True)
 
             # Add colC to display the breakdown for the new tariff
             with colC:
