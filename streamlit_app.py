@@ -1260,13 +1260,23 @@ with tabs[3]:
                         old_md_cost = old_cost.get('MD Cost', 0)
                         
                         # Detailed NEW tariff breakdown
-                        new_peak_kwh = new_cost.get('Peak Energy (kWh)', 0)
-                        new_offpeak_kwh = new_cost.get('Off-Peak Energy (kWh)', 0)
-                        new_peak_cost = new_cost.get('Peak Energy Cost', 0)
-                        new_offpeak_cost = new_cost.get('Off-Peak Energy Cost', 0)
-                        new_afa_cost = new_cost.get('AFA Cost', 0)
-                        new_capacity_cost = new_cost.get('Capacity Cost', 0)
-                        new_network_cost = new_cost.get('Network Cost', 0)
+                        # Handle both TOU and General tariffs
+                        if 'Peak kWh' in new_cost:
+                            # TOU tariff
+                            new_peak_kwh = new_cost.get('Peak kWh', 0)
+                            new_offpeak_kwh = new_cost.get('Off-Peak kWh', 0)
+                            new_peak_cost = new_cost.get('Peak Energy Cost', 0)
+                            new_offpeak_cost = new_cost.get('Off-Peak Energy Cost', 0)
+                        else:
+                            # General tariff - put all energy in off-peak for consistency
+                            new_peak_kwh = 0
+                            new_offpeak_kwh = new_cost.get('Total kWh', 0)
+                            new_peak_cost = 0
+                            new_offpeak_cost = new_cost.get('Energy Cost (RM)', 0)
+                        
+                        new_afa_cost = new_cost.get('AFA Adjustment', 0)
+                        new_capacity_cost = new_cost.get('Capacity Cost', new_cost.get('Capacity Cost (RM)', 0))
+                        new_network_cost = new_cost.get('Network Cost', new_cost.get('Network Cost (RM)', 0))
                         new_total_md_cost = new_capacity_cost + new_network_cost
                         
                         monthly_results.append({

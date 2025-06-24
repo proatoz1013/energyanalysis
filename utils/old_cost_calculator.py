@@ -32,6 +32,11 @@ def calculate_old_cost(
         if "Base" in rate_info and "MD" in rate_info:
             base_rate = float(re.search(r"Base: RM ([\d.]+)", rate_info).group(1))
             md_rate = float(re.search(r"MD: RM ([\d.]+)", rate_info).group(1))
+            # For non-TOU tariffs, put all energy in off-peak (common practice)
+            result["Peak Energy (kWh)"] = 0
+            result["Off-Peak Energy (kWh)"] = total_kwh
+            result["Peak Energy Cost"] = 0
+            result["Off-Peak Energy Cost"] = total_kwh * base_rate
             result["Energy Cost"] = total_kwh * base_rate
             result["MD Cost"] = max_demand_kw * md_rate
             result["ICPT Cost"] = total_kwh * icpt
@@ -42,12 +47,14 @@ def calculate_old_cost(
             peak_rate = float(re.search(r"Peak: RM ([\d.]+)", rate_info).group(1))
             offpeak_rate = float(re.search(r"Off-Peak: RM ([\d.]+)", rate_info).group(1))
             md_rate = float(re.search(r"MD: RM ([\d.]+)", rate_info).group(1))
-            result["Peak Cost"] = peak_kwh * peak_rate
-            result["Off-Peak Cost"] = offpeak_kwh * offpeak_rate
+            result["Peak Energy (kWh)"] = peak_kwh
+            result["Off-Peak Energy (kWh)"] = offpeak_kwh
+            result["Peak Energy Cost"] = peak_kwh * peak_rate
+            result["Off-Peak Energy Cost"] = offpeak_kwh * offpeak_rate
             result["MD Cost"] = max_demand_kw * md_rate
             result["ICPT Cost"] = total_kwh * icpt
             result["Total Cost"] = (
-                result["Peak Cost"] + result["Off-Peak Cost"] + result["MD Cost"] + result["ICPT Cost"]
+                result["Peak Energy Cost"] + result["Off-Peak Energy Cost"] + result["MD Cost"] + result["ICPT Cost"]
             )
 
         # Tiered (Low Voltage Industrial, Domestic)
@@ -59,6 +66,11 @@ def calculate_old_cost(
                     rate = float(matches[0])
                 else:
                     rate = float(matches[-1])
+                # For non-TOU tariffs, put all energy in off-peak
+                result["Peak Energy (kWh)"] = 0
+                result["Off-Peak Energy (kWh)"] = total_kwh
+                result["Peak Energy Cost"] = 0
+                result["Off-Peak Energy Cost"] = total_kwh * rate
                 result["Energy Cost"] = total_kwh * rate
                 result["ICPT Cost"] = total_kwh * icpt
                 result["Total Cost"] = result["Energy Cost"] + result["ICPT Cost"]
@@ -68,6 +80,11 @@ def calculate_old_cost(
         # Flat (Low Voltage Commercial)
         elif "Flat" in rate_info:
             flat_rate = float(re.search(r"Flat: RM ([\d.]+)", rate_info).group(1))
+            # For non-TOU tariffs, put all energy in off-peak
+            result["Peak Energy (kWh)"] = 0
+            result["Off-Peak Energy (kWh)"] = total_kwh
+            result["Peak Energy Cost"] = 0
+            result["Off-Peak Energy Cost"] = total_kwh * flat_rate
             result["Energy Cost"] = total_kwh * flat_rate
             result["ICPT Cost"] = total_kwh * icpt
             result["Total Cost"] = result["Energy Cost"] + result["ICPT Cost"]
