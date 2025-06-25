@@ -54,6 +54,16 @@ def show():
     if uploaded_file:
         try:
             df = pd.read_excel(uploaded_file)
+            
+            # Additional safety check for dataframe validity
+            if df is None or df.empty:
+                st.error("The uploaded file appears to be empty or invalid.")
+                return
+            
+            if not hasattr(df, 'columns') or df.columns is None or len(df.columns) == 0:
+                st.error("The uploaded file doesn't have valid column headers.")
+                return
+                
             st.success("File uploaded successfully!")
             
             # Column Selection and Holiday Configuration
@@ -62,6 +72,7 @@ def show():
             # Only proceed if both columns are selected and valid
             if (timestamp_col and power_col and 
                 timestamp_col != "Please select..." and power_col != "Please select..." and
+                hasattr(df, 'columns') and df.columns is not None and
                 timestamp_col in df.columns and power_col in df.columns):
                 # Process data
                 df = _process_dataframe(df, timestamp_col)
@@ -89,6 +100,12 @@ def show():
 def _configure_data_inputs(df):
     """Configure data inputs including column selection and holiday setup."""
     st.subheader("Data Configuration")
+    
+    # Check if dataframe is valid first
+    if df is None or df.empty or not hasattr(df, 'columns') or df.columns is None:
+        st.error("Invalid data file. Please check your Excel file format.")
+        return "Please select...", "Please select...", set()
+    
     col1, col2 = st.columns(2)
     
     with col1:
@@ -128,32 +145,37 @@ def _configure_holidays(df, timestamp_col):
     st.markdown("**Public Holidays**")
     holidays = set()
     
-    if not df.empty and timestamp_col and timestamp_col != "Please select..." and timestamp_col in df.columns:
-        try:
-            df_temp = df.copy()
-            df_temp["Parsed Timestamp"] = pd.to_datetime(df_temp[timestamp_col], errors="coerce")
-            df_temp = df_temp.dropna(subset=["Parsed Timestamp"])
-            
-            if not df_temp.empty:
-                min_date = df_temp["Parsed Timestamp"].min().date()
-                max_date = df_temp["Parsed Timestamp"].max().date()
-                unique_dates = pd.date_range(min_date, max_date).date
-                
-                holiday_options = [d.strftime('%A, %d %B %Y') for d in unique_dates]
-                selected_labels = st.multiselect(
-                    "Select public holidays:",
-                    options=holiday_options,
-                    default=[],
-                    key="adv_holidays",
-                    help="Select all public holidays in the data period"
-                )
-                
-                # Convert back to date objects
-                label_to_date = {d.strftime('%A, %d %B %Y'): d for d in unique_dates}
-                holidays = set(label_to_date[label] for label in selected_labels)
-        except Exception as e:
-            st.warning(f"Error processing holidays: {e}")
+    # Add additional safety checks
+    if (df is None or df.empty or not hasattr(df, 'columns') or df.columns is None or 
+        not timestamp_col or timestamp_col == "Please select..." or timestamp_col not in df.columns):
+        st.info("Please select a valid timestamp column to configure holidays.")
+        return holidays
     
+    try:
+        df_temp = df.copy()
+        df_temp["Parsed Timestamp"] = pd.to_datetime(df_temp[timestamp_col], errors="coerce")
+        df_temp = df_temp.dropna(subset=["Parsed Timestamp"])
+        
+        if not df_temp.empty:
+            min_date = df_temp["Parsed Timestamp"].min().date()
+            max_date = df_temp["Parsed Timestamp"].max().date()
+            unique_dates = pd.date_range(min_date, max_date).date
+            
+            holiday_options = [d.strftime('%A, %d %B %Y') for d in unique_dates]
+            selected_labels = st.multiselect(
+                "Select public holidays:",
+                options=holiday_options,
+                default=[],
+                key="adv_holidays",
+                help="Select all public holidays in the data period"
+            )
+            
+            # Convert back to date objects
+            label_to_date = {d.strftime('%A, %d %B %Y'): d for d in unique_dates}
+            holidays = set(label_to_date[label] for label in selected_labels)
+    except Exception as e:
+        st.warning(f"Error processing holidays: {e}")
+
     return holidays
 
 
@@ -464,6 +486,11 @@ def _filter_events_by_period(event_summaries, filter_type):
 def _display_peak_event_results(df, power_col, event_summaries, target_demand, total_md_rate, overall_max_demand):
     """Display peak event detection results and analysis."""
     
+    # Safety check for event_summaries
+    if event_summaries is None:
+        st.error("Error: Peak event data is not available.")
+        return
+    
     # Add filtering options
     st.markdown("#### Peak Event Filtering")
     event_filter = st.radio(
@@ -515,6 +542,16 @@ def _display_peak_event_results(df, power_col, event_summaries, target_demand, t
 
 def _display_peak_events_chart(df, power_col, event_summaries, target_demand):
     """Display peak events visualization chart with color-coded filled areas."""
+    # Safety check for DataFrame and index
+    if df is None or df.empty or not hasattr(df, 'index') or df.index is None:
+        st.error("Unable to create chart: Invalid data structure.")
+        return
+    
+    # Check if index is datetime
+    if not hasattr(df.index, 'strftime'):
+        st.error("Unable to create chart: Data index is not in datetime format.")
+        return
+    
     fig_events = go.Figure()
     
     # Add the main power consumption line
@@ -553,21 +590,29 @@ def _display_peak_events_chart(df, power_col, event_summaries, target_demand):
         
         # Create mask for event period (handle multi-day events)
         if start_date == end_date:
-            # Single day event
-            event_mask = (df.index.date == start_date) & \
-                        (df.index.strftime('%H:%M') >= event['Start Time']) & \
-                        (df.index.strftime('%H:%M') <= event['End Time'])
+            # Single day event - add safety checks
+            try:
+                event_mask = (df.index.date == start_date) & \
+                            (df.index.strftime('%H:%M') >= event['Start Time']) & \
+                            (df.index.strftime('%H:%M') <= event['End Time'])
+            except (AttributeError, TypeError) as e:
+                st.warning(f"Error creating event mask for {start_date}: {e}")
+                continue
         else:
-            # Multi-day event
-            event_mask = (df.index.date >= start_date) & (df.index.date <= end_date)
-            # For start day, filter by start time
-            start_day_mask = (df.index.date == start_date) & (df.index.strftime('%H:%M') >= event['Start Time'])
-            # For end day, filter by end time
-            end_day_mask = (df.index.date == end_date) & (df.index.strftime('%H:%M') <= event['End Time'])
-            # For middle days, include all times
-            middle_days_mask = (df.index.date > start_date) & (df.index.date < end_date)
-            
-            event_mask = start_day_mask | end_day_mask | middle_days_mask
+            # Multi-day event - add safety checks
+            try:
+                event_mask = (df.index.date >= start_date) & (df.index.date <= end_date)
+                # For start day, filter by start time
+                start_day_mask = (df.index.date == start_date) & (df.index.strftime('%H:%M') >= event['Start Time'])
+                # For end day, filter by end time
+                end_day_mask = (df.index.date == end_date) & (df.index.strftime('%H:%M') <= event['End Time'])
+                # For middle days, include all times
+                middle_days_mask = (df.index.date > start_date) & (df.index.date < end_date)
+                
+                event_mask = start_day_mask | end_day_mask | middle_days_mask
+            except (AttributeError, TypeError) as e:
+                st.warning(f"Error creating multi-day event mask for {start_date} to {end_date}: {e}")
+                continue
         
         if event_mask.any():
             event_data = df[event_mask]
@@ -641,6 +686,11 @@ def _display_peak_event_analysis(event_summaries, total_md_rate):
     """Display enhanced peak event summary and analysis."""
     st.markdown("---")
     st.markdown("#### Peak Event Summary & Threshold Analysis")
+    
+    # Safety check for event_summaries
+    if event_summaries is None:
+        st.error("Error: Event summaries data is not available.")
+        return
     
     total_events = len(event_summaries)
     
