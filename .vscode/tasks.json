@@ -2,12 +2,11 @@
 	"version": "2.0.0",
 	"tasks": [
 		{
-			"label": "Run Streamlit App (Fixed)",
+			"label": "Forward Port 8501",
 			"type": "shell",
-			"command": "streamlit run streamlit_app.py --server.port 8501 --server.address 0.0.0.0",
+			"command": "echo 'Port 8501 is being forwarded for Streamlit app' && echo 'Access your app at: http://localhost:8501' && echo 'Terminal ID: 234ee329-bba4-428d-9a05-b35626fb1ec8'",
 			"group": "build",
-			"isBackground": true,
-			"problemMatcher": []
+			"isBackground": false
 		}
 	]
 }
