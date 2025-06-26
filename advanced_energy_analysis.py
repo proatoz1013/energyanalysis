@@ -83,9 +83,9 @@ def show():
                     
                     if selected_tariff:
                         # Execute all analysis sections
-                        _perform_peak_offpeak_analysis(df, power_col, holidays)
+                        df_peak_analysis, overall_max_demand, interval_hours = _perform_peak_offpeak_analysis(df, power_col, holidays)
                         _perform_cost_analysis(df, selected_tariff, power_col, holidays)
-                        _perform_peak_event_detection(df, power_col, selected_tariff)
+                        _perform_peak_event_detection(df, power_col, selected_tariff, interval_hours)
                         _perform_load_duration_analysis(df, power_col, holidays)
                 else:
                     st.warning("Please check your data. The selected power column may not exist after processing.")
@@ -180,13 +180,52 @@ def _configure_holidays(df, timestamp_col):
 
 
 def _process_dataframe(df, timestamp_col):
-    """Process the dataframe with timestamp parsing and indexing."""
+    """Process the dataframe with timestamp parsing, sorting validation, and indexing."""
     if not timestamp_col:
         return df
     
     try:
         df["Parsed Timestamp"] = pd.to_datetime(df[timestamp_col], errors="coerce")
-        df = df.dropna(subset=["Parsed Timestamp"]).set_index("Parsed Timestamp")
+        df = df.dropna(subset=["Parsed Timestamp"])
+        
+        # Check if data is sorted
+        is_sorted = df["Parsed Timestamp"].is_monotonic_increasing
+        if not is_sorted:
+            st.warning("⚠️ **Data not chronologically sorted** - Sorting timestamps for accurate interval detection")
+            df = df.sort_values("Parsed Timestamp")
+            st.success("✅ Data successfully sorted by timestamp")
+        else:
+            st.success("✅ Data is already chronologically sorted")
+        
+        # Set index
+        df = df.set_index("Parsed Timestamp")
+        
+        # Validate for gaps and display data quality info
+        if len(df) > 1:
+            time_diffs = df.index.to_series().diff().dropna()
+            if len(time_diffs) > 0:
+                most_common_interval = time_diffs.mode()[0] if not time_diffs.mode().empty else pd.Timedelta(minutes=15)
+                interval_minutes = most_common_interval.total_seconds() / 60
+                
+                # Check for data gaps
+                max_gap = time_diffs.max()
+                expected_readings = (df.index.max() - df.index.min()) / most_common_interval + 1
+                actual_readings = len(df)
+                completeness = (actual_readings / expected_readings) * 100 if expected_readings > 0 else 100
+                
+                # Display data quality metrics
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Data Period", f"{(df.index.max() - df.index.min()).days} days")
+                with col2:
+                    st.metric("Data Completeness", f"{completeness:.1f}%")
+                with col3:
+                    max_gap_hours = max_gap.total_seconds() / 3600
+                    if max_gap_hours > interval_minutes / 60 * 2:  # Gap more than 2 intervals
+                        st.metric("Max Gap", f"{max_gap_hours:.1f}h", delta="⚠️")
+                    else:
+                        st.metric("Max Gap", f"{max_gap_hours:.1f}h")
+        
         return df
     except Exception as e:
         st.error(f"Error processing timestamp column: {e}")
@@ -242,15 +281,60 @@ def _perform_peak_offpeak_analysis(df, power_col, holidays):
     - **MD Calculation:** Maximum demand recorded during peak periods only
     """)
     
+    # === DATA INTERVAL DETECTION ===
+    # Detect data interval from the entire dataset
+    if len(df) > 1:
+        time_diffs = df.index.to_series().diff().dropna()
+        if len(time_diffs) > 0:
+            # Get the most common time interval (mode)
+            most_common_interval = time_diffs.mode()[0] if not time_diffs.mode().empty else pd.Timedelta(minutes=15)
+            interval_hours = most_common_interval.total_seconds() / 3600
+            interval_minutes = most_common_interval.total_seconds() / 60
+            
+            # Display interval detection results
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                if interval_minutes < 60:
+                    st.metric("Detected Interval", f"{interval_minutes:.0f} minutes")
+                else:
+                    hours = interval_minutes / 60
+                    st.metric("Detected Interval", f"{hours:.1f} hours")
+            
+            with col2:
+                # Check for consistency
+                unique_intervals = time_diffs.value_counts()
+                consistency_percentage = (unique_intervals.iloc[0] / len(time_diffs)) * 100 if len(unique_intervals) > 0 else 100
+                st.metric("Data Consistency", f"{consistency_percentage:.1f}%")
+            
+            with col3:
+                # Handle last row: The last reading represents consumption for the detected interval
+                total_intervals = len(df)  # Each reading represents one interval period
+                st.metric("Total Intervals", f"{total_intervals:,}")
+            
+            # Show quality indicator
+            if consistency_percentage >= 95:
+                st.success(f"✅ **Excellent data quality**: {consistency_percentage:.1f}% consistent intervals")
+            elif consistency_percentage >= 85:
+                st.warning(f"⚠️ **Good data quality**: {consistency_percentage:.1f}% consistent intervals")
+            else:
+                st.error(f"❌ **Poor data quality**: Only {consistency_percentage:.1f}% consistent intervals")
+                
+            st.info(f"ℹ️ **Energy calculation**: Each power reading (kW) × {interval_hours:.3f} hours = Energy per interval (kWh)")
+        else:
+            # Fallback to 15 minutes if we can't determine interval
+            interval_hours = 0.25
+            st.warning("⚠️ Could not detect data interval. Using default 15-minute intervals.")
+    else:
+        interval_hours = 0.25
+        st.warning("⚠️ Insufficient data for interval detection. Using default 15-minute intervals.")
+    
     # Calculate peak/off-peak using RP4 logic
     is_peak_series = df.index.to_series().apply(lambda ts: is_peak_rp4(ts, holidays))
     df_peak_analysis = df[[power_col]].copy()
     df_peak_analysis['Is_Peak'] = is_peak_series
     
-    # Calculate energy consumption by period
-    time_deltas = df.index.to_series().diff().dt.total_seconds().div(3600).fillna(0)
-    df_peak_analysis['Interval_Hours'] = time_deltas
-    df_peak_analysis['Energy_kWh'] = df_peak_analysis[power_col] * df_peak_analysis['Interval_Hours']
+    # Calculate energy consumption using detected interval
+    df_peak_analysis['Energy_kWh'] = df_peak_analysis[power_col] * interval_hours
     
     peak_kwh = df_peak_analysis[df_peak_analysis['Is_Peak']]['Energy_kWh'].sum()
     offpeak_kwh = df_peak_analysis[~df_peak_analysis['Is_Peak']]['Energy_kWh'].sum()
@@ -284,7 +368,7 @@ def _perform_peak_offpeak_analysis(df, power_col, holidays):
     fig_period.update_traces(textposition='outside')
     st.plotly_chart(fig_period, use_container_width=True)
     
-    return df_peak_analysis, overall_max_demand
+    return df_peak_analysis, overall_max_demand, interval_hours
 
 
 def _perform_cost_analysis(df, selected_tariff, power_col, holidays):
@@ -356,7 +440,7 @@ def _display_cost_breakdown_chart(cost_breakdown):
         st.plotly_chart(fig_cost, use_container_width=True)
 
 
-def _perform_peak_event_detection(df, power_col, selected_tariff):
+def _perform_peak_event_detection(df, power_col, selected_tariff, interval_hours):
     """Perform Advanced Peak Event Detection."""
     st.subheader("3. Advanced Peak Event Detection")
     
@@ -392,15 +476,15 @@ def _perform_peak_event_detection(df, power_col, selected_tariff):
             st.warning("No MD rate available for this tariff")
     
     # Detect and analyze peak events
-    event_summaries = _detect_peak_events(df, power_col, target_demand, total_md_rate)
+    event_summaries = _detect_peak_events(df, power_col, target_demand, total_md_rate, interval_hours)
     
     if event_summaries:
-        _display_peak_event_results(df, power_col, event_summaries, target_demand, total_md_rate, overall_max_demand)
+        _display_peak_event_results(df, power_col, event_summaries, target_demand, total_md_rate, overall_max_demand, interval_hours)
     else:
         _display_no_peak_events(target_demand, overall_max_demand, df, power_col)
 
 
-def _detect_peak_events(df, power_col, target_demand, total_md_rate):
+def _detect_peak_events(df, power_col, target_demand, total_md_rate, interval_hours):
     """Detect peak events above target demand."""
     df_events = df[[power_col]].copy()
     df_events['Above_Target'] = df_events[power_col] > target_demand
@@ -417,13 +501,8 @@ def _detect_peak_events(df, power_col, target_demand, total_md_rate):
         excess = peak_load - target_demand
         duration_minutes = (end_time - start_time).total_seconds() / 60
         
-        # Calculate energy to shave for entire event duration
+        # Calculate energy to shave for entire event duration using global interval
         group_above = group[group[power_col] > target_demand]
-        if len(group_above) > 1:
-            interval_minutes = (group_above.index[1] - group_above.index[0]).total_seconds() / 60
-        else:
-            interval_minutes = 1
-        interval_hours = interval_minutes / 60
         total_energy_to_shave = ((group_above[power_col] - target_demand) * interval_hours).sum()
         
         # Calculate energy to shave during MD peak period only (2 PM to 10 PM)
@@ -483,7 +562,7 @@ def _filter_events_by_period(event_summaries, filter_type):
     return filtered_events
 
 
-def _display_peak_event_results(df, power_col, event_summaries, target_demand, total_md_rate, overall_max_demand):
+def _display_peak_event_results(df, power_col, event_summaries, target_demand, total_md_rate, overall_max_demand, interval_hours):
     """Display peak event detection results and analysis."""
     
     # Safety check for event_summaries
@@ -537,7 +616,7 @@ def _display_peak_event_results(df, power_col, event_summaries, target_demand, t
     _display_peak_event_analysis(event_summaries, total_md_rate)
     
     # Threshold sensitivity analysis
-    _display_threshold_analysis(df, power_col, overall_max_demand, total_md_rate)
+    _display_threshold_analysis(df, power_col, overall_max_demand, total_md_rate, interval_hours)
 
 
 def _display_peak_events_chart(df, power_col, event_summaries, target_demand):
@@ -781,7 +860,7 @@ def _display_detailed_insights(total_events, days_with_events, max_md_excess_dur
                 st.write(f"• Cost per kWh shaved: RM {fmt(efficiency_ratio)}")
 
 
-def _display_threshold_analysis(df, power_col, overall_max_demand, total_md_rate):
+def _display_threshold_analysis(df, power_col, overall_max_demand, total_md_rate, interval_hours):
     """Display threshold sensitivity analysis."""
     st.markdown("#### Threshold Sensitivity Analysis")
     st.markdown("*How changing the target threshold affects the number of peak events and shaving requirements*")
@@ -806,16 +885,11 @@ def _display_threshold_analysis(df, power_col, overall_max_demand, total_md_rate
             peak_load = group[power_col].max()
             excess = peak_load - test_target
             
-            # Calculate energy to shave for this threshold - total event
+            # Calculate energy to shave for this threshold - total event using global interval
             group_above = group[group[power_col] > test_target]
-            if len(group_above) > 1:
-                interval_minutes = (group_above.index[1] - group_above.index[0]).total_seconds() / 60
-            else:
-                interval_minutes = 1
-            interval_hours = interval_minutes / 60
             total_energy_to_shave = ((group_above[power_col] - test_target) * interval_hours).sum()
             
-            # Calculate energy to shave during MD peak period only (2 PM to 10 PM)
+            # Calculate energy to shave during MD peak period only (2 PM to 10 PM) using global interval
             md_peak_mask = group_above.index.to_series().apply(
                 lambda ts: ts.weekday() < 5 and 14 <= ts.hour < 22
             )

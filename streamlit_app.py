@@ -8,6 +8,13 @@ from advanced_energy_analysis import show as show_advanced_energy_analysis
 
 st.set_page_config(page_title="Load Profile Analysis", layout="wide")
 
+# Load custom CSS for global styling (including increased font sizes)
+try:
+    with open("assets/style.css") as f:
+        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+except FileNotFoundError:
+    st.warning("CSS file not found. Using default styling.")
+
 # Sidebar Configuration
 st.sidebar.title("🔧 Configuration")
 st.sidebar.markdown("---")
@@ -130,10 +137,76 @@ with tabs[1]:
                 column = column.str.replace(r'\bDec\b', '12', regex=True)
                 return column
 
-            df[timestamp_col] = preprocess_timestamp_column(df[timestamp_col])
+            # Process data with automatic interval detection
             df["Parsed Timestamp"] = pd.to_datetime(df[timestamp_col], errors="coerce")
             df = df.dropna(subset=["Parsed Timestamp"])
             df = df.set_index("Parsed Timestamp")
+
+            # === DATA INTERVAL DETECTION ===
+            st.subheader("📊 Data Interval Detection")
+            
+            # Detect data interval from the entire dataset
+            if len(df) > 1:
+                time_diffs = df.index.to_series().diff().dropna()
+                if len(time_diffs) > 0:
+                    # Get the most common time interval (mode)
+                    most_common_interval = time_diffs.mode()[0] if not time_diffs.mode().empty else pd.Timedelta(minutes=15)
+                    interval_minutes = most_common_interval.total_seconds() / 60
+                    interval_hours = most_common_interval.total_seconds() / 3600
+                    
+                    # Check for consistency
+                    unique_intervals = time_diffs.value_counts()
+                    consistency_percentage = (unique_intervals.iloc[0] / len(time_diffs)) * 100 if len(unique_intervals) > 0 else 100
+                    
+                    # Display interval information
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    with col1:
+                        if interval_minutes < 60:
+                            st.metric("Detected Interval", f"{interval_minutes:.0f} minutes")
+                        else:
+                            hours = interval_minutes / 60
+                            st.metric("Detected Interval", f"{hours:.1f} hours")
+                    
+                    with col2:
+                        st.metric("Data Consistency", f"{consistency_percentage:.1f}%")
+                    
+                    with col3:
+                        readings_per_hour = 60 / interval_minutes if interval_minutes > 0 else 0
+                        st.metric("Readings/Hour", f"{readings_per_hour:.0f}")
+                    
+                    with col4:
+                        daily_readings = readings_per_hour * 24
+                        st.metric("Readings/Day", f"{daily_readings:.0f}")
+                    
+                    # Show interval quality indicator
+                    if consistency_percentage >= 95:
+                        st.success(f"✅ **Excellent data quality**: {consistency_percentage:.1f}% of readings have consistent {interval_minutes:.0f}-minute intervals")
+                    elif consistency_percentage >= 85:
+                        st.warning(f"⚠️ **Good data quality**: {consistency_percentage:.1f}% consistent intervals. Some missing data points detected.")
+                    else:
+                        st.error(f"❌ **Poor data quality**: Only {consistency_percentage:.1f}% consistent intervals. Results may be less accurate.")
+                    
+                    # Show interval breakdown if there are inconsistencies
+                    if consistency_percentage < 95:
+                        with st.expander("🔍 View Interval Analysis Details"):
+                            st.markdown("**Top 5 Time Intervals Found:**")
+                            top_intervals = unique_intervals.head()
+                            for interval, count in top_intervals.items():
+                                percentage = (count / len(time_diffs)) * 100
+                                interval_mins = interval.total_seconds() / 60
+                                st.write(f"• **{interval_mins:.0f} minutes**: {count:,} occurrences ({percentage:.1f}%)")
+                            
+                            st.info("💡 **Tip**: Inconsistent intervals may be due to missing data points or different data collection periods. The analysis will use the most common interval for calculations.")
+                else:
+                    # Fallback to 15 minutes if we can't determine interval
+                    interval_hours = 0.25
+                    interval_minutes = 15
+                    st.warning("⚠️ Could not detect data interval automatically. Using default 15-minute intervals.")
+            else:
+                interval_hours = 0.25
+                interval_minutes = 15
+                st.warning("⚠️ Insufficient data to detect interval. Using default 15-minute intervals.")
 
             def is_tnb_peak_time(timestamp):
                 if timestamp.weekday() < 5:
@@ -149,15 +222,14 @@ with tabs[1]:
             st.write("Selected Timestamp Column:", timestamp_col)
             st.write("Selected Power Column:", power_col)
 
-            # Cost calculation logic
-            # Replace slider with a number input for selecting the time interval
-            time_interval = st.number_input("Enter time interval (minutes)", min_value=0, max_value=60, value=1, step=1)
+            # Cost calculation logic using detected interval
+            st.info(f"ℹ️ **Using detected interval**: {interval_minutes:.0f} minutes ({interval_hours:.3f} hours) for all energy calculations")
 
-            # Automatically update energy calculation formula based on selected time interval
+            # Energy calculation based on detected interval
             df_energy_for_cost_kwh = df[[power_col]].copy()
-            df_energy_for_cost_kwh["Energy (kWh)"] = df_energy_for_cost_kwh[power_col] * (time_interval / 60)
+            df_energy_for_cost_kwh["Energy (kWh)"] = df_energy_for_cost_kwh[power_col] * interval_hours
 
-            # Automatically update cost calculation logic to use the selected time interval
+            # Cost calculation logic using the detected time interval
             peak_energy_cost_calc = df_energy_for_cost_kwh.between_time("08:00", "21:59")["Energy (kWh)"].sum()
             offpeak_energy_cost_calc = df_energy_for_cost_kwh.between_time("00:00", "07:59")["Energy (kWh)"].sum() + df_energy_for_cost_kwh.between_time("22:00", "23:59")["Energy (kWh)"].sum()
             total_energy_cost_calc = peak_energy_cost_calc + offpeak_energy_cost_calc
@@ -252,9 +324,9 @@ with tabs[1]:
                     )
                     st.session_state.ref_kw_lines[i] = new_val
 
-                # kWh Chart (Daily Energy Consumption by Peak and Off-Peak)
+                # kWh Chart (Daily Energy Consumption by Peak and Off-Peak) using detected interval
                 df_energy_kwh_viz = df[[power_col]].copy()
-                df_energy_kwh_viz["Energy (kWh)"] = df_energy_kwh_viz[power_col] * (1/60)
+                df_energy_kwh_viz["Energy (kWh)"] = df_energy_kwh_viz[power_col] * interval_hours
                 df_peak_viz = df_energy_kwh_viz.between_time("08:00", "21:59").copy(); df_peak_viz["Period"] = "Peak"
                 df_offpeak_viz = pd.concat([df_energy_kwh_viz.between_time("00:00", "07:59"), df_energy_kwh_viz.between_time("22:00", "23:59")]).copy(); df_offpeak_viz["Period"] = "Off Peak"
                 df_energy_period_viz = pd.concat([df_peak_viz, df_offpeak_viz])
@@ -389,12 +461,7 @@ with tabs[1]:
                     # Only consider points above threshold
                     group_above = group[group[power_col] > PEAK_THRESHOLD]
                     # Energy above threshold: sum((load - threshold) * (interval in hours))
-                    # Assume data is at 1-min intervals (1/60 hr), but check actual interval
-                    if len(group_above) > 1:
-                        interval_minutes = (group_above.index[1] - group_above.index[0]).total_seconds() / 60
-                    else:
-                        interval_minutes = 1  # fallback
-                    interval_hours = interval_minutes / 60
+                    # Use globally detected interval for consistency
                     total_kwh_to_shave = ((group_above[power_col] - PEAK_THRESHOLD) * interval_hours).sum()
                     event_summaries.append({
                         'Date': start_time.date(),
@@ -749,6 +816,263 @@ with tabs[3]:
             
             if not df.empty and power_col in df.columns:
                 
+                # === DATA INTERVAL DETECTION ===
+                st.subheader("📊 Data Interval Detection")
+                
+                # Detect data interval from the entire dataset
+                if len(df) > 1:
+                    time_diffs = df.index.to_series().diff().dropna()
+                    if len(time_diffs) > 0:
+                        # Get the most common time interval (mode)
+                        most_common_interval = time_diffs.mode()[0] if not time_diffs.mode().empty else pd.Timedelta(minutes=15)
+                        interval_minutes = most_common_interval.total_seconds() / 60
+                        interval_hours = most_common_interval.total_seconds() / 3600
+                        
+                        # Check for consistency
+                        unique_intervals = time_diffs.value_counts()
+                        consistency_percentage = (unique_intervals.iloc[0] / len(time_diffs)) * 100 if len(unique_intervals) > 0 else 100
+                        
+                        # Display interval information
+                        col1, col2, col3, col4 = st.columns(4)
+                        
+                        with col1:
+                            if interval_minutes < 60:
+                                st.metric("Detected Interval", f"{interval_minutes:.0f} minutes")
+                            else:
+                                hours = interval_minutes / 60
+                                st.metric("Detected Interval", f"{hours:.1f} hours")
+                        
+                        with col2:
+                            st.metric("Data Consistency", f"{consistency_percentage:.1f}%")
+                        
+                        with col3:
+                            readings_per_hour = 60 / interval_minutes if interval_minutes > 0 else 0
+                            st.metric("Readings/Hour", f"{readings_per_hour:.0f}")
+                        
+                        with col4:
+                            daily_readings = readings_per_hour * 24
+                            st.metric("Readings/Day", f"{daily_readings:.0f}")
+                        
+                        # Show interval quality indicator
+                        if consistency_percentage >= 95:
+                            st.success(f"✅ **Excellent data quality**: {consistency_percentage:.1f}% of readings have consistent {interval_minutes:.0f}-minute intervals")
+                        elif consistency_percentage >= 85:
+                            st.warning(f"⚠️ **Good data quality**: {consistency_percentage:.1f}% consistent intervals. Some missing data points detected.")
+                        else:
+                            st.error(f"❌ **Poor data quality**: Only {consistency_percentage:.1f}% consistent intervals. Results may be less accurate.")
+                        
+                        # Show interval breakdown if there are inconsistencies
+                        if consistency_percentage < 95:
+                            with st.expander("🔍 View Interval Analysis Details"):
+                                st.markdown("**Top 5 Time Intervals Found:**")
+                                top_intervals = unique_intervals.head()
+                                for interval, count in top_intervals.items():
+                                    percentage = (count / len(time_diffs)) * 100
+                                    interval_mins = interval.total_seconds() / 60
+                                    st.write(f"• **{interval_mins:.0f} minutes**: {count:,} occurrences ({percentage:.1f}%)")
+                                
+                                st.info("💡 **Tip**: Inconsistent intervals may be due to missing data points or different data collection periods. The analysis will use the most common interval for calculations.")
+                    else:
+                        # Fallback to 15 minutes if we can't determine interval
+                        interval_hours = 0.25
+                        interval_minutes = 15
+                        st.warning("⚠️ Could not detect data interval automatically. Using default 15-minute intervals.")
+                else:
+                    interval_hours = 0.25
+                    interval_minutes = 15
+                    st.warning("⚠️ Insufficient data to detect interval. Using default 15-minute intervals.")
+                
+                # ===============================
+                # DEBUG SECTION FOR ENERGY CALCULATION VERIFICATION
+                # ===============================
+                with st.expander("🐛 DEBUG: Energy Calculation Verification", expanded=False):
+                    st.markdown("### Energy Calculation Debug Information")
+                    st.markdown("Use this section to verify that energy calculations are correct for your data interval.")
+                    
+                    # Sample the first few hours of data for debugging
+                    debug_sample_size = min(48, len(df))  # First 48 readings or less
+                    df_debug = df.head(debug_sample_size).copy()
+                    
+                    st.markdown(f"**Analyzing first {len(df_debug)} data points:**")
+                    
+                    # Debug: Show raw timestamps and calculated intervals
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.markdown("**🕐 Raw Timestamp Analysis:**")
+                        debug_timestamps = df_debug.index[:10]  # First 10 timestamps
+                        
+                        debug_info = []
+                        for i, ts in enumerate(debug_timestamps):
+                            if i > 0:
+                                prev_ts = debug_timestamps[i-1]
+                                time_diff = ts - prev_ts
+                                diff_minutes = time_diff.total_seconds() / 60
+                                debug_info.append({
+                                    'Reading #': i+1,
+                                    'Timestamp': ts.strftime('%Y-%m-%d %H:%M:%S'),
+                                    'Time Diff (min)': f"{diff_minutes:.1f}" if i > 0 else "N/A",
+                                    'Power (kW)': f"{df_debug[power_col].iloc[i]:.2f}"
+                                })
+                            else:
+                                debug_info.append({
+                                    'Reading #': i+1,
+                                    'Timestamp': ts.strftime('%Y-%m-%d %H:%M:%S'),
+                                    'Time Diff (min)': "N/A",
+                                    'Power (kW)': f"{df_debug[power_col].iloc[i]:.2f}"
+                                })
+                        
+                        df_debug_info = pd.DataFrame(debug_info)
+                        st.dataframe(df_debug_info, use_container_width=True)
+                    
+                    with col2:
+                        st.markdown("**⚡ Energy Calculation Methods:**")
+                        
+                        # Method 1: Using detected interval (CORRECT METHOD)
+                        energy_method1 = df_debug[power_col] * interval_hours
+                        total_energy_method1 = energy_method1.sum()
+                        
+                        # Method 2: Using diff() method (INCORRECT - what was causing the bug)
+                        time_deltas_diff = df_debug.index.to_series().diff().dt.total_seconds().div(3600).fillna(0)
+                        energy_method2 = (df_debug[power_col] * time_deltas_diff).sum()
+                        
+                        # Method 3: Manual calculation for first few readings
+                        manual_energy = 0
+                        for i in range(1, min(6, len(df_debug))):
+                            time_diff_hours = (df_debug.index[i] - df_debug.index[i-1]).total_seconds() / 3600
+                            power_avg = (df_debug[power_col].iloc[i] + df_debug[power_col].iloc[i-1]) / 2
+                            manual_energy += power_avg * time_diff_hours
+                        
+                        st.write(f"**Method 1 (CORRECT - Detected Interval):**")
+                        st.write(f"• Interval: {interval_minutes:.0f} minutes ({interval_hours:.4f} hours)")
+                        st.write(f"• Total Energy: {total_energy_method1:.2f} kWh")
+                        st.write(f"• Formula: Power × {interval_hours:.4f}h")
+                        
+                        st.write(f"**Method 2 (OLD - diff() method):**")
+                        st.write(f"• Total Energy: {energy_method2:.2f} kWh")
+                        st.write(f"• Formula: Power × diff().hours")
+                        
+                        st.write(f"**Manual Check (first 5 intervals):**")
+                        st.write(f"• Manual Energy: {manual_energy:.2f} kWh")
+                        
+                        # Show the difference
+                        if abs(total_energy_method1 - energy_method2) > 0.01:
+                            difference_percentage = abs(total_energy_method1 - energy_method2) / total_energy_method1 * 100
+                            st.error(f"⚠️ **Methods differ by {difference_percentage:.1f}%**")
+                            st.error(f"Difference: {abs(total_energy_method1 - energy_method2):.2f} kWh")
+                        else:
+                            st.success("✅ Methods agree within tolerance")
+                    
+                    # Debug: Show calculation details
+                    st.markdown("**📊 Detailed Calculation Breakdown:**")
+                    
+                    # Create detailed calculation table
+                    debug_calc = df_debug.head(10).copy()
+                    debug_calc['Energy_Method1'] = debug_calc[power_col] * interval_hours
+                    
+                    # Calculate time differences for method 2
+                    debug_calc['Time_Diff_Hours'] = debug_calc.index.to_series().diff().dt.total_seconds().div(3600).fillna(0)
+                    debug_calc['Energy_Method2'] = debug_calc[power_col] * debug_calc['Time_Diff_Hours']
+                    
+                    debug_display = debug_calc[[power_col, 'Energy_Method1', 'Time_Diff_Hours', 'Energy_Method2']].copy()
+                    debug_display.columns = ['Power (kW)', f'Energy Method1 (kWh)', 'Time Diff (h)', 'Energy Method2 (kWh)']
+                    debug_display = debug_display.reset_index()
+                    debug_display['Timestamp'] = debug_display['Parsed Timestamp'].dt.strftime('%H:%M:%S')
+                    debug_display = debug_display[['Timestamp', 'Power (kW)', 'Energy Method1 (kWh)', 'Time Diff (h)', 'Energy Method2 (kWh)']]
+                    
+                    formatted_debug = debug_display.style.format({
+                        'Power (kW)': '{:.2f}',
+                        'Energy Method1 (kWh)': '{:.4f}',
+                        'Time Diff (h)': '{:.4f}',
+                        'Energy Method2 (kWh)': '{:.4f}'
+                    })
+                    
+                    st.dataframe(formatted_debug, use_container_width=True)
+                    
+                    # Debug: Full dataset comparison
+                    st.markdown("**🔬 Full Dataset Energy Comparison:**")
+                    
+                    # Calculate for entire dataset
+                    full_energy_method1 = (df[power_col] * interval_hours).sum()
+                    
+                    # Old method (with diff())
+                    full_time_deltas = df.index.to_series().diff().dt.total_seconds().div(3600).fillna(0)
+                    full_energy_method2 = (df[power_col] * full_time_deltas).sum()
+                    
+                    # Theoretical maximum energy (if all intervals were detected correctly)
+                    total_readings = len(df)
+                    theoretical_total_hours = total_readings * interval_hours
+                    avg_power = df[power_col].mean()
+                    theoretical_energy = avg_power * theoretical_total_hours
+                    
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        st.metric("Method 1 (Correct)", f"{full_energy_method1:,.2f} kWh")
+                        st.caption(f"Using {interval_minutes:.0f}-min intervals")
+                    
+                    with col2:
+                        st.metric("Method 2 (Old diff())", f"{full_energy_method2:,.2f} kWh")
+                        difference = full_energy_method1 - full_energy_method2
+                        st.caption(f"Difference: {difference:+,.2f} kWh")
+                    
+                    with col3:
+                        st.metric("Theoretical Max", f"{theoretical_energy:,.2f} kWh")
+                        st.caption(f"Avg power × total time")
+                    
+                    # Show the percentage difference
+                    if full_energy_method1 > 0:
+                        percentage_diff = (full_energy_method2 - full_energy_method1) / full_energy_method1 * 100
+                        
+                        if abs(percentage_diff) > 5:
+                            st.error(f"🚨 **SIGNIFICANT DIFFERENCE**: Method 2 shows {percentage_diff:+.1f}% compared to Method 1")
+                            if percentage_diff < -40:
+                                st.error("**This explains why 30-minute data shows ~50% less energy!**")
+                                st.error("The diff() method creates NaN values and incorrect intervals.")
+                        else:
+                            st.success(f"✅ **GOOD**: Methods agree within {abs(percentage_diff):.1f}%")
+                    
+                    # Debug: Show where NaN values occur in diff() method
+                    nan_count = full_time_deltas.isna().sum()
+                    zero_count = (full_time_deltas == 0).sum()
+                    
+                    st.markdown("**🐞 Data Quality Analysis:**")
+                    
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("Total Readings", f"{total_readings:,}")
+                    col2.metric("NaN Time Diffs", f"{nan_count:,}")
+                    col3.metric("Zero Time Diffs", f"{zero_count:,}")
+                    col4.metric("Valid Time Diffs", f"{total_readings - nan_count - zero_count:,}")
+                    
+                    if nan_count > 0 or zero_count > 0:
+                        st.warning(f"⚠️ {nan_count + zero_count} readings have invalid time differences (NaN or zero)")
+                        st.info("💡 This is why Method 1 (using detected interval) is more reliable than Method 2 (diff())")
+                    
+                    # Debug: Show summary
+                    st.markdown("**📋 Debug Summary:**")
+                    
+                    if abs(percentage_diff) > 5:
+                        st.error(f"""
+                        **ISSUE DETECTED:**
+                        - Your data has {interval_minutes:.0f}-minute intervals
+                        - Method 1 (correct): {full_energy_method1:,.2f} kWh
+                        - Method 2 (old diff): {full_energy_method2:,.2f} kWh
+                        - Difference: {percentage_diff:+.1f}%
+                        
+                        **ROOT CAUSE:** The diff() method loses the first reading (becomes NaN) and doesn't handle irregular intervals properly.
+                        
+                        **SOLUTION:** The app now uses Method 1 everywhere for consistent energy calculations.
+                        """)
+                    else:
+                        st.success(f"""
+                        **CALCULATIONS ARE CORRECT:**
+                        - Data interval: {interval_minutes:.0f} minutes
+                        - Energy calculation: {full_energy_method1:,.2f} kWh
+                        - Methods agree within {abs(percentage_diff):.1f}%
+                        
+                        **STATUS:** Energy calculations are working properly for your data.
+                        """)
+                
                 # ===============================
                 # TARIFF SELECTION
                 # ===============================
@@ -801,10 +1125,30 @@ with tabs[3]:
                     if selected_new_tariff:
                         # Show new tariff details
                         rates = selected_new_tariff.get('Rates', {})
+                        rules = selected_new_tariff.get('Rules', {})
+                        tariff_type = selected_new_tariff.get('Type', 'Unknown')
+                        
+                        # Show rate information with tariff type indicator
                         if rates.get('Peak Rate') and rates.get('OffPeak Rate'):
-                            st.info(f"**Peak:** RM {rates['Peak Rate']:.4f}/kWh  \n**Off-Peak:** RM {rates['OffPeak Rate']:.4f}/kWh  \n**Capacity:** RM {rates.get('Capacity Rate', 0):.2f}/kW  \n**Network:** RM {rates.get('Network Rate', 0):.2f}/kW")
+                            st.info(f"**🕐 TOU Tariff - Peak/Off-Peak Split:**  \n**Peak:** RM {rates['Peak Rate']:.4f}/kWh  \n**Off-Peak:** RM {rates['OffPeak Rate']:.4f}/kWh  \n**Capacity:** RM {rates.get('Capacity Rate', 0):.2f}/kW  \n**Network:** RM {rates.get('Network Rate', 0):.2f}/kW")
                         else:
-                            st.info(f"**Energy:** RM {rates.get('Energy Rate', 0):.4f}/kWh  \n**Capacity:** RM {rates.get('Capacity Rate', 0):.2f}/kW  \n**Network:** RM {rates.get('Network Rate', 0):.2f}/kW")
+                            st.info(f"**⚡ General Tariff - Single Rate:**  \n**Energy:** RM {rates.get('Energy Rate', 0):.4f}/kWh  \n**Capacity:** RM {rates.get('Capacity Rate', 0):.2f}/kW  \n**Network:** RM {rates.get('Network Rate', 0):.2f}/kW")
+                        
+                        # Add explanation about TOU vs General tariffs
+                        if tariff_type == "General":
+                            st.warning("""
+                            ⚠️ **Note**: This is a **General tariff** (single rate for all periods). 
+                            In the breakdown tables, all energy will appear as "Peak Energy", 
+                            and "Off-Peak Energy" will show as 0. This represents that all energy 
+                            is treated as primary/main energy with a single rate.
+                            
+                            💡 **To see time-based peak/off-peak breakdown**: Select a **TOU (Time-of-Use)** tariff instead.
+                            """)
+                        elif tariff_type == "TOU":
+                            st.success("""
+                            ✅ **TOU Tariff Selected**: This tariff uses different rates for peak and off-peak periods. 
+                            You will see separate peak/off-peak energy and cost breakdowns in the analysis.
+                            """)
                 
                 # ===============================
                 # MONTHLY TARIFF IMPACT ANALYSIS
@@ -863,17 +1207,10 @@ with tabs[3]:
                     # === ENERGY CALCULATION ===
                     month_str = str(month_period)
                     
-                    # Calculate energy consumption properly
+                    # Calculate energy consumption using the globally detected interval
                     if len(month_data) > 1:
-                        # Determine the data interval automatically
-                        time_diffs = month_data.index.to_series().diff().dropna()
-                        if len(time_diffs) > 0:
-                            # Get the most common time interval (mode)
-                            most_common_interval = time_diffs.mode()[0] if not time_diffs.mode().empty else pd.Timedelta(minutes=15)
-                            interval_hours = most_common_interval.total_seconds() / 3600
-                        else:
-                            # Fallback to 15 minutes if we can't determine interval
-                            interval_hours = 0.25
+                        # Use the globally detected interval_hours for consistent calculations
+                        # This ensures all months use the same time interval
                         
                         # Calculate energy: Power (kW) × Time (hours) = Energy (kWh)
                         # Each power reading represents the average power for that interval
@@ -933,20 +1270,21 @@ with tabs[3]:
                         rp4_total_cost = rp4_result.get('Total Cost', 0)
                         
                         # Handle TOU vs General RP4 tariffs
-                        if 'Peak kWh' in rp4_result:
-                            # Time-of-Use RP4 tariff
+                        if 'Peak kWh' in rp4_result and selected_new_tariff.get('Rules', {}).get('has_peak_split', False):
+                            # Time-of-Use RP4 tariff (true peak/off-peak split)
                             rp4_peak_energy = rp4_result.get('Peak kWh', 0)
                             rp4_offpeak_energy = rp4_result.get('Off-Peak kWh', 0)
                             rp4_peak_cost = rp4_result.get('Peak Energy Cost', 0)
                             rp4_offpeak_cost = rp4_result.get('Off-Peak Energy Cost', 0)
                             rp4_energy_cost = rp4_peak_cost + rp4_offpeak_cost
                         else:
-                            # General RP4 tariff (no peak/off-peak split)
-                            rp4_peak_energy = 0
-                            rp4_offpeak_energy = rp4_result.get('Total kWh', total_energy_kwh)
-                            rp4_peak_cost = 0
-                            rp4_offpeak_cost = rp4_result.get('Energy Cost (RM)', 0)
-                            rp4_energy_cost = rp4_offpeak_cost
+                            # General RP4 tariff - now shows all energy as "Peak Energy" for better UX
+                            # All energy is treated as primary/main energy rather than "off-peak"
+                            rp4_peak_energy = rp4_result.get('Peak kWh', total_energy_kwh)
+                            rp4_offpeak_energy = rp4_result.get('Off-Peak kWh', 0)
+                            rp4_peak_cost = rp4_result.get('Peak Energy Cost', rp4_result.get('Energy Cost (RM)', 0))
+                            rp4_offpeak_cost = rp4_result.get('Off-Peak Energy Cost', 0)
+                            rp4_energy_cost = rp4_peak_cost + rp4_offpeak_cost
                         
                         rp4_afa_cost = rp4_result.get('AFA Adjustment', 0)
                         rp4_capacity_cost = rp4_result.get('Capacity Cost', rp4_result.get('Capacity Cost (RM)', 0))
@@ -1018,6 +1356,87 @@ with tabs[3]:
                 # Clear progress indicators
                 progress_bar.empty()
                 status_text.empty()
+                
+                # ===============================
+                # DEBUG SECTION FOR RP4 CALCULATION ISSUES
+                # ===============================
+                with st.expander("🐛 DEBUG: RP4 Peak Energy & Cost Calculation", expanded=False):
+                    st.markdown("### RP4 Calculation Debug Information")
+                    st.markdown("Use this section to debug why RP4 peak energy/cost values might be missing or zero.")
+                    
+                    if monthly_analysis:
+                        debug_month = st.selectbox("Select month to debug:", [m['Month'] for m in monthly_analysis])
+                        debug_data = next((m for m in monthly_analysis if m['Month'] == debug_month), None)
+                        
+                        if debug_data:
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                st.markdown("**📊 Raw Values from Calculation:**")
+                                st.write(f"RP4 Peak Energy: {debug_data['RP4 Peak Energy (kWh)']:.2f} kWh")
+                                st.write(f"RP4 Off-Peak Energy: {debug_data['RP4 Off-Peak Energy (kWh)']:.2f} kWh")
+                                st.write(f"RP4 Peak Cost: RM {debug_data['RP4 Peak Cost (RM)']:.2f}")
+                                st.write(f"RP4 Off-Peak Cost: RM {debug_data['RP4 Off-Peak Cost (RM)']:.2f}")
+                                st.write(f"Total Energy: {debug_data['Total Energy (kWh)']:.2f} kWh")
+                            
+                            with col2:
+                                st.markdown("**🔍 Selected Tariff Details:**")
+                                st.write(f"Selected Tariff: {selected_new_tariff_name}")
+                                st.write(f"Tariff Type: {selected_new_tariff.get('Type', 'Unknown')}")
+                                st.write(f"Has Peak Split: {selected_new_tariff.get('Rules', {}).get('has_peak_split', False)}")
+                                
+                                rates = selected_new_tariff.get('Rates', {})
+                                st.write(f"Peak Rate: RM {rates.get('Peak Rate', 'N/A')}/kWh")
+                                st.write(f"OffPeak Rate: RM {rates.get('OffPeak Rate', 'N/A')}/kWh")
+                                st.write(f"Energy Rate: RM {rates.get('Energy Rate', 'N/A')}/kWh")
+                            
+                            # Test RP4 calculation for debug month
+                            month_period = pd.Period(debug_month)
+                            month_data = df[df['Year_Month'] == month_period]
+                            
+                            if not month_data.empty:
+                                st.markdown("**🧪 Test RP4 Calculation:**")
+                                month_data_for_test = month_data.reset_index()
+                                test_result = calculate_cost(
+                                    df=month_data_for_test,
+                                    tariff=selected_new_tariff,
+                                    power_col=power_col,
+                                    holidays=holidays,
+                                    afa_rate=global_afa_rate
+                                )
+                                
+                                st.write("**Raw RP4 calculation result:**")
+                                for key, value in test_result.items():
+                                    if isinstance(value, (int, float)):
+                                        st.write(f"- {key}: {value:.4f}")
+                                    else:
+                                        st.write(f"- {key}: {value}")
+                                
+                                # Check if this is a TOU tariff
+                                if 'Peak kWh' in test_result:
+                                    st.success("✅ This is a TOU tariff - peak/off-peak values should be present")
+                                    st.write(f"Peak kWh detected: {test_result.get('Peak kWh', 0):.2f}")
+                                    st.write(f"Off-Peak kWh detected: {test_result.get('Off-Peak kWh', 0):.2f}")
+                                else:
+                                    st.warning("⚠️ This appears to be a General tariff - no peak/off-peak split")
+                                
+                                # Show peak/off-peak logic test
+                                st.markdown("**⏰ Peak/Off-Peak Logic Test:**")
+                                sample_timestamps = month_data.index[:10]
+                                peak_test_results = []
+                                for ts in sample_timestamps:
+                                    is_peak = is_peak_rp4(ts, holidays)
+                                    peak_test_results.append({
+                                        'Timestamp': ts.strftime('%Y-%m-%d %H:%M'),
+                                        'Weekday': ts.strftime('%A'),
+                                        'Hour': ts.hour,
+                                        'Is Peak': is_peak
+                                    })
+                                
+                                df_peak_test = pd.DataFrame(peak_test_results)
+                                st.dataframe(df_peak_test, use_container_width=True)
+                    else:
+                        st.warning("No monthly analysis data available for debugging.")
                 
                 if monthly_analysis:
                     # ===============================
@@ -1103,7 +1522,11 @@ with tabs[3]:
                     
                     with breakdown_tabs[2]:
                         st.markdown("#### New RP4 Tariff Structure Breakdown")
-                        st.caption("New RP4 tariff with holiday-aware peak/off-peak logic and separate capacity/network rates")
+                        tariff_type = selected_new_tariff.get('Type', 'Unknown')
+                        if tariff_type == "General":
+                            st.caption("⚡ General RP4 tariff - Single rate for all periods (All energy shows as Peak Energy for clarity)")
+                        else:
+                            st.caption("🕐 TOU RP4 tariff with holiday-aware peak/off-peak logic and separate capacity/network rates")
                         
                         # New tariff breakdown table
                         new_columns = ['Month', 'RP4 Peak Energy (kWh)', 'RP4 Off-Peak Energy (kWh)',
@@ -1129,6 +1552,149 @@ with tabs[3]:
                         col2.metric("Total Off-Peak Energy", f"{df_monthly['RP4 Off-Peak Energy (kWh)'].sum():,.0f} kWh")
                         col3.metric("Total Energy Cost", f"RM {(df_monthly['RP4 Peak Cost (RM)'].sum() + df_monthly['RP4 Off-Peak Cost (RM)'].sum()):,.2f}")
                         col4.metric("Total AFA + MD", f"RM {(df_monthly['RP4 AFA Cost (RM)'].sum() + df_monthly['RP4 Demand Cost (RM)'].sum()):,.2f}")
+                    
+                    # ===============================
+                    # SIDE-BY-SIDE DETAILED BREAKDOWN (NEW)
+                    # ===============================
+                    st.subheader("📋 Side-by-Side Monthly Breakdown")
+                    st.caption("Compare old and new tariff details month by month")
+                    
+                    # Create side-by-side comparison for each month
+                    for _, row in df_monthly.iterrows():
+                        month = row['Month']
+                        
+                        with st.expander(f"📅 {month} - Detailed Side-by-Side Comparison", expanded=False):
+                            # Month summary at the top
+                            col1, col2, col3, col4 = st.columns(4)
+                            col1.metric("Total Energy", f"{row['Total Energy (kWh)']:,.0f} kWh")
+                            col2.metric("Max Demand", f"{row['Max Demand (kW)']:,.2f} kW")
+                            col3.metric("Cost Difference", f"RM {row['Cost Difference (RM)']:+,.2f}")
+                            col4.metric("Change", f"{row['Change (%)']:+.1f}%")
+                            
+                            st.markdown("---")
+                            
+                            # Side-by-side tariff comparison
+                            col_old, col_new = st.columns(2)
+                            
+                            with col_old:
+                                st.markdown("### 🔴 Old Tariff Details")
+                                st.markdown(f"**{selected_old_tariff}**")
+                                st.markdown(f"*{charging_rates[selected_old_tariff]}*")
+                                
+                                # Old tariff breakdown table
+                                old_breakdown = pd.DataFrame({
+                                    'Component': [
+                                        'Peak Energy (kWh)',
+                                        'Off-Peak Energy (kWh)', 
+                                        'Peak Energy Cost (RM)',
+                                        'Off-Peak Energy Cost (RM)',
+                                        'ICPT Cost (RM)',
+                                        'MD Cost (RM)',
+                                        'Total Cost (RM)'
+                                    ],
+                                    'Value': [
+                                        f"{row['Old Peak Energy (kWh)']:,.0f}",
+                                        f"{row['Old Off-Peak Energy (kWh)']:,.0f}",
+                                        f"RM {row['Old Peak Cost (RM)']:,.2f}",
+                                        f"RM {row['Old Off-Peak Cost (RM)']:,.2f}",
+                                        f"RM {row['Old ICPT Cost (RM)']:,.2f}",
+                                        f"RM {row['Old MD Cost (RM)']:,.2f}",
+                                        f"RM {row['Old Total Cost (RM)']:,.2f}"
+                                    ]
+                                })
+                                
+                                # Style the old tariff table
+                                styled_old = old_breakdown.style.apply(
+                                    lambda x: ['background-color: rgba(255, 107, 107, 0.1)' if 'Total Cost' in x['Component'] 
+                                             else 'background-color: rgba(255, 107, 107, 0.05)' for _ in x], axis=1
+                                )
+                                st.dataframe(styled_old, use_container_width=True, hide_index=True)
+                                
+                                # Old tariff metrics
+                                st.metric("Cost per kWh", f"RM {row['Old Cost/kWh (RM)']:.4f}")
+                                st.metric("Peak Energy %", f"{row['Old Peak %']:.1f}%")
+                            
+                            with col_new:
+                                st.markdown("### 🔵 New Tariff (RP4) Details")
+                                st.markdown(f"**{selected_new_tariff_name}**")
+                                
+                                # Show tariff type and rates
+                                tariff_type = selected_new_tariff.get('Type', 'Unknown')
+                                rates = selected_new_tariff.get('Rates', {})
+                                
+                                if tariff_type == "TOU":
+                                    rate_info = f"*Peak: RM {rates.get('Peak Rate', 0):.4f}/kWh, Off-Peak: RM {rates.get('OffPeak Rate', 0):.4f}/kWh*"
+                                else:
+                                    rate_info = f"*Energy: RM {rates.get('Energy Rate', 0):.4f}/kWh (General tariff)*"
+                                
+                                st.markdown(rate_info)
+                                st.caption(f"Capacity: RM {rates.get('Capacity Rate', 0):.2f}/kW, Network: RM {rates.get('Network Rate', 0):.2f}/kW")
+                                
+                                # New tariff breakdown table
+                                new_breakdown = pd.DataFrame({
+                                    'Component': [
+                                        'Peak Energy (kWh)',
+                                        'Off-Peak Energy (kWh)',
+                                        'Peak Energy Cost (RM)',
+                                        'Off-Peak Energy Cost (RM)',
+                                        'AFA Cost (RM)',
+                                        'Demand Cost (RM)',
+                                        'Total Cost (RM)'
+                                    ],
+                                    'Value': [
+                                        f"{row['RP4 Peak Energy (kWh)']:,.0f}",
+                                        f"{row['RP4 Off-Peak Energy (kWh)']:,.0f}",
+                                        f"RM {row['RP4 Peak Cost (RM)']:,.2f}",
+                                        f"RM {row['RP4 Off-Peak Cost (RM)']:,.2f}",
+                                        f"RM {row['RP4 AFA Cost (RM)']:,.2f}",
+                                        f"RM {row['RP4 Demand Cost (RM)']:,.2f}",
+                                        f"RM {row['RP4 Total Cost (RM)']:,.2f}"
+                                    ]
+                                })
+                                
+                                # Style the new tariff table
+                                styled_new = new_breakdown.style.apply(
+                                    lambda x: ['background-color: rgba(78, 205, 196, 0.1)' if 'Total Cost' in x['Component'] 
+                                             else 'background-color: rgba(78, 205, 196, 0.05)' for _ in x], axis=1
+                                )
+                                st.dataframe(styled_new, use_container_width=True, hide_index=True)
+                                
+                                # New tariff metrics
+                                st.metric("Cost per kWh", f"RM {row['RP4 Cost/kWh (RM)']:.4f}")
+                                
+                                # Peak percentage (with note for General tariffs)
+                                if tariff_type == "General":
+                                    st.metric("Peak Energy %", "0.0% (General tariff)")
+                                    st.caption("⚠️ General tariffs don't have peak/off-peak split")
+                                else:
+                                    st.metric("Peak Energy %", f"{row['RP4 Peak %']:.1f}%")
+                            
+                            # Comparison summary for this month
+                            st.markdown("---")
+                            st.markdown("#### 📊 Month Comparison Summary")
+                            
+                            comp_col1, comp_col2, comp_col3 = st.columns(3)
+                            
+                            with comp_col1:
+                                energy_cost_diff = (row['RP4 Peak Cost (RM)'] + row['RP4 Off-Peak Cost (RM)']) - (row['Old Peak Cost (RM)'] + row['Old Off-Peak Cost (RM)'])
+                                st.metric("Energy Cost Difference", f"RM {energy_cost_diff:+,.2f}")
+                                
+                            with comp_col2:
+                                demand_cost_diff = row['RP4 Demand Cost (RM)'] - (row['Old ICPT Cost (RM)'] + row['Old MD Cost (RM)'])
+                                st.metric("Demand Cost Difference", f"RM {demand_cost_diff:+,.2f}")
+                                
+                            with comp_col3:
+                                peak_classification_diff = row['RP4 Peak %'] - row['Old Peak %']
+                                st.metric("Peak Classification Δ", f"{peak_classification_diff:+.1f}%")
+                            
+                            # Status indicator
+                            status = row['Status']
+                            if "Savings" in status:
+                                st.success(f"✅ {status}: Save RM {abs(row['Cost Difference (RM)']):,.2f} this month")
+                            elif "Higher" in status:
+                                st.error(f"📈 {status}: Additional RM {row['Cost Difference (RM)']:,.2f} this month")
+                            else:
+                                st.info(f"📊 {status}")
                     
                     # ===============================
                     # COMPONENT-WISE COMPARISON CHARTS

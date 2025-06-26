@@ -1,3 +1,57 @@
+/* Global font size increase by 3px */
+.main .block-container {
+  font-size: 17px !important; /* Streamlit default is ~14px */
+}
+
+/* Streamlit specific elements font size increases */
+.stMarkdown p, .stMarkdown li, .stMarkdown span {
+  font-size: 17px !important;
+}
+
+.stSelectbox label, .stFileUploader label, .stButton button {
+  font-size: 17px !important;
+}
+
+.stDataFrame, .stTable {
+  font-size: 17px !important;
+}
+
+.stMetric {
+  font-size: 17px !important;
+}
+
+.stMetric .metric-label {
+  font-size: 17px !important;
+}
+
+.stMetric .metric-value {
+  font-size: 23px !important; /* Larger for metric values */
+}
+
+h1, .stTitle {
+  font-size: 35px !important; /* H1 default ~32px */
+}
+
+h2 {
+  font-size: 28px !important; /* H2 default ~25px */
+}
+
+h3 {
+  font-size: 23px !important; /* H3 default ~20px */
+}
+
+.stTabs [data-baseweb="tab-list"] button {
+  font-size: 17px !important;
+}
+
+.stExpander {
+  font-size: 17px !important;
+}
+
+.stSuccess, .stInfo, .stWarning, .stError {
+  font-size: 17px !important;
+}
+
 /* Table styles for both light and dark mode */
 .cost-table {
   border-collapse: collapse;
@@ -9,6 +63,7 @@
   border: 1px solid #bbb;
   padding: 8px;
   text-align: right;
+  font-size: 17px; /* Increased by 3px from default */
 }
 .cost-table th {
   background-color: #f2f2f2;
