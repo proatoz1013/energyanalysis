@@ -1623,12 +1623,11 @@ with tabs[3]:
                                 rates = selected_new_tariff.get('Rates', {})
                                 
                                 if tariff_type == "TOU":
-                                    rate_info = f"*Peak: RM {rates.get('Peak Rate', 0):.4f}/kWh, Off-Peak: RM {rates.get('OffPeak Rate', 0):.4f}/kWh*"
+                                    rate_info = f"*Peak: RM {rates.get('Peak Rate', 0):.4f}/kWh, Off-Peak: RM {rates.get('OffPeak Rate', 0):.4f}/kWh, Capacity: RM {rates.get('Capacity Rate', 0):.2f}/kW, Network: RM {rates.get('Network Rate', 0):.2f}/kW*"
                                 else:
-                                    rate_info = f"*Energy: RM {rates.get('Energy Rate', 0):.4f}/kWh (General tariff)*"
+                                    rate_info = f"*Energy: RM {rates.get('Energy Rate', 0):.4f}/kWh (General tariff), Capacity: RM {rates.get('Capacity Rate', 0):.2f}/kW, Network: RM {rates.get('Network Rate', 0):.2f}/kW*"
                                 
                                 st.markdown(rate_info)
-                                st.caption(f"Capacity: RM {rates.get('Capacity Rate', 0):.2f}/kW, Network: RM {rates.get('Network Rate', 0):.2f}/kW")
                                 
                                 # New tariff breakdown table
                                 new_breakdown = pd.DataFrame({
