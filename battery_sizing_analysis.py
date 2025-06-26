@@ -1121,6 +1121,92 @@ def battery_sizing_analysis_page():
     else:
         st.warning("⚠️ **Limited effectiveness** - Many peak events occur outside RP4 peak periods")
     
+    # Detailed Peak Events Table with Filtering
+    st.subheader("📋 Detailed Peak Events Table")
+    
+    # Get the detailed events from the analysis
+    events_detail = peak_events_analysis['peak_events_above_target']
+    
+    if events_detail:
+        # Add filtering options similar to advanced energy analysis
+        st.markdown("#### Peak Event Filtering")
+        event_filter = st.radio(
+            "Select which events to display:",
+            options=["All", "Peak Period Only", "Off-Peak Period Only"],
+            index=0,
+            horizontal=True,
+            key="battery_event_filter_radio",
+            help="Filter events based on when they occur relative to RP4 MD peak hours (8 AM-10 PM, weekdays)"
+        )
+        
+        # Filter events based on selection
+        if event_filter == "Peak Period Only":
+            filtered_events = [e for e in events_detail if e['in_peak_period']]
+        elif event_filter == "Off-Peak Period Only":
+            filtered_events = [e for e in events_detail if not e['in_peak_period']]
+        else:
+            filtered_events = events_detail
+        
+        if filtered_events:
+            st.markdown(f"**Showing {len(filtered_events)} of {len(events_detail)} total events ({event_filter})**")
+            
+            # Create detailed events dataframe for display
+            events_display_data = []
+            for i, event in enumerate(filtered_events):
+                events_display_data.append({
+                    'Event #': i + 1,
+                    'Start Date': event['start_time'].strftime('%Y-%m-%d'),
+                    'Start Time': event['start_time'].strftime('%H:%M'),
+                    'Duration (hrs)': f"{event['duration_hours']:.2f}",
+                    'Peak Load (kW)': f"{event['peak_load']:.1f}",
+                    'Excess Power (kW)': f"{event['md_reduction_potential']:.1f}",
+                    'Energy to Shave (kWh)': f"{event['excess_energy'] * 0.25:.2f}",
+                    'Period Type': "Peak Period" if event['in_peak_period'] else "Off-Peak",
+                    'MD Impact': "High" if event['in_peak_period'] else "Low"
+                })
+            
+            df_events_display = pd.DataFrame(events_display_data)
+            
+            # Display the table with styling
+            st.dataframe(
+                df_events_display.style.apply(
+                    lambda row: ['background-color: rgba(255, 0, 0, 0.1)' if row['Period Type'] == 'Peak Period' 
+                                else 'background-color: rgba(0, 128, 0, 0.1)' for _ in row], 
+                    axis=1
+                ),
+                use_container_width=True,
+                height=400
+            )
+            
+            # Summary statistics for filtered events
+            total_energy_filtered = sum(e['excess_energy'] * 0.25 for e in filtered_events)
+            avg_duration_filtered = sum(e['duration_hours'] for e in filtered_events) / len(filtered_events)
+            max_excess_power_filtered = max(e['md_reduction_potential'] for e in filtered_events)
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Filtered Events", len(filtered_events))
+            with col2:
+                st.metric("Total Energy (kWh)", f"{total_energy_filtered:.1f}")
+            with col3:
+                st.metric("Avg Duration (hrs)", f"{avg_duration_filtered:.1f}")
+            with col4:
+                st.metric("Max Excess Power (kW)", f"{max_excess_power_filtered:.1f}")
+            
+            # Explanation for the table columns
+            st.info("""
+            **Table Column Explanations:**
+            - **Energy to Shave (kWh)**: Energy above target threshold for each individual event
+            - **Period Type**: Whether event occurs during MD peak hours (8 AM-10 PM, weekdays) 
+            - **MD Impact**: High for peak period events (affects MD charges), Low for off-peak events
+            - **Background Color**: Red for peak period events, Green for off-peak events
+            """)
+            
+        else:
+            st.warning(f"No events found for '{event_filter}' filter.")
+    else:
+        st.info("No peak events detected above the selected threshold.")
+
     # Enhanced Peak Events Visualizations
     st.subheader("📊 Peak Events Analysis & Visualization")
     
@@ -1651,113 +1737,294 @@ def battery_sizing_analysis_page():
             st.markdown("- Consider adjusting peak shaving target to match battery capabilities")
     
     # ===================================================================
-    # STEP 3: BATTERY SIZING RECOMMENDATIONS
+    # STEP 3: INTELLIGENT BATTERY SIZING
     # ===================================================================
-    st.header("🔋 Step 3: Battery Sizing for Optimal MD Reduction")
-    st.markdown("*Calculate required battery capacity and power rating based on peak events analysis*")
+    st.header("⚡ Step 3: Intelligent Battery Sizing")
+    st.markdown("*Smart sizing based on energy requirements with adjustable C-Rate for optimal performance*")
     
-    # User selects target reduction
-    st.subheader("🎯 Select Your Peak Shaving Target")
+    # Use the percentage-based target that was already selected earlier
+    target_threshold = target_demand_kw
+    md_reduction = current_max_demand - target_demand_kw
+    monthly_md_savings = potential_monthly_savings
     
-    col1, col2 = st.columns(2)
-    with col1:
-        # Dropdown for predefined targets
-        target_options = {
-            f"Top 1% ({demand_analysis['peak_events_analysis']['top_1_percent']['threshold_kw']:.1f} kW)": 'top_1_percent',
-            f"Top 5% ({demand_analysis['peak_events_analysis']['top_5_percent']['threshold_kw']:.1f} kW)": 'top_5_percent',
-            f"Top 10% ({demand_analysis['peak_events_analysis']['top_10_percent']['threshold_kw']:.1f} kW)": 'top_10_percent',
-            f"Top 20% ({demand_analysis['peak_events_analysis']['top_20_percent']['threshold_kw']:.1f} kW)": 'top_20_percent'
-        }
-        
-        selected_target_label = st.selectbox(
-            "Choose Peak Shaving Target",
-            options=list(target_options.keys()),
-            index=1,  # Default to Top 5%
-            help="Select the peak demand threshold you want to target"
-        )
-        
-        selected_target_key = target_options[selected_target_label]
-        selected_analysis = demand_analysis['peak_events_analysis'][selected_target_key]
+    # Energy-first intelligent battery sizing
+    st.subheader("🎯 Energy-First Intelligent Battery Sizing")
+    st.info("""
+    **New Smart Sizing Logic:**
+    1. **Total Energy Requirement** - Sum of ALL peak events above threshold (not just worst single event)
+    2. **C-Rate Selection** - Adjustable C-Rate determines optimal power/capacity balance  
+    3. **Safety Factor** - Add your preferred safety margin for real-world conditions
+    4. **Final Sizing** - Calculate both power (kW) and capacity (kWh) automatically
     
-    with col2:
-        # Allow custom target
-        use_custom = st.checkbox("Use Custom Target", help="Set a custom peak demand target")
-        if use_custom:
-            custom_target = st.slider(
-                "Custom Target (kW)",
-                min_value=float(df[power_col].mean()),
-                max_value=float(df[power_col].max()),
-                value=float(selected_analysis['threshold_kw']),
-                step=1.0
-            )
-            # Calculate custom analysis
-            md_reduction_custom = current_peak - custom_target
-            monthly_savings_custom = md_reduction_custom * demand_rate
-            
-            st.metric("MD Reduction", f"{md_reduction_custom:.1f} kW")
-            st.metric("Monthly Savings", f"RM {monthly_savings_custom:,.0f}")
-        else:
-            custom_target = None
+    **Key Change**: Battery is now sized to handle the **total cumulative energy** from all peak events,
+    ensuring it can manage the full energy requirement over time through strategic charging/discharging.
+    """)
     
-    # Determine final target
-    if use_custom:
-        target_threshold = custom_target
-        md_reduction = current_peak - target_threshold
-        monthly_md_savings = md_reduction * demand_rate
-        avg_duration = 2.0  # Default for custom
-    else:
-        target_threshold = selected_analysis['threshold_kw']
-        md_reduction = selected_analysis['md_reduction_potential_kw']
-        monthly_md_savings = md_reduction * demand_rate
-        avg_duration = selected_analysis['avg_duration_hours']
+    # Calculate base energy requirement from the custom analysis
+    # Use total energy requirement from ALL peak events (sum of all events above threshold)
+    total_energy_required_kwh = custom_analysis.get('total_excess_energy_kwh', md_reduction * 2.0)
+    worst_case_power = md_reduction
     
-    # Battery sizing calculations
-    st.subheader("⚡ Intelligent Battery Sizing")
+    # IMPORTANT CHANGE: Using total sum of all peak events, not just single worst-case event
+    # This ensures the battery can handle the cumulative energy requirement from all peak events
     
+    # Show base energy requirement
+    st.subheader("📊 Total Energy Requirement (All Peak Events)")
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        # Battery power rating
-        power_margin = st.slider(
-            "Power Rating Margin (%)",
-            min_value=10,
-            max_value=50,
-            value=20,
-            step=5,
-            help="Safety margin above required peak reduction"
+        st.metric(
+            "Total Energy Required",
+            f"{total_energy_required_kwh:.1f} kWh",
+            help="Total energy needed for peak shaving based on sum of ALL peak events above threshold"
         )
-        
-        suggested_power_kw = md_reduction * (1 + power_margin/100)
-        st.metric("Suggested Battery Power", f"{suggested_power_kw:.0f} kW")
     
     with col2:
-        # Battery capacity
-        duration_buffer = st.slider(
-            "Duration Buffer (%)",
-            min_value=25,
-            max_value=100,
-            value=50,
-            step=25,
-            help="Buffer above average peak duration"
+        st.metric(
+            "Peak Power Needed", 
+            f"{worst_case_power:.1f} kW",
+            help="Peak power reduction required during events"
         )
-        
-        suggested_capacity_kwh = suggested_power_kw * avg_duration * (1 + duration_buffer/100)
-        st.metric("Suggested Battery Capacity", f"{suggested_capacity_kwh:.0f} kWh")
     
     with col3:
-        # C-rate and autonomy
-        c_rate = suggested_power_kw / suggested_capacity_kwh
-        autonomy_hours = suggested_capacity_kwh / suggested_power_kw
+        estimated_duration = total_energy_required_kwh / worst_case_power if worst_case_power > 0 else 0
+        st.metric(
+            "Equivalent Duration",
+            f"{estimated_duration:.1f} hours", 
+            help="Equivalent hours at full power needed to cover all peak events"
+        )
+    
+    # User adjustable parameters
+    with st.expander("🔧 Intelligent Battery Sizing Parameters", expanded=True):
+        col1, col2 = st.columns(2)
         
-        st.metric("C-Rate", f"{c_rate:.2f}C")
-        st.metric("Autonomy", f"{autonomy_hours:.1f} hours")
+        with col1:
+            st.markdown("**⚡ C-Rate & Performance Settings**")
+            
+            # C-Rate selection (this is the key parameter)
+            c_rate = st.slider(
+                "C-Rate Selection",
+                min_value=0.1,
+                max_value=2.0,
+                value=0.9,
+                step=0.1,
+                help="C-Rate determines power capability: Power = Capacity × C-Rate"
+            )
+            
+            # C-Rate explanation
+            if c_rate <= 0.5:
+                c_rate_desc = "🟢 Conservative (Long Duration, Lower Cost)"
+                c_rate_app = "Long Duration Storage"
+            elif c_rate <= 1.0:
+                c_rate_desc = "🟡 Balanced (Standard Applications)"  
+                c_rate_app = "Commercial Peak Shaving"
+            else:
+                c_rate_desc = "🔴 Aggressive (High Power, Premium Cost)"
+                c_rate_app = "High Power Applications"
+            
+            st.caption(f"**{c_rate_desc}**")
+            st.caption(f"*Application: {c_rate_app}*")
+            
+            # Round-trip efficiency
+            rte = st.slider(
+                "Round-Trip Efficiency (%)",
+                min_value=80,
+                max_value=95,
+                value=90,
+                step=1,
+                help="Battery system efficiency (charge/discharge losses)"
+            ) / 100
+            
+        with col2:
+            st.markdown("**🔋 Safety Factor Settings**")
+            
+            # Safety factor for battery sizing
+            safety_factor = st.slider(
+                "Battery Safety Factor (%)",
+                min_value=10,
+                max_value=50,
+                value=20,
+                step=5,
+                help="Safety margin for degradation, unexpected events, and performance buffer"
+            ) / 100
+            
+            # Show what the safety factor covers
+            st.caption("""
+            **Safety Factor Covers:**
+            - Battery degradation over time
+            - Unexpected peak events  
+            - Temperature effects
+            - Depth of discharge limits
+            """)
+    
+    # Real-time intelligent sizing calculations
+    st.subheader("🧠 Intelligent Sizing Calculations")
+    
+    # Step 1: Adjust energy requirement for efficiency losses
+    adjusted_energy_kwh = total_energy_required_kwh / rte
+    
+    # Step 2: Apply safety factor to get base capacity
+    base_capacity_kwh = adjusted_energy_kwh * (1 + safety_factor)
+    
+    # Step 3: Calculate power rating from C-Rate
+    # Power = Capacity × C-Rate
+    calculated_power_kw = base_capacity_kwh * c_rate
+    
+    # Step 4: Check if calculated power meets minimum requirement
+    min_power_needed = worst_case_power
+    
+    if calculated_power_kw < min_power_needed:
+        # If C-Rate gives insufficient power, increase capacity to meet power requirement
+        required_capacity_for_power = min_power_needed / c_rate
+        final_capacity_kwh = max(base_capacity_kwh, required_capacity_for_power)
+        final_power_kw = final_capacity_kwh * c_rate
+        sizing_limited_by = "Power Requirement"
+    else:
+        # C-Rate calculation provides sufficient power
+        final_capacity_kwh = base_capacity_kwh
+        final_power_kw = calculated_power_kw
+        sizing_limited_by = "Energy Requirement"
+    
+    # Display results in metrics
+    st.markdown("**📊 Final Battery Specifications:**")
+    metrics_col1, metrics_col2, metrics_col3, metrics_col4 = st.columns(4)
+    
+    with metrics_col1:
+        st.metric(
+            "Battery Capacity",
+            f"{final_capacity_kwh:.1f} kWh",
+            delta=f"+{((final_capacity_kwh/worst_case_kwh)-1)*100:.0f}% vs min",
+            help="Final battery capacity with safety factor"
+        )
+    
+    with metrics_col2:
+        st.metric(
+            "Battery Power",
+            f"{final_power_kw:.1f} kW",
+            delta=f"C-Rate: {c_rate:.1f}",
+            help="Battery power rating based on C-Rate"
+        )
+    
+    with metrics_col3:
+        max_discharge_duration = final_capacity_kwh / final_power_kw
+        st.metric(
+            "Max Duration",
+            f"{max_discharge_duration:.1f} hours",
+            delta="At full power",
+            help="How long battery can discharge at full power"
+        )
+    
+    with metrics_col4:
+        energy_utilization = (total_energy_required_kwh / final_capacity_kwh) * 100
+        st.metric(
+            "Energy Utilization",
+            f"{energy_utilization:.1f}%",
+            delta="Peak event",
+            help="Capacity utilization during worst-case event"
+        )
+    
+    # Detailed breakdown
+    with st.expander("🔍 Detailed Sizing Breakdown", expanded=False):
+        col1, col2 = st.columns(2)
         
-        if c_rate > 1:
-            st.warning("⚠️ High C-rate - consider increasing capacity")
-        elif c_rate < 0.3:
-            st.info("💡 Conservative C-rate - could optimize capacity")
+        with col1:
+            st.markdown("**Step-by-Step Calculation:**")
+            st.write(f"1. **Base Energy Need**: {total_energy_required_kwh:.1f} kWh (Sum of all peak events)")
+            st.write(f"2. **Efficiency Adjusted**: {adjusted_energy_kwh:.1f} kWh (÷{rte:.0%})")
+            st.write(f"3. **With Safety Factor**: {base_capacity_kwh:.1f} kWh (+{safety_factor:.0%})")
+            st.write(f"4. **Power from C-Rate**: {calculated_power_kw:.1f} kW (×{c_rate:.1f})")
+            st.write(f"5. **Final Capacity**: {final_capacity_kwh:.1f} kWh")
+            st.write(f"6. **Final Power**: {final_power_kw:.1f} kW")
+            
+        with col2:
+            st.markdown("**Design Verification:**")
+            st.write(f"• **Sizing Limited By**: {sizing_limited_by}")
+            st.write(f"• **Min Power Needed**: {min_power_needed:.1f} kW")
+            st.write(f"• **Power Margin**: {((final_power_kw/min_power_needed)-1)*100:.0f}%")
+            st.write(f"• **Energy Margin**: {((final_capacity_kwh/total_energy_required_kwh)-1)*100:.0f}%")
+            st.write(f"• **Safety Factor**: {safety_factor:.0%}")
+            st.write(f"• **Round-Trip Efficiency**: {rte:.0%}")
+    
+    # C-Rate impact analysis
+    st.subheader("📈 C-Rate Impact Analysis")
+    
+    # Create comparison table for different C-Rates
+    c_rates_comparison = [0.3, 0.5, 0.7, 0.9, 1.2, 1.5, 2.0]
+    comparison_data = []
+    
+    for cr in c_rates_comparison:
+        # Calculate capacity and power for this C-Rate
+        comp_power = base_capacity_kwh * cr
+        comp_capacity = base_capacity_kwh
+        
+        # Check if power meets minimum requirement
+        if comp_power < min_power_needed:
+            comp_capacity = min_power_needed / cr
+            comp_power = comp_capacity * cr
+            limited_by = "Power"
         else:
-            st.success("✅ Optimal C-rate")
+            limited_by = "Energy"
+        
+        duration = comp_capacity / comp_power
+        relative_cost = cr * 100  # Higher C-Rate = higher relative cost
+        
+        comparison_data.append({
+            'C-Rate': f"{cr:.1f}",
+            'Capacity (kWh)': f"{comp_capacity:.0f}",
+            'Power (kW)': f"{comp_power:.0f}",
+            'Duration (h)': f"{duration:.1f}",
+            'Limited By': limited_by,
+            'Relative Cost': f"{relative_cost:.0f}%",
+            'Selected': "✅" if abs(cr - c_rate) < 0.05 else ""
+        })
+    
+    df_c_rate = pd.DataFrame(comparison_data)
+    st.dataframe(df_c_rate, use_container_width=True)
+    
+    # Show final recommendations
+    annual_md_savings = monthly_md_savings * 12
+    st.success(f"""
+    **🏆 Final Intelligent Battery Sizing Recommendation:**
+    
+    **Battery Specifications:**
+    • **Capacity**: {final_capacity_kwh:.1f} kWh  
+    • **Power Rating**: {final_power_kw:.1f} kW
+    • **C-Rate**: {c_rate:.1f} 
+    • **Safety Factor**: {safety_factor:.0%}
+    
+    **Performance Prediction:**
+    • **Peak Reduction**: {md_reduction:.1f} kW
+    • **Annual MD Savings**: RM {annual_md_savings:,.0f}
+    • **Total Energy Coverage**: {energy_utilization:.1f}% of capacity used for all peak events
+    • **Max Discharge Duration**: {max_discharge_duration:.1f} hours
+    
+    **Design Notes:**
+    • Sizing based on: Total sum of ALL peak events (not single worst-case)
+    • Sizing limited by: {sizing_limited_by}
+    • Includes {safety_factor:.0%} safety margin for real-world conditions
+    • {rte:.0%} round-trip efficiency accounted for
+    """)
+    
+    # Economic preview
+    if demand_rate > 0:
+        # Rough battery cost estimation (can be refined later)
+        estimated_battery_cost_per_kwh = 800  # RM per kWh (rough estimate)
+        estimated_total_cost = final_capacity_kwh * estimated_battery_cost_per_kwh
+        simple_payback = estimated_total_cost / annual_md_savings if annual_md_savings > 0 else float('inf')
+        
+        st.info(f"""
+        **💰 Quick Economic Preview:**
+        
+        • **Estimated Cost**: RM {estimated_total_cost:,.0f} ({estimated_battery_cost_per_kwh:.0f}/kWh × {final_capacity_kwh:.0f} kWh)
+        • **Annual Savings**: RM {annual_md_savings:,.0f} 
+        • **Simple Payback**: {simple_payback:.1f} years
+        
+        *Note: Detailed cost analysis and ROI calculations in Step 4 below.*
+        """)
+    
+    # Update variables for downstream calculations
+    suggested_power_kw = final_power_kw
+    suggested_capacity_kwh = final_capacity_kwh
     
     # ===================================================================
     # STEP 4: COST ESTIMATION
