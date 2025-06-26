@@ -5,6 +5,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from tnb_tariff_comparison import show as show_tnb_tariff_comparison
 from advanced_energy_analysis import show as show_advanced_energy_analysis
+from battery_sizing_analysis import battery_sizing_analysis_page
 
 st.set_page_config(page_title="Load Profile Analysis", layout="wide")
 
@@ -64,7 +65,7 @@ This tool provides comprehensive analysis of:
 - Demand shaving analysis
 """)
 
-tabs = st.tabs(["TNB New Tariff Comparison", "Load Profile Analysis", "Advanced Energy Analysis", "Monthly Rate Impact Analysis"])
+tabs = st.tabs(["TNB New Tariff Comparison", "Load Profile Analysis", "Advanced Energy Analysis", "Monthly Rate Impact Analysis", "🔋 Battery Sizing Analysis"])
 
 with tabs[1]:
     st.title("Energy Analysis Dashboard")
@@ -141,6 +142,12 @@ with tabs[1]:
             df["Parsed Timestamp"] = pd.to_datetime(df[timestamp_col], errors="coerce")
             df = df.dropna(subset=["Parsed Timestamp"])
             df = df.set_index("Parsed Timestamp")
+            
+            # Store processed data in session state for battery sizing analysis
+            st.session_state['uploaded_file'] = uploaded_file
+            st.session_state['processed_df'] = df
+            st.session_state['power_column'] = power_col
+            st.session_state['timestamp_column'] = timestamp_col
 
             # === DATA INTERVAL DETECTION ===
             st.subheader("📊 Data Interval Detection")
@@ -1932,3 +1939,6 @@ with tabs[3]:
             - Multiple months of data will provide better insights
             - Include public holidays for accurate RP4 peak/off-peak calculation
             """)
+
+with tabs[4]:
+    battery_sizing_analysis_page()

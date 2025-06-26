@@ -140,14 +140,21 @@ def show():
             end_time = df["Parsed Timestamp"].max()
             col1.metric("Start Time", start_time.strftime("%Y-%m-%d %H:%M"))
             col2.metric("End Time", end_time.strftime("%Y-%m-%d %H:%M"))
-            # Calculate total kWh
-            # Assume power_col is in kW, and data is at regular intervals (e.g., 15-min, 30-min, 1-hour)
+            # Calculate total kWh using proper interval detection
+            # Detect data interval from the entire dataset using mode (most common interval)
             df = df.sort_values("Parsed Timestamp")
             if len(df) > 1:
-                # Calculate time delta in hours between rows
-                time_deltas = df["Parsed Timestamp"].diff().dt.total_seconds().div(3600).fillna(0)
-                # Energy per interval = kW * hours
-                interval_kwh = df[power_col] * time_deltas
+                time_diffs = df["Parsed Timestamp"].diff().dropna()
+                if len(time_diffs) > 0:
+                    # Get the most common time interval (mode)
+                    most_common_interval = time_diffs.mode()[0] if not time_diffs.mode().empty else pd.Timedelta(minutes=15)
+                    interval_hours = most_common_interval.total_seconds() / 3600
+                else:
+                    # Fallback to 15 minutes if we can't determine interval
+                    interval_hours = 0.25
+                
+                # Energy per interval = kW * consistent interval hours
+                interval_kwh = df[power_col] * interval_hours
                 total_kwh = interval_kwh.sum()
             else:
                 total_kwh = 0
@@ -161,10 +168,24 @@ def show():
                 col3.metric("Peak Demand (kW, Peak Period Only)", "N/A")
         # --- Calculate % of peak and off-peak period and show as bar chart ---
         is_peak = df["Parsed Timestamp"].apply(lambda ts: is_peak_rp4(ts, holidays))
-        # Calculate kWh for peak and off-peak
+        # Calculate kWh for peak and off-peak using consistent interval detection
         df = df.sort_values("Parsed Timestamp")
-        time_deltas = df["Parsed Timestamp"].diff().dt.total_seconds().div(3600).fillna(0)
-        interval_kwh = df[power_col] * time_deltas
+        
+        # Use the same interval detection as above for consistency
+        if len(df) > 1:
+            time_diffs = df["Parsed Timestamp"].diff().dropna()
+            if len(time_diffs) > 0:
+                # Get the most common time interval (mode)
+                most_common_interval = time_diffs.mode()[0] if not time_diffs.mode().empty else pd.Timedelta(minutes=15)
+                interval_hours = most_common_interval.total_seconds() / 3600
+            else:
+                # Fallback to 15 minutes if we can't determine interval
+                interval_hours = 0.25
+            
+            interval_kwh = df[power_col] * interval_hours
+        else:
+            interval_kwh = df[power_col] * 0.25  # Fallback
+            
         peak_kwh = interval_kwh[is_peak].sum()
         offpeak_kwh = interval_kwh[~is_peak].sum()
         total_kwh = interval_kwh.sum()
