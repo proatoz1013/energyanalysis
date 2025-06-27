@@ -1893,7 +1893,7 @@ def battery_sizing_analysis_page():
         st.metric(
             "Battery Capacity",
             f"{final_capacity_kwh:.1f} kWh",
-            delta=f"+{((final_capacity_kwh/worst_case_kwh)-1)*100:.0f}% vs min",
+            delta=f"+{((final_capacity_kwh/total_energy_required_kwh)-1)*100:.0f}% vs min",
             help="Final battery capacity with safety factor"
         )
     
