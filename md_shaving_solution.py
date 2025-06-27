@@ -586,21 +586,57 @@ def _perform_md_shaving_analysis(df, power_col, selected_tariff, holidays, targe
     network_rate = selected_tariff.get('Rates', {}).get('Network Rate', 0)
     total_md_rate = capacity_rate + network_rate
     
+    # Detect peak events first to get actual MD cost impact
+    event_summaries = _detect_peak_events(df, power_col, target_demand, total_md_rate, interval_hours)
+    
+    # Calculate actual potential saving from maximum MD cost impact
+    max_md_cost_impact = 0
+    max_energy_to_shave_peak_only = 0
+    max_md_excess = 0
+    
+    if event_summaries:
+        max_md_cost_impact = max(event['MD Cost Impact (RM)'] for event in event_summaries)
+        max_energy_to_shave_peak_only = max(event['Energy to Shave (Peak Period Only)'] for event in event_summaries)
+        max_md_excess = max(event['MD Excess (kW)'] for event in event_summaries if event['MD Excess (kW)'] > 0)
+    
     # Display target and potential savings
     col1, col2, col3 = st.columns(3)
     col1.metric("Current Max Demand", f"{fmt(overall_max_demand)} kW")
     col2.metric("Target Max Demand", f"{fmt(target_demand)} kW")
     if total_md_rate > 0:
-        potential_saving = (overall_max_demand - target_demand) * total_md_rate
-        col3.metric("Potential Monthly Saving", f"RM {fmt(potential_saving)}")
+        col3.metric("Potential Monthly Saving", f"RM {fmt(max_md_cost_impact)}")
     else:
         col3.metric("MD Rate", "RM 0.00/kW")
         st.warning("No MD savings possible with this tariff")
         return interval_hours
     
-    # Detect peak events
-    event_summaries = _detect_peak_events(df, power_col, target_demand, total_md_rate, interval_hours)
+    # Display battery sizing recommendations
+    if event_summaries:
+        st.markdown("### 🔋 Recommended Battery Sizing")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric(
+                "Battery Capacity (Peak Period)", 
+                f"{fmt(max_energy_to_shave_peak_only)} kWh",
+                help="Maximum energy to shave during peak period only (2PM-10PM weekdays)"
+            )
+        with col2:
+            st.metric(
+                "Battery Power Rating", 
+                f"{fmt(max_md_excess)} kW",
+                help="Maximum MD excess power that needs to be shaved"
+            )
+        
+        st.info(f"""
+        💡 **Battery Sizing Logic:**
+        - **Capacity**: Based on worst single event energy during MD peak hours ({fmt(max_energy_to_shave_peak_only)} kWh)
+        - **Power Rating**: Based on maximum MD excess demand ({fmt(max_md_excess)} kW)
+        - These values represent the minimum battery specifications needed for effective MD shaving
+        """)
+    else:
+        st.info("No peak events detected - no battery sizing recommendations available")
     
+    # Use the already detected peak events for analysis
     if event_summaries:
         # Display peak event results
         _display_peak_event_results(df, power_col, event_summaries, target_demand, 
@@ -610,6 +646,23 @@ def _perform_md_shaving_analysis(df, power_col, selected_tariff, holidays, targe
         if show_threshold_sensitivity:
             # Display threshold sensitivity analysis
             _display_threshold_analysis(df, power_col, overall_max_demand, total_md_rate, interval_hours)
+        
+        # Battery Analysis Section
+        st.markdown("---")
+        st.markdown("## 🔋 Battery Energy Storage System (BESS) Analysis")
+        
+        # Get battery analysis parameters from sidebar
+        battery_params = _get_battery_parameters(event_summaries)
+        
+        # Perform battery sizing and analysis
+        battery_analysis = _perform_battery_analysis(
+            df, power_col, event_summaries, target_demand, 
+            interval_hours, battery_params, total_md_rate
+        )
+        
+        # Display battery results
+        _display_battery_analysis(battery_analysis, battery_params, target_demand)
+        
     else:
         st.success("🎉 No peak events detected above target demand!")
         st.info(f"Current demand profile is already within target limit of {fmt(target_demand)} kW")
@@ -1078,3 +1131,981 @@ def _display_threshold_analysis(df, power_col, overall_max_demand, total_md_rate
                 st.success(f"**Potential Savings:** RM {fmt(best_row['Monthly MD Saving (RM)'])}/month")
                 st.info(f"• Difficulty level: {best_row['Difficulty Level']}")
                 st.info(f"• Annual savings: RM {fmt(best_row['Monthly MD Saving (RM)'] * 12)}")
+                
+
+# ============================================================================
+# BATTERY ENERGY STORAGE SYSTEM (BESS) ANALYSIS FUNCTIONS
+# ============================================================================
+
+def _get_battery_parameters(event_summaries=None):
+    """Get battery system parameters from sidebar."""
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 🔋 Battery System Parameters")
+    
+    # Calculate defaults from event summaries
+    default_capacity = 500
+    default_power = 250
+    
+    if event_summaries:
+        # Get maximum energy to shave (peak period only) and maximum MD excess
+        max_energy_peak_only = max(event.get('Energy to Shave (Peak Period Only)', 0) for event in event_summaries)
+        max_md_excess = max(event.get('MD Excess (kW)', 0) for event in event_summaries if event.get('MD Excess (kW)', 0) > 0)
+        
+        if max_energy_peak_only > 0:
+            default_capacity = max_energy_peak_only
+        if max_md_excess > 0:
+            default_power = max_md_excess
+    
+    with st.sidebar.expander("⚙️ BESS Configuration", expanded=False):
+        battery_params = {}
+        
+        # Battery Technology
+        battery_params['technology'] = st.selectbox(
+            "Battery Technology",
+            ["Lithium-ion (Li-ion)", "Lithium Iron Phosphate (LiFePO4)", "Sodium-ion"],
+            index=1,  # Default to LiFePO4
+            help="Different battery technologies have different costs and characteristics"
+        )
+        
+        # System Sizing Approach
+        battery_params['sizing_approach'] = st.selectbox(
+            "Sizing Approach",
+            ["Auto-size for Peak Events", "Manual Capacity", "Energy Duration-based"],
+            help="Choose how to determine the battery capacity"
+        )
+        
+        if battery_params['sizing_approach'] == "Manual Capacity":
+            st.markdown("**Manual Battery Sizing with Safety Factors**")
+            
+            # Capacity Safety Factor
+            capacity_safety_factor = st.slider(
+                "Capacity Safety Factor (%)", 
+                min_value=0, 
+                max_value=100, 
+                value=20, 
+                step=5,
+                help="Additional capacity buffer above minimum requirement"
+            )
+            
+            # Power Safety Factor
+            power_safety_factor = st.slider(
+                "Power Rating Safety Factor (%)", 
+                min_value=0, 
+                max_value=100, 
+                value=15, 
+                step=5,
+                help="Additional power rating buffer above minimum requirement"
+            )
+            
+            # Calculate suggested values with safety factors
+            suggested_capacity = default_capacity * (1 + capacity_safety_factor / 100)
+            suggested_power = default_power * (1 + power_safety_factor / 100)
+            
+            # Display recommendations
+            st.info(f"""
+            **📊 Sizing Recommendations:**
+            - **Base Capacity**: {default_capacity:.0f} kWh (from peak events)
+            - **With {capacity_safety_factor}% safety**: {suggested_capacity:.0f} kWh
+            - **Base Power**: {default_power:.0f} kW (from MD excess)
+            - **With {power_safety_factor}% safety**: {suggested_power:.0f} kW
+            """)
+            
+            battery_params['manual_capacity_kwh'] = st.number_input(
+                "Battery Capacity (kWh)", 
+                min_value=10, 
+                max_value=10000, 
+                value=int(suggested_capacity), 
+                step=10,
+                help=f"Suggested: {suggested_capacity:.0f} kWh (includes {capacity_safety_factor}% safety factor)"
+            )
+            battery_params['manual_power_kw'] = st.number_input(
+                "Battery Power Rating (kW)", 
+                min_value=10, 
+                max_value=5000, 
+                value=int(suggested_power), 
+                step=10,
+                help=f"Suggested: {suggested_power:.0f} kW (includes {power_safety_factor}% safety factor)"
+            )
+            
+            # Store safety factors for reference
+            battery_params['capacity_safety_factor'] = capacity_safety_factor
+            battery_params['power_safety_factor'] = power_safety_factor
+            
+        elif battery_params['sizing_approach'] == "Energy Duration-based":
+            # Duration-based with safety factor
+            st.markdown("**Duration-based Sizing with Safety Factor**")
+            
+            duration_safety_factor = st.slider(
+                "Duration Safety Factor (%)", 
+                min_value=0, 
+                max_value=100, 
+                value=25, 
+                step=5,
+                help="Additional duration buffer for extended peak events"
+            )
+            
+            battery_params['duration_hours'] = st.number_input(
+                "Discharge Duration (hours)", 
+                min_value=0.5, 
+                max_value=8.0, 
+                value=2.0, 
+                step=0.5,
+                help="How many hours the battery should provide peak shaving"
+            )
+            
+            battery_params['duration_safety_factor'] = duration_safety_factor
+            
+        else:  # Auto-size for Peak Events
+            st.markdown("**Auto-sizing Safety Factors**")
+            
+            auto_capacity_safety = st.slider(
+                "Auto-sizing Capacity Safety (%)", 
+                min_value=10, 
+                max_value=50, 
+                value=20, 
+                step=5,
+                help="Safety margin for auto-calculated battery capacity"
+            )
+            
+            auto_power_safety = st.slider(
+                "Auto-sizing Power Safety (%)", 
+                min_value=10, 
+                max_value=50, 
+                value=15, 
+                step=5,
+                help="Safety margin for auto-calculated power rating"
+            )
+            
+            battery_params['auto_capacity_safety'] = auto_capacity_safety
+            battery_params['auto_power_safety'] = auto_power_safety
+        
+        # Battery System Parameters
+        st.markdown("**System Specifications**")
+        battery_params['depth_of_discharge'] = st.slider(
+            "Depth of Discharge (%)", 
+            min_value=70, 
+            max_value=95, 
+            value=85, 
+            step=5,
+            help="Maximum usable capacity (affects battery life)"
+        )
+        
+        battery_params['round_trip_efficiency'] = st.slider(
+            "Round-trip Efficiency (%)", 
+            min_value=85, 
+            max_value=98, 
+            value=92, 
+            step=1,
+            help="Energy efficiency of charge/discharge cycle"
+        )
+        
+        battery_params['c_rate'] = st.slider(
+            "C-Rate (Charge/Discharge)", 
+            min_value=0.2, 
+            max_value=2.0, 
+            value=0.5, 
+            step=0.1,
+            help="Maximum charge/discharge rate relative to capacity"
+        )
+        
+        # Financial Parameters
+        st.markdown("**Financial Parameters**")
+        battery_params['capex_per_kwh'] = st.number_input(
+            "Battery Cost (RM/kWh)", 
+            min_value=500, 
+            max_value=3000, 
+            value=1200, 
+            step=50,
+            help="Capital cost per kWh of battery capacity"
+        )
+        
+        battery_params['pcs_cost_per_kw'] = st.number_input(
+            "Power Conversion System (RM/kW)", 
+            min_value=200, 
+            max_value=1000, 
+            value=400, 
+            step=25,
+            help="Cost of inverter/PCS per kW of power rating"
+        )
+        
+        battery_params['installation_factor'] = st.slider(
+            "Installation & Integration Factor", 
+            min_value=1.1, 
+            max_value=2.0, 
+            value=1.4, 
+            step=0.1,
+            help="Multiplier for installation, civil works, and system integration"
+        )
+        
+        battery_params['opex_percent'] = st.slider(
+            "Annual O&M (% of CAPEX)", 
+            min_value=1.0, 
+            max_value=8.0, 
+            value=3.0, 
+            step=0.5,
+            help="Annual operation and maintenance cost"
+        )
+        
+        battery_params['battery_life_years'] = st.number_input(
+            "Battery Life (years)", 
+            min_value=5, 
+            max_value=25, 
+            value=15, 
+            step=1,
+            help="Expected operational life of the battery system"
+        )
+        
+        battery_params['discount_rate'] = st.slider(
+            "Discount Rate (%)", 
+            min_value=3.0, 
+            max_value=15.0, 
+            value=8.0, 
+            step=0.5,
+            help="Discount rate for NPV calculations"
+        )
+    
+    return battery_params
+
+
+def _perform_battery_analysis(df, power_col, event_summaries, target_demand, 
+                             interval_hours, battery_params, total_md_rate):
+    """Perform comprehensive battery analysis."""
+    
+    # Calculate required battery capacity and power
+    battery_sizing = _calculate_battery_sizing(
+        event_summaries, target_demand, interval_hours, battery_params
+    )
+    
+    # Calculate battery costs
+    battery_costs = _calculate_battery_costs(battery_sizing, battery_params)
+    
+    # Simulate battery operation
+    battery_simulation = _simulate_battery_operation(
+        df, power_col, target_demand, battery_sizing, battery_params, interval_hours
+    )
+    
+    # Calculate financial metrics
+    financial_analysis = _calculate_financial_metrics(
+        battery_costs, event_summaries, total_md_rate, battery_params
+    )
+    
+    return {
+        'sizing': battery_sizing,
+        'costs': battery_costs,
+        'simulation': battery_simulation,
+        'financial': financial_analysis,
+        'params': battery_params
+    }
+
+
+def _calculate_battery_sizing(event_summaries, target_demand, interval_hours, battery_params):
+    """Calculate optimal battery sizing based on peak events."""
+    
+    if battery_params['sizing_approach'] == "Manual Capacity":
+        return {
+            'capacity_kwh': battery_params['manual_capacity_kwh'],
+            'power_rating_kw': battery_params['manual_power_kw'],
+            'sizing_method': f"Manual Configuration (Capacity: +{battery_params.get('capacity_safety_factor', 0)}% safety, Power: +{battery_params.get('power_safety_factor', 0)}% safety)",
+            'safety_factors_applied': True
+        }
+    
+    # Calculate energy requirements from peak events using the correct event data
+    total_energy_to_shave = 0
+    max_power_requirement = 0
+    worst_event_energy_peak_only = 0
+    max_md_excess = 0
+    
+    for event in event_summaries:
+        # Use Energy to Shave (Peak Period Only) for capacity sizing
+        energy_kwh_peak_only = event.get('Energy to Shave (Peak Period Only)', 0)
+        # Use MD Excess (kW) for power sizing
+        md_excess_power = event.get('MD Excess (kW)', 0)
+        
+        total_energy_to_shave += energy_kwh_peak_only
+        worst_event_energy_peak_only = max(worst_event_energy_peak_only, energy_kwh_peak_only)
+        max_md_excess = max(max_md_excess, md_excess_power)
+    
+    if battery_params['sizing_approach'] == "Auto-size for Peak Events":
+        # Size based on worst-case event during peak periods only
+        if event_summaries and worst_event_energy_peak_only > 0:
+            required_capacity = worst_event_energy_peak_only / (battery_params['depth_of_discharge'] / 100)
+            required_power = max_md_excess
+            
+            # Apply auto-sizing safety factors
+            capacity_safety = battery_params.get('auto_capacity_safety', 20) / 100
+            power_safety = battery_params.get('auto_power_safety', 15) / 100
+            
+            required_capacity *= (1 + capacity_safety)
+            required_power *= (1 + power_safety)
+            
+            sizing_method = f"Auto-sized for worst MD peak event ({worst_event_energy_peak_only:.1f} kWh + {battery_params.get('auto_capacity_safety', 20)}% safety)"
+        else:
+            required_capacity = 100  # Minimum
+            required_power = 50
+            sizing_method = "Default minimum sizing (no peak events detected)"
+            
+    else:  # Energy Duration-based
+        required_power = max_md_excess
+        required_capacity = required_power * battery_params['duration_hours']
+        required_capacity = required_capacity / (battery_params['depth_of_discharge'] / 100)
+        
+        # Apply duration safety factor
+        duration_safety = battery_params.get('duration_safety_factor', 25) / 100
+        required_capacity *= (1 + duration_safety)
+        
+        sizing_method = f"Duration-based ({battery_params['duration_hours']} hours + {battery_params.get('duration_safety_factor', 25)}% safety)"
+    
+    # Apply C-rate constraints
+    c_rate_capacity = required_power / battery_params.get('c_rate', 0.5)
+    final_capacity = max(required_capacity, c_rate_capacity)
+    
+    return {
+        'capacity_kwh': final_capacity,
+        'power_rating_kw': required_power,
+        'required_energy_kwh': total_energy_to_shave,
+        'worst_event_energy_peak_only': worst_event_energy_peak_only,
+        'max_md_excess': max_md_excess,
+        'sizing_method': sizing_method,
+        'c_rate_limited': final_capacity > required_capacity,
+        'safety_factors_applied': True
+    }
+
+
+def _calculate_battery_costs(battery_sizing, battery_params):
+    """Calculate comprehensive battery system costs."""
+    
+    capacity_kwh = battery_sizing['capacity_kwh']
+    power_kw = battery_sizing['power_rating_kw']
+    
+    # CAPEX Components
+    battery_cost = capacity_kwh * battery_params['capex_per_kwh']
+    pcs_cost = power_kw * battery_params['pcs_cost_per_kw']
+    
+    # Base system cost
+    base_system_cost = battery_cost + pcs_cost
+    
+    # Total installed cost (including installation, civil works, etc.)
+    total_capex = base_system_cost * battery_params['installation_factor']
+    
+    # Annual OPEX
+    annual_opex = total_capex * (battery_params['opex_percent'] / 100)
+    
+    # Total lifecycle cost
+    total_lifecycle_opex = annual_opex * battery_params['battery_life_years']
+    total_lifecycle_cost = total_capex + total_lifecycle_opex
+    
+    return {
+        'battery_cost': battery_cost,
+        'pcs_cost': pcs_cost,
+        'base_system_cost': base_system_cost,
+        'total_capex': total_capex,
+        'annual_opex': annual_opex,
+        'total_lifecycle_opex': total_lifecycle_opex,
+        'total_lifecycle_cost': total_lifecycle_cost,
+        'cost_per_kwh': total_capex / capacity_kwh,
+        'cost_per_kw': total_capex / power_kw
+    }
+
+
+def _simulate_battery_operation(df, power_col, target_demand, battery_sizing, battery_params, interval_hours):
+    """Simulate battery charge/discharge operation."""
+    
+    # Create simulation dataframe
+    df_sim = df[[power_col]].copy()
+    df_sim['Original_Demand'] = df_sim[power_col]
+    df_sim['Target_Demand'] = target_demand
+    df_sim['Excess_Demand'] = (df_sim[power_col] - target_demand).clip(lower=0)
+    
+    # Battery state variables
+    battery_capacity = battery_sizing['capacity_kwh']
+    usable_capacity = battery_capacity * (battery_params['depth_of_discharge'] / 100)
+    max_power = battery_sizing['power_rating_kw']
+    efficiency = battery_params['round_trip_efficiency'] / 100
+    
+    # Initialize battery state
+    soc = np.zeros(len(df_sim))  # State of Charge in kWh
+    soc_percent = np.zeros(len(df_sim))  # SOC as percentage
+    battery_power = np.zeros(len(df_sim))  # Positive = discharge, Negative = charge
+    net_demand = df_sim[power_col].copy()
+    
+    # Simple charging strategy: charge during low demand, discharge during high demand
+    # For this simulation, we'll focus on peak shaving
+    
+    for i in range(len(df_sim)):
+        current_demand = df_sim[power_col].iloc[i]
+        excess = max(0, current_demand - target_demand)
+        
+        if excess > 0:  # Need to discharge battery
+            # Calculate required discharge power
+            required_discharge = min(excess, max_power)
+            # Check if battery has enough energy
+            available_energy = soc[i-1] if i > 0 else usable_capacity * 0.8  # Start at 80% SOC
+            max_discharge_energy = available_energy
+            max_discharge_power = min(max_discharge_energy / interval_hours, required_discharge)
+            
+            actual_discharge = max_discharge_power
+            battery_power[i] = actual_discharge
+            soc[i] = (soc[i-1] if i > 0 else usable_capacity * 0.8) - actual_discharge * interval_hours
+            net_demand.iloc[i] = current_demand - actual_discharge
+            
+        else:  # Can charge battery if there's room and low demand
+            if i > 0:
+                soc[i] = soc[i-1]
+            else:
+                soc[i] = usable_capacity * 0.8
+                
+            # Simple charging logic: charge when demand is significantly below average
+            avg_demand = df_sim[power_col].mean()
+            if current_demand < avg_demand * 0.7 and soc[i] < usable_capacity * 0.9:
+                # Charge at a moderate rate
+                charge_power = min(max_power * 0.3, (usable_capacity * 0.95 - soc[i]) / interval_hours)
+                battery_power[i] = -charge_power  # Negative for charging
+                soc[i] = soc[i] + charge_power * interval_hours * efficiency
+                net_demand.iloc[i] = current_demand + charge_power
+        
+        # Ensure SOC stays within limits
+        soc[i] = max(0, min(soc[i], usable_capacity))
+        soc_percent[i] = (soc[i] / usable_capacity) * 100
+    
+    # Add simulation results to dataframe
+    df_sim['Battery_Power_kW'] = battery_power
+    df_sim['Battery_SOC_kWh'] = soc
+    df_sim['Battery_SOC_Percent'] = soc_percent
+    df_sim['Net_Demand_kW'] = net_demand
+    df_sim['Peak_Shaved'] = df_sim['Original_Demand'] - df_sim['Net_Demand_kW']
+    
+    # Calculate performance metrics
+    total_energy_discharged = sum([p * interval_hours for p in battery_power if p > 0])
+    total_energy_charged = sum([abs(p) * interval_hours for p in battery_power if p < 0])
+    peak_reduction = df_sim['Original_Demand'].max() - df_sim['Net_Demand_kW'].max()
+    
+    # Count successful peak shaving events
+    successful_shaves = len(df_sim[
+        (df_sim['Original_Demand'] > target_demand) & 
+        (df_sim['Net_Demand_kW'] <= target_demand * 1.05)  # Allow 5% tolerance
+    ])
+    
+    total_peak_events = len(df_sim[df_sim['Original_Demand'] > target_demand])
+    success_rate = (successful_shaves / total_peak_events * 100) if total_peak_events > 0 else 0
+    
+    return {
+        'df_simulation': df_sim,
+        'total_energy_discharged': total_energy_discharged,
+        'total_energy_charged': total_energy_charged,
+        'peak_reduction_kw': peak_reduction,
+        'success_rate_percent': success_rate,
+        'successful_shaves': successful_shaves,
+        'total_peak_events': total_peak_events,
+        'average_soc': np.mean(soc_percent),
+        'min_soc': np.min(soc_percent),
+        'max_soc': np.max(soc_percent)
+    }
+
+
+def _calculate_financial_metrics(battery_costs, event_summaries, total_md_rate, battery_params):
+    """Calculate ROI, IRR, and other financial metrics."""
+    
+    # Calculate annual MD savings
+    if event_summaries and total_md_rate > 0:
+        max_monthly_md_saving = max(event['MD Cost Impact (RM)'] for event in event_summaries)
+        annual_md_savings = max_monthly_md_saving * 12
+    else:
+        annual_md_savings = 0
+    
+    # Additional potential savings (simplified - could include energy arbitrage, etc.)
+    # For now, focus on MD savings only
+    total_annual_savings = annual_md_savings
+    
+    # Calculate simple payback
+    if total_annual_savings > battery_costs['annual_opex']:
+        net_annual_savings = total_annual_savings - battery_costs['annual_opex']
+        simple_payback_years = battery_costs['total_capex'] / net_annual_savings
+    else:
+        simple_payback_years = float('inf')
+    
+    # Calculate NPV and IRR
+    discount_rate = battery_params['discount_rate'] / 100
+    project_years = battery_params['battery_life_years']
+    
+    # Cash flows: Initial investment (negative), then annual net savings
+    cash_flows = [-battery_costs['total_capex']]  # Initial investment
+    for year in range(1, project_years + 1):
+        annual_net_cash_flow = total_annual_savings - battery_costs['annual_opex']
+        cash_flows.append(annual_net_cash_flow)
+    
+    # Calculate NPV
+    npv = sum(cf / (1 + discount_rate) ** i for i, cf in enumerate(cash_flows))
+    
+    # Calculate IRR (simplified approximation)
+    irr = _calculate_irr_approximation(cash_flows)
+    
+    # Calculate profitability metrics
+    total_lifecycle_savings = total_annual_savings * project_years
+    total_lifecycle_costs = battery_costs['total_capex'] + battery_costs['total_lifecycle_opex']
+    benefit_cost_ratio = total_lifecycle_savings / total_lifecycle_costs if total_lifecycle_costs > 0 else 0
+    
+    return {
+        'annual_md_savings': annual_md_savings,
+        'total_annual_savings': total_annual_savings,
+        'net_annual_savings': total_annual_savings - battery_costs['annual_opex'],
+        'simple_payback_years': simple_payback_years,
+        'npv': npv,
+        'irr_percent': irr * 100 if irr is not None else None,
+        'benefit_cost_ratio': benefit_cost_ratio,
+        'total_lifecycle_savings': total_lifecycle_savings,
+        'roi_percent': (npv / battery_costs['total_capex'] * 100) if battery_costs['total_capex'] > 0 else 0,
+        'cash_flows': cash_flows
+    }
+
+
+def _calculate_irr_approximation(cash_flows):
+    """Calculate IRR using simple approximation method."""
+    try:
+        # Simple Newton-Raphson approximation for IRR
+        def npv_at_rate(rate):
+            return sum(cf / (1 + rate) ** i for i, cf in enumerate(cash_flows))
+        
+        # Try to find IRR between 0% and 100%
+        for rate in np.arange(0.01, 1.0, 0.01):
+            if npv_at_rate(rate) <= 0:
+                return rate
+        
+        return None  # IRR > 100% or not found
+    except:
+        return None
+
+
+def _display_battery_analysis(battery_analysis, battery_params, target_demand):
+    """Display comprehensive battery analysis results."""
+    
+    sizing = battery_analysis['sizing']
+    costs = battery_analysis['costs']
+    simulation = battery_analysis['simulation']
+    financial = battery_analysis['financial']
+    
+    # Battery Sizing Results
+    st.markdown("### 📏 Battery System Sizing")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Battery Capacity", f"{sizing['capacity_kwh']:.0f} kWh")
+    with col2:
+        st.metric("Power Rating", f"{sizing['power_rating_kw']:.0f} kW")
+    with col3:
+        st.metric("Technology", battery_params['technology'].split(' ')[0])
+    with col4:
+        if 'c_rate_limited' in sizing and sizing['c_rate_limited']:
+            st.metric("Sizing", "C-rate Limited", delta="⚠️")
+        else:
+            st.metric("Sizing", "Energy Limited", delta="✅")
+    
+    st.info(f"**Sizing Method:** {sizing['sizing_method']}")
+    
+    # Cost Analysis
+    st.markdown("### 💰 Cost Analysis")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total CAPEX", f"RM {costs['total_capex']:,.0f}")
+        st.caption(f"• Battery: RM {costs['battery_cost']:,.0f}\n• PCS: RM {costs['pcs_cost']:,.0f}\n• Installation: {(battery_params['installation_factor']-1)*100:.0f}%")
+    with col2:
+        st.metric("Annual OPEX", f"RM {costs['annual_opex']:,.0f}")
+        st.caption(f"{battery_params['opex_percent']}% of CAPEX")
+    with col3:
+        st.metric("Total Lifecycle Cost", f"RM {costs['total_lifecycle_cost']:,.0f}")
+        st.caption(f"Over {battery_params['battery_life_years']} years")
+    
+    # Performance Simulation
+    st.markdown("### ⚡ Performance Simulation")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Peak Reduction", f"{simulation['peak_reduction_kw']:.0f} kW")
+    with col2:
+        st.metric("Success Rate", f"{simulation['success_rate_percent']:.1f}%")
+    with col3:
+        st.metric("Avg SOC", f"{simulation['average_soc']:.0f}%")
+    with col4:
+        st.metric("Energy Efficiency", f"{simulation['total_energy_discharged']/simulation['total_energy_charged']*100:.0f}%" if simulation['total_energy_charged'] > 0 else "N/A")
+    
+    # Battery Operation Visualization
+    visualization_mode = st.radio(
+        "Battery Visualization Mode:",
+        ["Standard Simulation", "Enhanced MD Analysis", "Both Views"],
+        index=0,
+        help="Choose visualization type for battery analysis"
+    )
+    
+    if visualization_mode in ["Standard Simulation", "Both Views"]:
+        st.markdown("#### 🔋 Standard Battery Operation Simulation")
+        _display_battery_simulation_chart(simulation['df_simulation'])
+    
+    if visualization_mode in ["Enhanced MD Analysis", "Both Views"]:
+        st.markdown("---")
+        st.markdown("#### 📊 Enhanced MD Shaving Analysis Dashboard")
+        st.info("💡 **Enhanced visualization for MD shaving effectiveness and battery utilization analysis**")
+        _display_enhanced_md_analysis(simulation['df_simulation'], sizing, battery_params, target_demand)
+    
+    # Financial Analysis
+    st.markdown("### 📈 Financial Analysis")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        if financial['simple_payback_years'] != float('inf'):
+            st.metric("Simple Payback", f"{financial['simple_payback_years']:.1f} years")
+        else:
+            st.metric("Simple Payback", "∞", delta="Not viable")
+    with col2:
+        npv_color = "normal" if financial['npv'] >= 0 else "inverse"
+        st.metric("NPV", f"RM {financial['npv']:,.0f}", delta="Positive" if financial['npv'] >= 0 else "Negative")
+    with col3:
+        if financial['irr_percent'] is not None:
+            st.metric("IRR", f"{financial['irr_percent']:.1f}%")
+        else:
+            st.metric("IRR", "> 100%")
+    with col4:
+        st.metric("Benefit-Cost Ratio", f"{financial['benefit_cost_ratio']:.2f}")
+    
+    # Financial Summary
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**Annual Savings Breakdown:**")
+        st.write(f"• MD Savings: RM {financial['annual_md_savings']:,.0f}")
+        st.write(f"• Less O&M: RM {costs['annual_opex']:,.0f}")
+        st.write(f"• **Net Annual Savings: RM {financial['net_annual_savings']:,.0f}**")
+    
+    with col2:
+        st.markdown("**Investment Summary:**")
+        st.write(f"• Initial Investment: RM {costs['total_capex']:,.0f}")
+        st.write(f"• Total Lifecycle Value: RM {financial['total_lifecycle_savings']:,.0f}")
+        st.write(f"• **ROI: {financial['roi_percent']:+.1f}%**")
+    
+    # Investment Recommendation
+    st.markdown("### 🎯 Investment Recommendation")
+    
+    if financial['npv'] > 0 and financial['simple_payback_years'] <= 10:
+        st.success("✅ **RECOMMENDED INVESTMENT**")
+        st.success(f"This battery system shows strong financial returns with a {financial['simple_payback_years']:.1f}-year payback and positive NPV of RM {financial['npv']:,.0f}.")
+    elif financial['npv'] > 0:
+        st.warning("⚠️ **MARGINAL INVESTMENT**")
+        st.warning(f"Positive NPV but long payback period ({financial['simple_payback_years']:.1f} years). Consider optimizing system size or waiting for cost reductions.")
+    else:
+        st.error("❌ **NOT RECOMMENDED**")
+        st.error(f"Negative NPV (RM {financial['npv']:,.0f}) indicates the investment is not financially viable under current assumptions.")
+    
+    # Sensitivity note
+    st.info("💡 **Note:** Results are based on historical peak events. Actual performance may vary. Consider conducting a detailed feasibility study for large investments.")
+
+
+def _display_battery_simulation_chart(df_sim):
+    """Display enhanced battery operation simulation chart with integrated charge/discharge visualization."""
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+    
+    # Create subplots with improved layout
+    fig = make_subplots(
+        rows=4, cols=1,
+        subplot_titles=(
+            'Demand Profile with Battery Operation & Charge/Discharge Areas', 
+            'Battery Power (Charge/Discharge)', 
+            'Battery State of Charge',
+            'Peak Shaving Effectiveness'
+        ),
+        vertical_spacing=0.06,
+        row_heights=[0.35, 0.25, 0.25, 0.15]
+    )
+    
+    # Plot 1: Enhanced demand profiles with charge/discharge areas
+    # Base demand lines
+    fig.add_trace(
+        go.Scatter(x=df_sim.index, y=df_sim['Original_Demand'], 
+                  name='Original Demand', line=dict(color='red', width=2),
+                  hovertemplate='Original: %{y:.1f} kW<br>%{x}<extra></extra>'),
+        row=1, col=1
+    )
+    fig.add_trace(
+        go.Scatter(x=df_sim.index, y=df_sim['Net_Demand_kW'], 
+                  name='Net Demand (with Battery)', line=dict(color='blue', width=2),
+                  hovertemplate='Net: %{y:.1f} kW<br>%{x}<extra></extra>'),
+        row=1, col=1
+    )
+    fig.add_trace(
+        go.Scatter(x=df_sim.index, y=df_sim['Target_Demand'], 
+                  name='Target Demand', line=dict(color='green', dash='dash', width=2),
+                  hovertemplate='Target: %{y:.1f} kW<br>%{x}<extra></extra>'),
+        row=1, col=1
+    )
+    
+    # Add charge/discharge areas on the demand chart
+    # Discharge periods (battery helping during high demand)
+    discharge_mask = df_sim['Battery_Power_kW'] > 0
+    if discharge_mask.any():
+        discharge_data = df_sim[discharge_mask]
+        
+        # Create stepped discharge area
+        x_step = []
+        y_step = []
+        for i, (idx, row) in enumerate(discharge_data.iterrows()):
+            if i == 0 or (idx - discharge_data.index[i-1]).total_seconds() > 3600:  # New discharge event
+                x_step.extend([idx, idx])
+                y_step.extend([0, row['Battery_Power_kW']])
+            else:
+                x_step.append(idx)
+                y_step.append(row['Battery_Power_kW'])
+        
+        # Add end points
+        if len(x_step) > 0:
+            x_step.append(x_step[-1])
+            y_step.append(0)
+            
+            fig.add_trace(go.Scatter(
+                x=x_step, y=y_step,
+                fill='tozeroy', fillcolor='rgba(255,165,0,0.4)',
+                line=dict(color='orange', width=1),
+                name='Battery Discharge',
+                hovertemplate='Discharge: %{y:.1f} kW<br>%{x}<extra></extra>',
+                yaxis='y2'
+            ))
+    
+    # Update layout with dual y-axes
+    fig.update_layout(
+        title='🎯 MD Shaving Effectiveness: Demand vs Battery vs Target',
+        xaxis_title='Time',
+        yaxis=dict(title='Power Demand (kW)', side='left'),
+        yaxis2=dict(title='Battery Discharge (kW)', side='right', overlaying='y', 
+                    range=[0, max(df_sim['Battery_Power_kW'].max() * 1.1, 100)]),
+        height=500,
+        hovermode='x unified',
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Success/Failure Analysis
+    success_intervals = len(df_sim[
+        (df_sim['Original_Demand'] > target_demand) & 
+        (df_sim['Net_Demand_kW'] <= target_demand * 1.05)
+    ])
+    total_peak_intervals = len(df_sim[df_sim['Original_Demand'] > target_demand])
+    
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Peak Intervals Above Target", f"{total_peak_intervals}")
+    col2.metric("Successfully Shaved", f"{success_intervals}")
+    col3.metric("Success Rate", f"{(success_intervals/total_peak_intervals*100) if total_peak_intervals > 0 else 0:.1f}%")
+    
+    # Panel 2: Combined SOC and Battery Power Chart
+    st.markdown("##### 2️⃣ Combined SOC and Battery Power Chart")
+    
+    fig2 = make_subplots(specs=[[{"secondary_y": True}]])
+    
+    # SOC line (left y-axis)
+    fig2.add_trace(
+        go.Scatter(x=df_sim.index, y=df_sim['Battery_SOC_Percent'],
+                  name='SOC (%)', line=dict(color='purple', width=2),
+                  hovertemplate='SOC: %{y:.1f}%<br>%{x}<extra></extra>'),
+        secondary_y=False
+    )
+    
+    # Battery power line (right y-axis) 
+    fig2.add_trace(
+        go.Scatter(x=df_sim.index, y=df_sim['Battery_Power_kW'],
+                  name='Battery Power', line=dict(color='orange', width=2),
+                  hovertemplate='Power: %{y:.1f} kW<br>%{x}<extra></extra>'),
+        secondary_y=True
+    )
+    
+    # Add horizontal line for minimum SOC warning
+    fig2.add_hline(y=20, line_dash="dot", line_color="red", 
+                   annotation_text="Low SOC Warning (20%)", secondary_y=False)
+    
+    # Update axes
+    fig2.update_xaxes(title_text="Time")
+    fig2.update_yaxes(title_text="State of Charge (%)", secondary_y=False, range=[0, 100])
+    fig2.update_yaxes(title_text="Battery Discharge Power (kW)", secondary_y=True)
+    
+    fig2.update_layout(
+        title='⚡ SOC vs Battery Power: Timing Analysis',
+        height=400,
+        hovermode='x unified'
+    )
+    
+    st.plotly_chart(fig2, use_container_width=True)
+    
+    # Panel 3: Battery Power Utilization Heatmap
+    st.markdown("##### 3️⃣ Battery Power Utilization Heatmap")
+    
+    # Prepare data for heatmap
+    df_heatmap = df_sim.copy()
+    df_heatmap['Date'] = df_heatmap.index.date
+    df_heatmap['Hour'] = df_heatmap.index.hour
+    df_heatmap['Battery_Utilization_%'] = (df_heatmap['Battery_Power_kW'] / sizing['power_rating_kw'] * 100).clip(0, 100)
+    
+    # Create pivot table for heatmap
+    heatmap_data = df_heatmap.pivot_table(
+        values='Battery_Utilization_%', 
+        index='Hour', 
+        columns='Date', 
+        aggfunc='mean',
+        fill_value=0
+    )
+    
+    # Create heatmap
+    fig3 = go.Figure(data=go.Heatmap(
+        z=heatmap_data.values,
+        x=[str(d) for d in heatmap_data.columns],
+        y=heatmap_data.index,
+        colorscale='Viridis',
+        hoverongaps=False,
+        hovertemplate='Date: %{x}<br>Hour: %{y}<br>Utilization: %{z:.1f}%<extra></extra>',
+        colorbar=dict(title="Battery Utilization (%)")
+    ))
+    
+    fig3.update_layout(
+        title='🔥 Battery Power Utilization Heatmap (% of Rated Power)',
+        xaxis_title='Date',
+        yaxis_title='Hour of Day',
+        height=400
+    )
+    
+    st.plotly_chart(fig3, use_container_width=True)
+    
+    # Panel 4: Daily Peak Shave Effectiveness Bar Chart
+    st.markdown("##### 4️⃣ Daily Peak Shave Effectiveness")
+    
+    # Calculate daily peaks
+    daily_analysis = df_sim.groupby(df_sim.index.date).agg({
+        'Original_Demand': 'max',
+        'Net_Demand_kW': 'max',
+        'Battery_Power_kW': 'max'
+    }).reset_index()
+    daily_analysis.columns = ['Date', 'Original_Peak', 'Net_Peak', 'Max_Battery_Power']
+    
+    # Calculate savings (simplified - assumes MD rate)
+    md_rate_estimate = 97.06  # RM/kW from Medium Voltage TOU
+    daily_analysis['Peak_Reduction'] = daily_analysis['Original_Peak'] - daily_analysis['Net_Peak']
+    daily_analysis['Est_Monthly_Saving'] = daily_analysis['Peak_Reduction'] * md_rate_estimate
+    
+    # Create bar chart
+    fig4 = go.Figure()
+    
+    # Target line
+    fig4.add_hline(y=target_demand, line_dash="dash", line_color="green", line_width=2,
+                   annotation_text=f"MD Target: {target_demand:.0f} kW")
+    
+    # Original peaks
+    fig4.add_trace(go.Bar(
+        x=daily_analysis['Date'], y=daily_analysis['Original_Peak'],
+        name='Original Peak', marker_color='red', opacity=0.7,
+        hovertemplate='Original: %{y:.0f} kW<br>Date: %{x}<extra></extra>'
+    ))
+    
+    # Net peaks (after battery)
+    fig4.add_trace(go.Bar(
+        x=daily_analysis['Date'], y=daily_analysis['Net_Peak'],
+        name='Net Peak (with Battery)', marker_color='blue', opacity=0.7,
+        hovertemplate='Net: %{y:.0f} kW<br>Saving: RM %{customdata:.0f}<extra></extra>',
+        customdata=daily_analysis['Est_Monthly_Saving']
+    ))
+    
+    fig4.update_layout(
+        title='📊 Daily Peak Shaving Effectiveness with Financial Impact',
+        xaxis_title='Date',
+        yaxis_title='Peak Demand (kW)',
+        height=400,
+        barmode='group'
+    )
+    
+    st.plotly_chart(fig4, use_container_width=True)
+    
+    # Summary stats
+    total_days = len(daily_analysis)
+    successful_days = len(daily_analysis[daily_analysis['Net_Peak'] <= target_demand * 1.05])
+    total_estimated_savings = daily_analysis['Est_Monthly_Saving'].sum()
+    
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total Days Analyzed", f"{total_days}")
+    col2.metric("Successful Days", f"{successful_days} ({successful_days/total_days*100:.1f}%)")
+    col3.metric("Est. Total Monthly Savings", f"RM {total_estimated_savings:.0f}")
+    
+    # Panel 5: Cumulative Energy Analysis
+    st.markdown("##### 5️⃣ Cumulative Energy Discharged vs Required")
+    
+    # Calculate cumulative energy metrics
+    df_energy = df_sim.copy()
+    df_energy['Energy_Discharged'] = (df_energy['Battery_Power_kW'].clip(lower=0) * 0.25).cumsum()  # Assuming 15-min intervals
+    df_energy['Energy_Required'] = (df_energy['Original_Demand'] - target_demand).clip(lower=0) * 0.25
+    df_energy['Cumulative_Energy_Required'] = df_energy['Energy_Required'].cumsum()
+    df_energy['Energy_Shortfall'] = df_energy['Cumulative_Energy_Required'] - df_energy['Energy_Discharged']
+    
+    # Create cumulative energy chart
+    fig5 = go.Figure()
+    
+    fig5.add_trace(go.Scatter(
+        x=df_energy.index, y=df_energy['Energy_Discharged'],
+        name='Actual Energy Discharged', line=dict(color='orange', width=2),
+        hovertemplate='Discharged: %{y:.1f} kWh<br>%{x}<extra></extra>'
+    ))
+    
+    fig5.add_trace(go.Scatter(
+        x=df_energy.index, y=df_energy['Cumulative_Energy_Required'],
+        name='Energy Required for Full Shaving', line=dict(color='red', width=2, dash='dot'),
+        hovertemplate='Required: %{y:.1f} kWh<br>%{x}<extra></extra>'
+    ))
+    
+    # Fill area showing energy shortfall
+    fig5.add_trace(go.Scatter(
+        x=df_energy.index, y=df_energy['Energy_Shortfall'],
+        fill='tozeroy', fillcolor='rgba(255,0,0,0.2)',
+        line=dict(color='rgba(255,0,0,0)'),
+        name='Energy Shortfall',
+        hovertemplate='Shortfall: %{y:.1f} kWh<br>%{x}<extra></extra>'
+    ))
+    
+    fig5.update_layout(
+        title='📈 Cumulative Energy Analysis: Battery Performance vs Requirements',
+        xaxis_title='Time',
+        yaxis_title='Cumulative Energy (kWh)',
+        height=400,
+        hovermode='x unified'
+    )
+    
+    st.plotly_chart(fig5, use_container_width=True)
+    
+    # Energy analysis summary
+    final_discharged = df_energy['Energy_Discharged'].iloc[-1]
+    final_required = df_energy['Cumulative_Energy_Required'].iloc[-1]
+    energy_efficiency = (final_discharged / final_required * 100) if final_required > 0 else 0
+    
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total Energy Discharged", f"{final_discharged:.0f} kWh")
+    col2.metric("Total Energy Required", f"{final_required:.0f} kWh")
+    col3.metric("Energy Fulfillment Rate", f"{energy_efficiency:.1f}%")
+    
+    # Key insights
+    st.markdown("##### 🔍 Key Insights from Enhanced Analysis")
+    
+    insights = []
+    
+    if energy_efficiency < 80:
+        insights.append("⚠️ **Energy Shortfall**: Battery capacity may be insufficient for complete MD shaving")
+    
+    if success_intervals / total_peak_intervals > 0.9:
+        insights.append("✅ **High Success Rate**: Battery effectively manages most peak events")
+    elif success_intervals / total_peak_intervals < 0.6:
+        insights.append("❌ **Low Success Rate**: Consider increasing battery power rating or capacity")
+    
+    avg_utilization = df_heatmap['Battery_Utilization_%'].mean()
+    if avg_utilization < 30:
+        insights.append("📊 **Under-utilized**: Battery power rating may be oversized")
+    elif avg_utilization > 80:
+        insights.append("🔥 **High Utilization**: Battery operating near maximum capacity")
+    
+    low_soc_events = len(df_sim[df_sim['Battery_SOC_Percent'] < 20])
+    if low_soc_events > 0:
+        insights.append(f"🔋 **Low SOC Warning**: {low_soc_events} intervals with SOC below 20%")
+    
+    if not insights:
+        insights.append("✅ **Optimal Performance**: Battery system operating within acceptable parameters")
+    
+    for insight in insights:
+        st.info(insight)
