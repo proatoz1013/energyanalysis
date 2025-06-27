@@ -5,7 +5,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from tnb_tariff_comparison import show as show_tnb_tariff_comparison
 from advanced_energy_analysis import show as show_advanced_energy_analysis
-from battery_sizing_analysis import battery_sizing_analysis_page
+from md_shaving_solution import show as show_md_shaving_solution
 
 st.set_page_config(page_title="Load Profile Analysis", layout="wide")
 
@@ -65,7 +65,7 @@ This tool provides comprehensive analysis of:
 - Demand shaving analysis
 """)
 
-tabs = st.tabs(["TNB New Tariff Comparison", "Load Profile Analysis", "Advanced Energy Analysis", "Monthly Rate Impact Analysis", "🔋 Battery Sizing Analysis"])
+tabs = st.tabs(["TNB New Tariff Comparison", "Load Profile Analysis", "Advanced Energy Analysis", "Monthly Rate Impact Analysis", "MD Shaving Solution"])
 
 with tabs[1]:
     st.title("Energy Analysis Dashboard")
@@ -143,7 +143,7 @@ with tabs[1]:
             df = df.dropna(subset=["Parsed Timestamp"])
             df = df.set_index("Parsed Timestamp")
             
-            # Store processed data in session state for battery sizing analysis
+            # Store processed data in session state
             st.session_state['uploaded_file'] = uploaded_file
             st.session_state['processed_df'] = df
             st.session_state['power_column'] = power_col
@@ -1941,4 +1941,5 @@ with tabs[3]:
             """)
 
 with tabs[4]:
-    battery_sizing_analysis_page()
+    show_md_shaving_solution()
+
