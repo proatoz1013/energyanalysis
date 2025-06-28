@@ -1647,16 +1647,84 @@ def _simulate_battery_operation(df, power_col, target_demand, battery_sizing, ba
     # Calculate performance metrics
     total_energy_discharged = sum([p * interval_hours for p in battery_power if p > 0])
     total_energy_charged = sum([abs(p) * interval_hours for p in battery_power if p < 0])
-    peak_reduction = df_sim['Original_Demand'].max() - df_sim['Net_Demand_kW'].max()
     
-    # Count successful peak shaving events
-    successful_shaves = len(df_sim[
-        (df_sim['Original_Demand'] > target_demand) & 
-        (df_sim['Net_Demand_kW'] <= target_demand * 1.05)  # Allow 5% tolerance
-    ])
+    # Calculate peak reduction using maximum value from MD peak periods (same as successful peak shaving table)
+    # Filter for MD peak periods only (2 PM-10 PM, weekdays) to match the table calculation
+    def is_md_peak_period_for_reduction(timestamp):
+        return timestamp.weekday() < 5 and 14 <= timestamp.hour < 22
     
-    total_peak_events = len(df_sim[df_sim['Original_Demand'] > target_demand])
-    success_rate = (successful_shaves / total_peak_events * 100) if total_peak_events > 0 else 0
+    df_md_peak_for_reduction = df_sim[df_sim.index.to_series().apply(is_md_peak_period_for_reduction)]
+    
+    if len(df_md_peak_for_reduction) > 0:
+        # Calculate daily peak reduction using same logic as the successful peak shaving table
+        daily_reduction_analysis = df_md_peak_for_reduction.groupby(df_md_peak_for_reduction.index.date).agg({
+            'Original_Demand': 'max',
+            'Net_Demand_kW': 'max'
+        }).reset_index()
+        daily_reduction_analysis.columns = ['Date', 'Original_Peak_MD', 'Net_Peak_MD']
+        daily_reduction_analysis['Peak_Reduction'] = daily_reduction_analysis['Original_Peak_MD'] - daily_reduction_analysis['Net_Peak_MD']
+        
+        # Use maximum value from Peak_Reduction column (same as displayed in successful peak shaving table)
+        peak_reduction = daily_reduction_analysis['Peak_Reduction'].max()
+    else:
+        # Fallback to original calculation if no MD peak data
+        peak_reduction = df_sim['Original_Demand'].max() - df_sim['Net_Demand_kW'].max()
+    
+    # Calculate MD-focused success rate (consistent with Daily Peak Shave Effectiveness)
+    # Filter for MD peak periods only (2 PM-10 PM, weekdays)
+    def is_md_peak_period(timestamp):
+        return timestamp.weekday() < 5 and 14 <= timestamp.hour < 22
+    
+    df_md_peak = df_sim[df_sim.index.to_series().apply(is_md_peak_period)]
+    
+    # Store debug information for better user feedback
+    debug_info = {
+        'total_points': len(df_sim),
+        'md_peak_points': len(df_md_peak),
+        'sample_timestamps': df_sim.index[:3].tolist() if len(df_sim) > 0 else [],
+        'weekdays_present': sorted(df_sim.index.to_series().apply(lambda x: x.weekday()).unique()) if len(df_sim) > 0 else [],
+        'hours_present': sorted(df_sim.index.to_series().apply(lambda x: x.hour).unique()) if len(df_sim) > 0 else []
+    }
+    
+    if len(df_md_peak) > 0:
+        # Calculate daily MD success rate (EXACT same logic as Daily Peak Shave Effectiveness)
+        daily_md_analysis = df_md_peak.groupby(df_md_peak.index.date).agg({
+            'Original_Demand': 'max',
+            'Net_Demand_kW': 'max'
+        }).reset_index()
+        daily_md_analysis.columns = ['Date', 'Original_Peak_MD', 'Net_Peak_MD']
+        # Use EXACT same success criteria as Daily Peak Shave Effectiveness
+        daily_md_analysis['Success'] = daily_md_analysis['Net_Peak_MD'] <= target_demand * 1.05  # 5% tolerance
+        
+        successful_days = sum(daily_md_analysis['Success'])
+        total_days = len(daily_md_analysis)
+        success_rate = (successful_days / total_days * 100) if total_days > 0 else 0
+        md_focused_calculation = True
+        
+        # Store debug info about the MD calculation
+        debug_info['md_calculation_details'] = {
+            'successful_days': successful_days,
+            'total_days': total_days,
+            'calculation_method': 'MD-focused (identical to Daily Peak Shave Effectiveness)'
+        }
+    else:
+        # Fallback to original calculation if no MD peak data
+        successful_shaves = len(df_sim[
+            (df_sim['Original_Demand'] > target_demand) & 
+            (df_sim['Net_Demand_kW'] <= target_demand * 1.05)  # Allow 5% tolerance
+        ])
+        total_peak_events = len(df_sim[df_sim['Original_Demand'] > target_demand])
+        success_rate = (successful_shaves / total_peak_events * 100) if total_peak_events > 0 else 0
+        successful_days = successful_shaves
+        total_days = total_peak_events
+        md_focused_calculation = False
+        
+        # Store debug info about the fallback calculation
+        debug_info['md_calculation_details'] = {
+            'successful_intervals': successful_shaves,
+            'total_intervals': total_peak_events,
+            'calculation_method': 'Fallback 24/7 calculation (no MD data found)'
+        }
     
     return {
         'df_simulation': df_sim,
@@ -1664,11 +1732,13 @@ def _simulate_battery_operation(df, power_col, target_demand, battery_sizing, ba
         'total_energy_charged': total_energy_charged,
         'peak_reduction_kw': peak_reduction,
         'success_rate_percent': success_rate,
-        'successful_shaves': successful_shaves,
-        'total_peak_events': total_peak_events,
+        'successful_shaves': successful_days,
+        'total_peak_events': total_days,
         'average_soc': np.mean(soc_percent),
         'min_soc': np.min(soc_percent),
-        'max_soc': np.max(soc_percent)
+        'max_soc': np.max(soc_percent),
+        'md_focused_calculation': md_focused_calculation,
+        'debug_info': debug_info  # Include debug info for better user feedback
     }
 
 
@@ -1785,18 +1855,7 @@ def _display_battery_analysis(battery_analysis, battery_params, target_demand):
         st.metric("Total Lifecycle Cost", f"RM {costs['total_lifecycle_cost']:,.0f}")
         st.caption(f"Over {battery_params['battery_life_years']} years")
     
-    # Performance Simulation
-    st.markdown("### ⚡ Performance Simulation")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Peak Reduction", f"{simulation['peak_reduction_kw']:.0f} kW")
-    with col2:
-        st.metric("Success Rate", f"{simulation['success_rate_percent']:.1f}%")
-    with col3:
-        st.metric("Avg SOC", f"{simulation['average_soc']:.0f}%")
-    with col4:
-        st.metric("Energy Efficiency", f"{simulation['total_energy_discharged']/simulation['total_energy_charged']*100:.0f}%" if simulation['total_energy_charged'] > 0 else "N/A")
+
     
     # Battery Operation Visualization
     st.markdown("#### 🔋 Battery Operation Simulation")
@@ -2199,100 +2258,203 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None):
     else:
         st.success("🎉 **Congratulations!** You've already achieved 100% success rate in peak shaving!")
     
-    # Panel 5: Cumulative Energy Analysis
+    # Panel 5: Cumulative Energy Analysis - ALIGNED WITH DETAILED SUCCESS/FAILURE ANALYSIS
     st.markdown("##### 5️⃣ Cumulative Energy Discharged vs Required (MD Peak Periods Only)")
+    st.markdown("**📊 Data Source:** Same as Detailed Success/Failure Analysis (daily aggregation during MD recording hours)")
     
-    # Calculate cumulative energy metrics - FOCUS ON MD PEAK PERIODS ONLY
-    df_energy = df_sim.copy()
-    df_energy['Energy_Discharged'] = (df_energy['Battery_Power_kW'].clip(lower=0) * 0.25).cumsum()  # Assuming 15-min intervals
+    # Use the same daily analysis data that was calculated for the Detailed Success/Failure Analysis
+    if len(daily_analysis) > 0:
+        # Calculate energy requirements using the same daily aggregation approach
+        daily_analysis_energy = daily_analysis.copy()
+        
+        # Energy Required: Calculate based on daily peak reduction needs during MD peak periods
+        # This matches the approach used in the success/failure tables
+        daily_analysis_energy['Daily_Energy_Required_kWh'] = 0.0
+        
+        # For each day, calculate energy required based on peak reduction needs
+        for idx, row in daily_analysis_energy.iterrows():
+            original_peak = row['Original_Peak_MD']
+            net_peak = row['Net_Peak_MD']
+            
+            if original_peak > target_demand:
+                # Calculate energy required to shave this day's peak to target
+                if net_peak <= target_demand * 1.05:  # Successful day
+                    # Energy that was successfully shaved (based on actual peak reduction)
+                    energy_shaved = row['Peak_Reduction'] * 0.25  # Convert kW to kWh (15-min intervals)
+                else:  # Failed day
+                    # Energy that would be needed to reach target
+                    energy_needed = (original_peak - target_demand) * 0.25
+                    energy_shaved = energy_needed
+                
+                daily_analysis_energy.loc[idx, 'Daily_Energy_Required_kWh'] = energy_shaved
+        
+        # Calculate energy discharged from battery during MD peak periods for each day
+        daily_analysis_energy['Daily_Energy_Discharged_kWh'] = 0.0
+        
+        # Group simulation data by date and sum battery discharge during MD peak periods
+        df_sim_md_peak = df_sim[df_sim.index.to_series().apply(is_md_peak_period_for_effectiveness)]
+        if len(df_sim_md_peak) > 0:
+            daily_battery_discharge = df_sim_md_peak.groupby(df_sim_md_peak.index.date).agg({
+                'Battery_Power_kW': lambda x: (x.clip(lower=0) * 0.25).sum()  # Only positive (discharge) * 15-min intervals
+            }).reset_index()
+            daily_battery_discharge.columns = ['Date', 'Daily_Battery_Discharge_kWh']
+            
+            # Merge with daily analysis
+            daily_analysis_energy['Date'] = pd.to_datetime(daily_analysis_energy['Date'])
+            daily_battery_discharge['Date'] = pd.to_datetime(daily_battery_discharge['Date'])
+            daily_analysis_energy = daily_analysis_energy.merge(
+                daily_battery_discharge, on='Date', how='left'
+            ).fillna(0)
+            
+            daily_analysis_energy['Daily_Energy_Discharged_kWh'] = daily_analysis_energy['Daily_Battery_Discharge_kWh']
+        
+        # Sort by date for cumulative calculation
+        daily_analysis_energy = daily_analysis_energy.sort_values('Date').reset_index(drop=True)
+        
+        # Calculate cumulative values
+        daily_analysis_energy['Cumulative_Energy_Required'] = daily_analysis_energy['Daily_Energy_Required_kWh'].cumsum()
+        daily_analysis_energy['Cumulative_Energy_Discharged'] = daily_analysis_energy['Daily_Energy_Discharged_kWh'].cumsum()
+        daily_analysis_energy['Cumulative_Energy_Shortfall'] = daily_analysis_energy['Cumulative_Energy_Required'] - daily_analysis_energy['Cumulative_Energy_Discharged']
+        
+        # Create the chart using the daily aggregated data
+        if len(daily_analysis_energy) > 0:
+            fig5 = go.Figure()
+            
+            # Energy Discharged line (from daily analysis)
+            fig5.add_trace(go.Scatter(
+                x=daily_analysis_energy['Date'],
+                y=daily_analysis_energy['Cumulative_Energy_Discharged'],
+                mode='lines+markers',
+                name='Cumulative Energy Discharged (MD Periods)',
+                line=dict(color='blue', width=2),
+                hovertemplate='Discharged: %{y:.1f} kWh<br>Date: %{x}<extra></extra>'
+            ))
+            
+            # Energy Required line (from daily analysis)
+            fig5.add_trace(go.Scatter(
+                x=daily_analysis_energy['Date'],
+                y=daily_analysis_energy['Cumulative_Energy_Required'],
+                mode='lines+markers',
+                name='Cumulative Energy Required (MD Periods)',
+                line=dict(color='red', width=2, dash='dot'),
+                hovertemplate='Required: %{y:.1f} kWh<br>Date: %{x}<extra></extra>'
+            ))
+            
+            # Add area fill for energy shortfall
+            fig5.add_trace(go.Scatter(
+                x=daily_analysis_energy['Date'],
+                y=daily_analysis_energy['Cumulative_Energy_Shortfall'].clip(lower=0),
+                fill='tozeroy',
+                fillcolor='rgba(255,0,0,0.2)',
+                line=dict(color='rgba(255,0,0,0)'),
+                name='Cumulative Energy Shortfall',
+                hovertemplate='Shortfall: %{y:.1f} kWh<br>Date: %{x}<extra></extra>'
+            ))
+            
+            fig5.update_layout(
+                title='📈 Cumulative Energy Analysis: Daily Aggregation (Same Source as Success/Failure Analysis)',
+                xaxis_title='Date',
+                yaxis_title='Cumulative Energy (kWh)',
+                height=500,
+                hovermode='x unified'
+            )
+            
+            st.plotly_chart(fig5, use_container_width=True)
+            
+            # Display metrics using daily aggregated data
+            total_energy_required = daily_analysis_energy['Daily_Energy_Required_kWh'].sum()
+            total_energy_discharged = daily_analysis_energy['Daily_Energy_Discharged_kWh'].sum()
+            
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Total Energy Required (MD Periods)", f"{total_energy_required:.1f} kWh")
+            col2.metric("Total Energy Discharged (MD Periods)", f"{total_energy_discharged:.1f} kWh")
+            
+            if total_energy_required > 0:
+                fulfillment_rate = (total_energy_discharged / total_energy_required) * 100
+                col3.metric("MD Energy Fulfillment Rate", f"{fulfillment_rate:.1f}%")
+            else:
+                col3.metric("MD Energy Fulfillment Rate", "100%")
+            
+            # Add detailed breakdown table
+            with st.expander("📊 Daily Energy Breakdown (Same Source as Success/Failure Analysis)"):
+                display_columns = ['Date', 'Original_Peak_MD', 'Net_Peak_MD', 'Peak_Reduction', 
+                                 'Daily_Energy_Required_kWh', 'Daily_Energy_Discharged_kWh', 'Success']
+                
+                if all(col in daily_analysis_energy.columns for col in display_columns):
+                    daily_display = daily_analysis_energy[display_columns].copy()
+                    daily_display.columns = ['Date', 'Original Peak (kW)', 'Net Peak (kW)', 'Peak Reduction (kW)',
+                                           'Energy Required (kWh)', 'Energy Discharged (kWh)', 'Success']
+                    
+                    formatted_daily = daily_display.style.format({
+                        'Original Peak (kW)': '{:.1f}',
+                        'Net Peak (kW)': '{:.1f}',
+                        'Peak Reduction (kW)': '{:.1f}',
+                        'Energy Required (kWh)': '{:.2f}',
+                        'Energy Discharged (kWh)': '{:.2f}'
+                    })
+                    
+                    st.dataframe(formatted_daily, use_container_width=True)
+                else:
+                    st.warning("Some columns missing from daily analysis data.")
+            
+            # Add information box explaining the alignment
+            st.info(f"""
+            **📋 Data Source Alignment Confirmation:**
+            - **Energy Required**: Calculated from daily peak reduction needs during MD recording hours (2-10 PM weekdays)
+            - **Energy Discharged**: Sum of battery discharge energy during MD recording hours per day  
+            - **Calculation Method**: Same daily aggregation approach as used in Detailed Success/Failure Analysis
+            - **Target Demand**: {target_demand:.1f} kW (matches success/failure analysis)
+            - **Total Days Analyzed**: {len(daily_analysis_energy)} days with MD peak period data
+            - **Success Rate**: {(daily_analysis_energy['Success'].sum() / len(daily_analysis_energy) * 100):.1f}% (same as detailed analysis)
+            
+            ✅ **Consistency Check**: This chart now uses the same data source and methodology as the 🔍 Detailed Success/Failure Analysis tables.
+            """)
+            
+        else:
+            st.warning("No daily analysis data available for cumulative energy chart.")
+    else:
+        st.warning("No MD peak period data available for energy analysis.")
     
-    # Calculate energy required ONLY during MD peak periods (2 PM-10 PM, weekdays)
-    def is_md_peak_period(timestamp):
-        return timestamp.weekday() < 5 and 14 <= timestamp.hour < 22
-    
-    df_energy['Is_MD_Peak'] = df_energy.index.to_series().apply(is_md_peak_period)
-    df_energy['Energy_Required_MD_Only'] = 0.0
-    df_energy.loc[df_energy['Is_MD_Peak'], 'Energy_Required_MD_Only'] = (
-        (df_energy.loc[df_energy['Is_MD_Peak'], 'Original_Demand'] - target_demand).clip(lower=0) * 0.25
-    )
-    df_energy['Cumulative_Energy_Required'] = df_energy['Energy_Required_MD_Only'].cumsum()
-    df_energy['Energy_Shortfall'] = df_energy['Cumulative_Energy_Required'] - df_energy['Energy_Discharged']
-    
-    # Create cumulative energy chart
-    fig5 = go.Figure()
-    
-    fig5.add_trace(go.Scatter(
-        x=df_energy.index, y=df_energy['Energy_Discharged'],
-        name='Actual Energy Discharged', line=dict(color='orange', width=2),
-        hovertemplate='Discharged: %{y:.1f} kWh<br>%{x}<extra></extra>'
-    ))
-    
-    fig5.add_trace(go.Scatter(
-        x=df_energy.index, y=df_energy['Cumulative_Energy_Required'],
-        name='Energy Required (MD Peak Periods Only)', line=dict(color='red', width=2, dash='dot'),
-        hovertemplate='Required (MD Peak): %{y:.1f} kWh<br>%{x}<extra></extra>'
-    ))
-    
-    # Fill area showing energy shortfall
-    fig5.add_trace(go.Scatter(
-        x=df_energy.index, y=df_energy['Energy_Shortfall'],
-        fill='tozeroy', fillcolor='rgba(255,0,0,0.2)',
-        line=dict(color='rgba(255,0,0,0)'),
-        name='Energy Shortfall (MD Peak Only)',
-        hovertemplate='Shortfall (MD Peak): %{y:.1f} kWh<br>%{x}<extra></extra>'
-    ))
-    
-    fig5.update_layout(
-        title='📈 Cumulative Energy Analysis: Battery Performance vs MD Peak Requirements',
-        xaxis_title='Time',
-        yaxis_title='Cumulative Energy (kWh)',
-        height=400,
-        hovermode='x unified'
-    )
-    
-    st.plotly_chart(fig5, use_container_width=True)
-    
-    # Add explanation for MD-focused analysis
-    st.info("""
-    📊 **MD Peak Period Focus**: This analysis calculates energy requirements only during **MD recording hours** 
-    (2 PM-10 PM, weekdays) since these are the only periods that affect monthly MD charges. 
-    Battery discharge outside these hours doesn't contribute to MD cost savings.
-    """)
-    
-    # Energy analysis summary
-    final_discharged = df_energy['Energy_Discharged'].iloc[-1]
-    final_required = df_energy['Cumulative_Energy_Required'].iloc[-1]
+    # Original energy efficiency calculation for comparison (if needed)
+    final_discharged = total_energy_discharged if 'total_energy_discharged' in locals() else 0
+    final_required = total_energy_required if 'total_energy_required' in locals() else 0
     energy_efficiency = (final_discharged / final_required * 100) if final_required > 0 else 100
-    
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Energy Discharged", f"{final_discharged:.0f} kWh")
-    col2.metric("Total Energy Required (MD Peak)", f"{final_required:.0f} kWh")
-    col3.metric("MD Energy Fulfillment Rate", f"{energy_efficiency:.1f}%")
     
     # Key insights
     st.markdown("##### 🔍 Key Insights from Enhanced Analysis")
     
     insights = []
     
+    # Use the new energy efficiency calculation
     if energy_efficiency < 80:
         insights.append("⚠️ **MD Energy Shortfall**: Battery capacity may be insufficient for complete MD peak shaving during 2-10 PM periods")
     elif energy_efficiency >= 95:
         insights.append("✅ **Excellent MD Coverage**: Battery effectively handles all MD peak period energy requirements")
     
-    if success_intervals / total_peak_intervals > 0.9:
-        insights.append("✅ **High MD Success Rate**: Battery effectively manages most peak events during MD recording hours")
-    elif success_intervals / total_peak_intervals < 0.6:
-        insights.append("❌ **Low MD Success Rate**: Consider increasing battery power rating or capacity for better MD management")
+    # Check if success intervals are available
+    if 'success_intervals' in locals() and 'total_peak_intervals' in locals() and total_peak_intervals > 0:
+        success_rate = success_intervals / total_peak_intervals
+        if success_rate > 0.9:
+            insights.append("✅ **High MD Success Rate**: Battery effectively manages most peak events during MD recording hours")
+        elif success_rate < 0.6:
+            insights.append("❌ **Low MD Success Rate**: Consider increasing battery power rating or capacity for better MD management")
     
-    avg_utilization = df_heatmap['Battery_Utilization_%'].mean()
-    if avg_utilization < 30:
-        insights.append("📊 **Under-utilized**: Battery power rating may be oversized")
-    elif avg_utilization > 80:
-        insights.append("🔥 **High Utilization**: Battery operating near maximum capacity")
+    # Check battery utilization if heatmap data is available
+    if 'df_heatmap' in locals() and len(df_heatmap) > 0:
+        avg_utilization = df_heatmap['Battery_Utilization_%'].mean()
+        if avg_utilization < 30:
+            insights.append("📊 **Under-utilized**: Battery power rating may be oversized")
+        elif avg_utilization > 80:
+            insights.append("🔥 **High Utilization**: Battery operating near maximum capacity")
     
+    # Check for low SOC events
     low_soc_events = len(df_sim[df_sim['Battery_SOC_Percent'] < 20])
     if low_soc_events > 0:
         insights.append(f"🔋 **Low SOC Warning**: {low_soc_events} intervals with SOC below 20%")
+    
+    # Add insight about data source alignment
+    if len(daily_analysis) > 0:
+        insights.append(f"📊 **Data Consistency**: Chart 5️⃣ now uses the same daily aggregation methodology as the Success/Failure Analysis ({len(daily_analysis)} days analyzed)")
     
     if not insights:
         insights.append("✅ **Optimal Performance**: Battery system operating within acceptable parameters")
