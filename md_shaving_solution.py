@@ -1573,12 +1573,62 @@ def _simulate_battery_operation(df, power_col, target_demand, battery_sizing, ba
                 soc[i] = soc[i-1]
             else:
                 soc[i] = usable_capacity * 0.8
+            
+            # Enhanced charging logic with better conditions and SOC awareness
+            current_time = df_sim.index[i]
+            hour = current_time.hour
+            soc_percentage = (soc[i] / usable_capacity) * 100
+            
+            # Calculate dynamic demand thresholds based on recent patterns
+            lookback_periods = min(96, len(df_sim))  # 24 hours of 15-min data or available
+            start_idx = max(0, i - lookback_periods)
+            recent_demand = df_sim[power_col].iloc[start_idx:i+1]
+            
+            if len(recent_demand) > 0:
+                avg_demand = recent_demand.mean()
+                demand_25th = recent_demand.quantile(0.25)
+            else:
+                avg_demand = df_sim[power_col].mean()
+                demand_25th = avg_demand * 0.6
+            
+            # Determine charging conditions based on SOC level and time
+            should_charge = False
+            charge_rate_factor = 0.3  # Default conservative rate
+            
+            # Critical SOC - charge aggressively
+            if soc_percentage < 30:
+                should_charge = current_demand < avg_demand * 0.9  # Lenient threshold
+                charge_rate_factor = 0.8  # Higher charge rate
+            # Low SOC - moderate charging
+            elif soc_percentage < 60:
+                if hour >= 22 or hour < 8:  # Off-peak hours
+                    should_charge = current_demand < avg_demand * 0.8
+                    charge_rate_factor = 0.6
+                else:  # Peak hours - more selective
+                    should_charge = current_demand < demand_25th * 1.2
+                    charge_rate_factor = 0.4
+            # Normal SOC - conservative charging
+            elif soc_percentage < 90:  # Increased from 90% (was implicit at 95%)
+                if hour >= 22 or hour < 8:  # Off-peak hours
+                    should_charge = current_demand < avg_demand * 0.7
+                    charge_rate_factor = 0.5
+                else:  # Peak hours - very selective
+                    should_charge = current_demand < demand_25th
+                    charge_rate_factor = 0.3
+            
+            # Execute charging if conditions are met
+            if should_charge and soc[i] < usable_capacity * 0.95:
+                # Calculate charge power with improved logic
+                remaining_capacity = usable_capacity * 0.95 - soc[i]
+                max_charge_energy = remaining_capacity / efficiency
                 
-            # Simple charging logic: charge when demand is significantly below average
-            avg_demand = df_sim[power_col].mean()
-            if current_demand < avg_demand * 0.7 and soc[i] < usable_capacity * 0.9:
-                # Charge at a moderate rate
-                charge_power = min(max_power * 0.3, (usable_capacity * 0.95 - soc[i]) / interval_hours)
+                charge_power = min(
+                    max_power * charge_rate_factor,  # Dynamic charging rate
+                    max_charge_energy / interval_hours,  # Energy constraint
+                    remaining_capacity / interval_hours / efficiency  # Don't exceed 95% SOC
+                )
+                
+                # Apply charging
                 battery_power[i] = -charge_power  # Negative for charging
                 soc[i] = soc[i] + charge_power * interval_hours * efficiency
                 net_demand.iloc[i] = current_demand + charge_power
@@ -1752,6 +1802,9 @@ def _display_battery_analysis(battery_analysis, battery_params, target_demand):
     st.markdown("#### 🔋 Battery Operation Simulation")
     _display_battery_simulation_chart(simulation['df_simulation'], target_demand, sizing)
     
+    # Charging/Discharging Analysis
+    _display_charging_analysis(simulation)
+
 
 def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None):
     """Display enhanced battery operation simulation chart with integrated charge/discharge visualization."""
@@ -1763,40 +1816,40 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None):
         target_demand = df_sim['Original_Demand'].quantile(0.9) if 'Original_Demand' in df_sim.columns else 0
     if sizing is None:
         sizing = {'power_rating_kw': 100}  # Default power rating for calculations
-    from plotly.subplots import make_subplots
     
-    # Create subplots with improved layout
-    fig = make_subplots(
-        rows=4, cols=1,
-        subplot_titles=(
-            'Demand Profile with Battery Operation & Charge/Discharge Areas', 
-            'Battery Power (Charge/Discharge)', 
-            'Battery State of Charge',
-            'Peak Shaving Effectiveness'
-        ),
-        vertical_spacing=0.06,
-        row_heights=[0.35, 0.25, 0.25, 0.15]
-    )
+    # Validate required columns exist
+    required_columns = ['Original_Demand', 'Net_Demand_kW', 'Battery_Power_kW', 'Battery_SOC_Percent']
+    missing_columns = [col for col in required_columns if col not in df_sim.columns]
     
-    # Plot 1: Enhanced demand profiles with charge/discharge areas
+    if missing_columns:
+        st.error(f"❌ Missing required columns in simulation data: {missing_columns}")
+        st.info("Available columns: " + ", ".join(df_sim.columns.tolist()))
+        return
+    
+    # Add Target_Demand column if it doesn't exist
+    if 'Target_Demand' not in df_sim.columns:
+        df_sim['Target_Demand'] = target_demand
+    
+    # Panel 1: Main Demand Profile Chart
+    st.markdown("##### 1️⃣ MD Shaving Effectiveness: Demand vs Battery vs Target")
+    
+    fig = go.Figure()
+    
     # Base demand lines
     fig.add_trace(
         go.Scatter(x=df_sim.index, y=df_sim['Original_Demand'], 
                   name='Original Demand', line=dict(color='red', width=2),
-                  hovertemplate='Original: %{y:.1f} kW<br>%{x}<extra></extra>'),
-        row=1, col=1
+                  hovertemplate='Original: %{y:.1f} kW<br>%{x}<extra></extra>')
     )
     fig.add_trace(
         go.Scatter(x=df_sim.index, y=df_sim['Net_Demand_kW'], 
                   name='Net Demand (with Battery)', line=dict(color='blue', width=2),
-                  hovertemplate='Net: %{y:.1f} kW<br>%{x}<extra></extra>'),
-        row=1, col=1
+                  hovertemplate='Net: %{y:.1f} kW<br>%{x}<extra></extra>')
     )
     fig.add_trace(
         go.Scatter(x=df_sim.index, y=df_sim['Target_Demand'], 
                   name='Target Demand', line=dict(color='green', dash='dash', width=2),
-                  hovertemplate='Target: %{y:.1f} kW<br>%{x}<extra></extra>'),
-        row=1, col=1
+                  hovertemplate='Target: %{y:.1f} kW<br>%{x}<extra></extra>')
     )
     
     # Add charge/discharge areas on the demand chart
@@ -1805,37 +1858,46 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None):
     if discharge_mask.any():
         discharge_data = df_sim[discharge_mask]
         
-        # Create stepped discharge area
-        x_step = []
-        y_step = []
-        for i, (idx, row) in enumerate(discharge_data.iterrows()):
-            if i == 0 or (idx - discharge_data.index[i-1]).total_seconds() > 3600:  # New discharge event
-                x_step.extend([idx, idx])
-                y_step.extend([0, row['Battery_Power_kW']])
-            else:
-                x_step.append(idx)
-                y_step.append(row['Battery_Power_kW'])
-        
-        # Add end points
-        if len(x_step) > 0:
-            x_step.append(x_step[-1])
-            y_step.append(0)
-            
-            fig.add_trace(go.Scatter(
-                x=x_step, y=y_step,
-                fill='tozeroy', fillcolor='rgba(255,165,0,0.4)',
-                line=dict(color='orange', width=1),
-                name='Battery Discharge',
-                hovertemplate='Discharge: %{y:.1f} kW<br>%{x}<extra></extra>',
-                yaxis='y2'
-            ))
+        # Add discharge areas as scatter with fill
+        fig.add_trace(go.Scatter(
+            x=discharge_data.index, 
+            y=discharge_data['Battery_Power_kW'],
+            fill='tozeroy', 
+            fillcolor='rgba(255,165,0,0.3)',
+            line=dict(color='orange', width=1),
+            name='Battery Discharge Areas',
+            hovertemplate='Discharge: %{y:.1f} kW<br>%{x}<extra></extra>',
+            yaxis='y2'
+        ))
     
+    # Add charging areas
+    charge_mask = df_sim['Battery_Power_kW'] < 0
+    if charge_mask.any():
+        charge_data = df_sim[charge_mask]
+        
+        # Add charging areas as scatter with fill
+        fig.add_trace(go.Scatter(
+            x=charge_data.index, 
+            y=charge_data['Battery_Power_kW'].abs(),
+            fill='tozeroy', 
+            fillcolor='rgba(0,255,0,0.3)',
+            line=dict(color='green', width=1),
+            name='Battery Charging Areas',
+            hovertemplate='Charging: %{y:.1f} kW<br>%{x}<extra></extra>',
+            yaxis='y2'
+        ))
+    
+    # Update layout for dual y-axes
     fig.update_layout(
         title='🎯 MD Shaving Effectiveness: Demand vs Battery vs Target',
         xaxis_title='Time',
-        yaxis=dict(title='Power Demand (kW)', side='left'),
-        yaxis2=dict(title='Battery Discharge (kW)', side='right', overlaying='y', 
-                    range=[0, max(df_sim['Battery_Power_kW'].max() * 1.1, 100)]),
+        yaxis_title='Power Demand (kW)',
+        yaxis2=dict(
+            title='Battery Power (kW)',
+            overlaying='y',
+            side='right',
+            range=[0, sizing['power_rating_kw'] * 1.1]
+        ),
         height=500,
         hovermode='x unified',
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
@@ -2071,3 +2133,84 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None):
     
     for insight in insights:
         st.info(insight)
+
+
+def _display_charging_analysis(simulation_results):
+    """Display detailed charging vs discharging analysis."""
+    df_sim = simulation_results['df_simulation']
+    
+    st.markdown("##### 🔋 Battery Charging/Discharging Analysis")
+    
+    # Calculate detailed metrics
+    charging_intervals = df_sim['Battery_Power_kW'] < 0
+    discharging_intervals = df_sim['Battery_Power_kW'] > 0
+    idle_intervals = df_sim['Battery_Power_kW'] == 0
+    
+    total_energy_charged = simulation_results.get('total_energy_charged', 0)
+    total_energy_discharged = simulation_results.get('total_energy_discharged', 0)
+    
+    charging_count = len(df_sim[charging_intervals])
+    discharging_count = len(df_sim[discharging_intervals])
+    idle_count = len(df_sim[idle_intervals])
+    total_intervals = len(df_sim)
+    
+    # Display metrics in columns
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Charging Intervals", f"{charging_count}")
+        st.metric("Charging %", f"{(charging_count/total_intervals*100):.1f}%")
+    
+    with col2:
+        st.metric("Discharging Intervals", f"{discharging_count}")
+        st.metric("Discharging %", f"{(discharging_count/total_intervals*100):.1f}%")
+    
+    with col3:
+        st.metric("Idle Intervals", f"{idle_count}")
+        st.metric("Idle %", f"{(idle_count/total_intervals*100):.1f}%")
+    
+    with col4:
+        st.metric("Energy Charged", f"{total_energy_charged:.1f} kWh")
+        st.metric("Energy Discharged", f"{total_energy_discharged:.1f} kWh")
+    
+    # Charging efficiency and balance
+    if total_energy_discharged > 0:
+        charge_efficiency = (total_energy_charged / total_energy_discharged) * 100
+        st.metric("Charge/Discharge Ratio", f"{charge_efficiency:.1f}%")
+    
+    # Analysis and recommendations
+    if charging_count == 0:
+        st.error("⚠️ **No Charging Detected!** The battery is not charging at all. This will lead to SOC depletion.")
+    elif charging_count < discharging_count * 0.5:
+        st.warning(f"⚠️ **Insufficient Charging**: Only {charging_count} charging intervals vs {discharging_count} discharging intervals. Consider relaxing charging conditions.")
+    elif total_energy_charged < total_energy_discharged * 0.8:
+        st.warning(f"⚠️ **Energy Imbalance**: Charging {total_energy_charged:.1f} kWh vs discharging {total_energy_discharged:.1f} kWh. Battery may become depleted over time.")
+    else:
+        st.success("✅ **Good Charging Balance**: Battery has adequate charging opportunities.")
+    
+    # Show charging pattern analysis
+    if charging_count > 0:
+        with st.expander("🔍 Detailed Charging Pattern Analysis"):
+            # Group charging intervals by hour to show time distribution
+            df_charging = df_sim[charging_intervals].copy()
+            df_charging['Hour'] = df_charging.index.hour
+            charging_by_hour = df_charging.groupby('Hour').size()
+            
+            st.markdown("**Charging Activity by Hour:**")
+            for hour in range(24):
+                count = charging_by_hour.get(hour, 0)
+                if count > 0:
+                    st.write(f"• **{hour:02d}:00-{hour:02d}:59**: {count} intervals ({count/charging_count*100:.1f}% of total charging)")
+            
+            # Show average charging power and SOC during charging
+            avg_charge_power = df_charging['Battery_Power_kW'].abs().mean()
+            avg_soc_during_charge = df_charging['Battery_SOC_Percent'].mean()
+            
+            col1, col2 = st.columns(2)
+            col1.metric("Avg Charging Power", f"{avg_charge_power:.1f} kW")
+            col2.metric("Avg SOC During Charging", f"{avg_soc_during_charge:.1f}%")
+
+
+# ============================================================================
+# END OF MODULE
+# ============================================================================

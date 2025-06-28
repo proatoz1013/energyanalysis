@@ -294,39 +294,92 @@ class BatteryAlgorithms:
     def _calculate_charge_action(self, current_demand, previous_soc, max_power, 
                                 usable_capacity, efficiency, interval_hours, df_sim, i):
         """Calculate optimal charging action during low demand periods."""
-        # Intelligent charging logic
+        # Improved charging logic with better conditions
         current_time = df_sim.index[i]
         hour = current_time.hour
         
-        # Only charge during off-peak hours (22:00-08:00)
-        is_charging_time = hour >= 22 or hour < 8
+        # Check if battery needs charging (lower threshold for more charging opportunities)
+        if previous_soc >= usable_capacity * 0.90:  # Reduced from 95% to 90%
+            return 0  # Battery is sufficiently charged
         
-        if not is_charging_time or previous_soc >= usable_capacity * 0.95:
-            return 0  # No charging
+        # Enhanced charging time windows - allow more charging opportunities
+        # Primary: Off-peak hours (22:00-08:00)
+        # Secondary: Low demand periods during peak hours
+        is_primary_charging_time = hour >= 22 or hour < 8
         
-        # Charge when demand is significantly below average
-        avg_demand = df_sim['Original_Demand'].mean()
-        charging_threshold = avg_demand * 0.7
+        # Calculate dynamic demand threshold based on recent demand patterns
+        # Look at last 24 hours (96 intervals for 15-min data) or available data
+        lookback_periods = min(96, len(df_sim))
+        start_idx = max(0, i - lookback_periods)
+        recent_demand = df_sim['Original_Demand'].iloc[start_idx:i+1]
         
+        if len(recent_demand) > 0:
+            avg_demand = recent_demand.mean()
+            demand_percentile_25 = recent_demand.quantile(0.25)  # 25th percentile
+            demand_percentile_50 = recent_demand.quantile(0.50)  # Median
+        else:
+            avg_demand = df_sim['Original_Demand'].mean()
+            demand_percentile_25 = avg_demand * 0.6
+            demand_percentile_50 = avg_demand * 0.8
+        
+        # Determine charging conditions based on demand level and SOC urgency
+        soc_percentage = (previous_soc / usable_capacity) * 100
+        
+        # Critical SOC - charge aggressively even during peak hours
+        if soc_percentage < 30:
+            charging_threshold = demand_percentile_50  # Allow charging up to median demand
+            charge_rate_factor = 1.0  # Use full power if needed
+        # Low SOC - charge during off-peak and low demand
+        elif soc_percentage < 60:
+            if is_primary_charging_time:
+                charging_threshold = avg_demand * 0.85  # More lenient during off-peak
+                charge_rate_factor = 0.9
+            else:
+                charging_threshold = demand_percentile_25  # Only very low demand during peak
+                charge_rate_factor = 0.6
+        # Normal SOC - conservative charging
+        else:
+            if is_primary_charging_time:
+                charging_threshold = avg_demand * 0.75
+                charge_rate_factor = 0.7
+            else:
+                charging_threshold = demand_percentile_25 * 0.8  # Very conservative during peak
+                charge_rate_factor = 0.4
+        
+        # Check if current demand allows charging
         if current_demand > charging_threshold:
             return 0  # Demand too high for charging
         
-        # Calculate optimal charge rate
+        # Calculate optimal charge rate with improved logic
         remaining_capacity = usable_capacity - previous_soc
         max_charge_energy = remaining_capacity / efficiency
-        max_charge_power = min(
+        
+        # Determine charge power based on urgency and conditions
+        base_charge_power = min(
             max_charge_energy / interval_hours,  # Energy constraint
-            max_power * 0.8,  # Conservative charging rate (80% of max power)
+            max_power * charge_rate_factor,  # Dynamic charging rate
             (usable_capacity * 0.95 - previous_soc) / interval_hours / efficiency  # Don't exceed 95% SOC
         )
         
-        return max(0, max_charge_power)
+        # Boost charging if SOC is critically low
+        if soc_percentage < 20:
+            base_charge_power = min(base_charge_power * 1.2, max_power)  # 20% boost for critical SOC
+        
+        return max(0, base_charge_power)
     
     def _calculate_simulation_metrics(self, df_sim, target_demand, soc_percent):
         """Calculate comprehensive simulation performance metrics."""
-        # Energy metrics
+        # Energy metrics with more detailed analysis
+        charging_intervals = df_sim['Battery_Power_kW'] < 0
+        discharging_intervals = df_sim['Battery_Power_kW'] > 0
+        
         total_energy_discharged = sum([p * 0.25 for p in df_sim['Battery_Power_kW'] if p > 0])  # Assuming 15-min intervals
         total_energy_charged = sum([abs(p) * 0.25 for p in df_sim['Battery_Power_kW'] if p < 0])
+        
+        # Charging/Discharging cycle analysis
+        charging_cycles = len(df_sim[charging_intervals])
+        discharging_cycles = len(df_sim[discharging_intervals])
+        total_intervals = len(df_sim)
         
         # Peak reduction
         peak_reduction = df_sim['Original_Demand'].max() - df_sim['Net_Demand_kW'].max()
@@ -340,6 +393,10 @@ class BatteryAlgorithms:
         total_peak_events = len(df_sim[df_sim['Original_Demand'] > target_demand])
         success_rate = (successful_shaves / total_peak_events * 100) if total_peak_events > 0 else 0
         
+        # Calculate average charging and discharging power
+        avg_charge_power = df_sim[charging_intervals]['Battery_Power_kW'].abs().mean() if charging_cycles > 0 else 0
+        avg_discharge_power = df_sim[discharging_intervals]['Battery_Power_kW'].mean() if discharging_cycles > 0 else 0
+        
         return {
             'df_simulation': df_sim,
             'total_energy_discharged': total_energy_discharged,
@@ -351,7 +408,15 @@ class BatteryAlgorithms:
             'average_soc': np.mean(soc_percent),
             'min_soc': np.min(soc_percent),
             'max_soc': np.max(soc_percent),
-            'energy_efficiency': (total_energy_discharged / total_energy_charged * 100) if total_energy_charged > 0 else 0
+            'energy_efficiency': (total_energy_discharged / total_energy_charged * 100) if total_energy_charged > 0 else 0,
+            # Enhanced metrics for charging analysis
+            'charging_intervals': charging_cycles,
+            'discharging_intervals': discharging_cycles,
+            'charging_percentage': (charging_cycles / total_intervals * 100) if total_intervals > 0 else 0,
+            'discharging_percentage': (discharging_cycles / total_intervals * 100) if total_intervals > 0 else 0,
+            'avg_charge_power': avg_charge_power,
+            'avg_discharge_power': avg_discharge_power,
+            'charge_discharge_ratio': (total_energy_charged / total_energy_discharged) if total_energy_discharged > 0 else 0
         }
     
     def calculate_financial_metrics(self, battery_costs, event_summaries, total_md_rate, battery_params):
