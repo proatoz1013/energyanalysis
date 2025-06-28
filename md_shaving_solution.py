@@ -2052,13 +2052,22 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None):
     col3.metric("Est. Total Monthly Savings", f"RM {total_estimated_savings:.0f}")
     
     # Panel 5: Cumulative Energy Analysis
-    st.markdown("##### 5️⃣ Cumulative Energy Discharged vs Required")
+    st.markdown("##### 5️⃣ Cumulative Energy Discharged vs Required (MD Peak Periods Only)")
     
-    # Calculate cumulative energy metrics
+    # Calculate cumulative energy metrics - FOCUS ON MD PEAK PERIODS ONLY
     df_energy = df_sim.copy()
     df_energy['Energy_Discharged'] = (df_energy['Battery_Power_kW'].clip(lower=0) * 0.25).cumsum()  # Assuming 15-min intervals
-    df_energy['Energy_Required'] = (df_energy['Original_Demand'] - target_demand).clip(lower=0) * 0.25
-    df_energy['Cumulative_Energy_Required'] = df_energy['Energy_Required'].cumsum()
+    
+    # Calculate energy required ONLY during MD peak periods (2 PM-10 PM, weekdays)
+    def is_md_peak_period(timestamp):
+        return timestamp.weekday() < 5 and 14 <= timestamp.hour < 22
+    
+    df_energy['Is_MD_Peak'] = df_energy.index.to_series().apply(is_md_peak_period)
+    df_energy['Energy_Required_MD_Only'] = 0.0
+    df_energy.loc[df_energy['Is_MD_Peak'], 'Energy_Required_MD_Only'] = (
+        (df_energy.loc[df_energy['Is_MD_Peak'], 'Original_Demand'] - target_demand).clip(lower=0) * 0.25
+    )
+    df_energy['Cumulative_Energy_Required'] = df_energy['Energy_Required_MD_Only'].cumsum()
     df_energy['Energy_Shortfall'] = df_energy['Cumulative_Energy_Required'] - df_energy['Energy_Discharged']
     
     # Create cumulative energy chart
@@ -2072,8 +2081,8 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None):
     
     fig5.add_trace(go.Scatter(
         x=df_energy.index, y=df_energy['Cumulative_Energy_Required'],
-        name='Energy Required for Full Shaving', line=dict(color='red', width=2, dash='dot'),
-        hovertemplate='Required: %{y:.1f} kWh<br>%{x}<extra></extra>'
+        name='Energy Required (MD Peak Periods Only)', line=dict(color='red', width=2, dash='dot'),
+        hovertemplate='Required (MD Peak): %{y:.1f} kWh<br>%{x}<extra></extra>'
     ))
     
     # Fill area showing energy shortfall
@@ -2081,12 +2090,12 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None):
         x=df_energy.index, y=df_energy['Energy_Shortfall'],
         fill='tozeroy', fillcolor='rgba(255,0,0,0.2)',
         line=dict(color='rgba(255,0,0,0)'),
-        name='Energy Shortfall',
-        hovertemplate='Shortfall: %{y:.1f} kWh<br>%{x}<extra></extra>'
+        name='Energy Shortfall (MD Peak Only)',
+        hovertemplate='Shortfall (MD Peak): %{y:.1f} kWh<br>%{x}<extra></extra>'
     ))
     
     fig5.update_layout(
-        title='📈 Cumulative Energy Analysis: Battery Performance vs Requirements',
+        title='📈 Cumulative Energy Analysis: Battery Performance vs MD Peak Requirements',
         xaxis_title='Time',
         yaxis_title='Cumulative Energy (kWh)',
         height=400,
@@ -2095,15 +2104,22 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None):
     
     st.plotly_chart(fig5, use_container_width=True)
     
+    # Add explanation for MD-focused analysis
+    st.info("""
+    📊 **MD Peak Period Focus**: This analysis calculates energy requirements only during **MD recording hours** 
+    (2 PM-10 PM, weekdays) since these are the only periods that affect monthly MD charges. 
+    Battery discharge outside these hours doesn't contribute to MD cost savings.
+    """)
+    
     # Energy analysis summary
     final_discharged = df_energy['Energy_Discharged'].iloc[-1]
     final_required = df_energy['Cumulative_Energy_Required'].iloc[-1]
-    energy_efficiency = (final_discharged / final_required * 100) if final_required > 0 else 0
+    energy_efficiency = (final_discharged / final_required * 100) if final_required > 0 else 100
     
     col1, col2, col3 = st.columns(3)
     col1.metric("Total Energy Discharged", f"{final_discharged:.0f} kWh")
-    col2.metric("Total Energy Required", f"{final_required:.0f} kWh")
-    col3.metric("Energy Fulfillment Rate", f"{energy_efficiency:.1f}%")
+    col2.metric("Total Energy Required (MD Peak)", f"{final_required:.0f} kWh")
+    col3.metric("MD Energy Fulfillment Rate", f"{energy_efficiency:.1f}%")
     
     # Key insights
     st.markdown("##### 🔍 Key Insights from Enhanced Analysis")
@@ -2111,12 +2127,14 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None):
     insights = []
     
     if energy_efficiency < 80:
-        insights.append("⚠️ **Energy Shortfall**: Battery capacity may be insufficient for complete MD shaving")
+        insights.append("⚠️ **MD Energy Shortfall**: Battery capacity may be insufficient for complete MD peak shaving during 2-10 PM periods")
+    elif energy_efficiency >= 95:
+        insights.append("✅ **Excellent MD Coverage**: Battery effectively handles all MD peak period energy requirements")
     
     if success_intervals / total_peak_intervals > 0.9:
-        insights.append("✅ **High Success Rate**: Battery effectively manages most peak events")
+        insights.append("✅ **High MD Success Rate**: Battery effectively manages most peak events during MD recording hours")
     elif success_intervals / total_peak_intervals < 0.6:
-        insights.append("❌ **Low Success Rate**: Consider increasing battery power rating or capacity")
+        insights.append("❌ **Low MD Success Rate**: Consider increasing battery power rating or capacity for better MD management")
     
     avg_utilization = df_heatmap['Battery_Utilization_%'].mean()
     if avg_utilization < 30:
