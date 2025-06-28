@@ -6,6 +6,17 @@ from tariffs.rp4_tariffs import get_tariff_data
 from tariffs.peak_logic import is_peak_rp4
 
 
+# Helper function to read different file formats
+def read_uploaded_file(file):
+    """Read uploaded file based on its extension"""
+    if file.name.endswith('.csv'):
+        return pd.read_csv(file)
+    elif file.name.endswith(('.xls', '.xlsx')):
+        return pd.read_excel(file)
+    else:
+        raise ValueError("Unsupported file format. Please upload CSV, XLS, or XLSX files.")
+
+
 # Ensure the `fmt` function is defined at the top level for accessibility
 def fmt(val):
     if val is None or val == "":
@@ -100,9 +111,9 @@ def show():
         return
 
     # --- File uploader and column selection ---
-    uploaded_file = st.file_uploader("Upload your Excel file", type=["xlsx"], key="tariff_file_uploader")
+    uploaded_file = st.file_uploader("Upload your data file", type=["csv", "xls", "xlsx"], key="tariff_file_uploader")
     if uploaded_file:
-        df = pd.read_excel(uploaded_file)
+        df = read_uploaded_file(uploaded_file)
         st.success("File uploaded and read successfully!")
         st.subheader("Raw Data Preview")
         st.dataframe(df.head(), use_container_width=True)

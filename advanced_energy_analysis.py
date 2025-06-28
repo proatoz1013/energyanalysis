@@ -16,11 +16,25 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+from datetime import datetime, timedelta
+import warnings
+warnings.filterwarnings('ignore')
 
 # Import RP4 and utility modules
 from tariffs.rp4_tariffs import get_tariff_data
 from tariffs.peak_logic import is_peak_rp4
 from utils.cost_calculator import calculate_cost
+
+
+# Helper function to read different file formats
+def read_uploaded_file(file):
+    """Read uploaded file based on its extension"""
+    if file.name.endswith('.csv'):
+        return pd.read_csv(file)
+    elif file.name.endswith(('.xls', '.xlsx')):
+        return pd.read_excel(file)
+    else:
+        raise ValueError("Unsupported file format. Please upload CSV, XLS, or XLSX files.")
 
 
 def fmt(val):
@@ -49,11 +63,11 @@ def show():
     and current MD rates for sophisticated energy management insights.
     """)
     
-    uploaded_file = st.file_uploader("Upload your Excel file", type=["xlsx"], key="advanced_file_uploader")
+    uploaded_file = st.file_uploader("Upload your data file", type=["csv", "xls", "xlsx"], key="advanced_file_uploader")
     
     if uploaded_file:
         try:
-            df = pd.read_excel(uploaded_file)
+            df = read_uploaded_file(uploaded_file)
             
             # Additional safety check for dataframe validity
             if df is None or df.empty:
@@ -811,7 +825,7 @@ def _display_peak_event_analysis(event_summaries, total_md_rate):
         min_daily_md_kwh = min(daily_md_kwh_ranges) if daily_md_kwh_ranges else 0
         max_daily_md_kwh = max(daily_md_kwh_ranges) if daily_md_kwh_ranges else 0
         avg_events_per_day = total_events / len(daily_events) if daily_events else 0
-        days_with_events = len(daily_events)
+        days_with_events = len(daily_events);
         
         # Display enhanced summary
         col1, col2, col3, col4 = st.columns(4)

@@ -16,11 +16,31 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+from datetime import datetime, timedelta
+import warnings
+warnings.filterwarnings('ignore')
 
 # Import RP4 and utility modules
 from tariffs.rp4_tariffs import get_tariff_data
 from tariffs.peak_logic import is_peak_rp4
 from utils.cost_calculator import calculate_cost
+
+# Helper function to read different file formats
+def read_uploaded_file(file):
+    """Read uploaded file based on its extension"""
+    if file.name.endswith('.csv'):
+        return pd.read_csv(file)
+    elif file.name.endswith(('.xls', '.xlsx')):
+        return pd.read_excel(file)
+    else:
+        raise ValueError("Unsupported file format. Please upload CSV, XLS, or XLSX files.")
+
+# Import battery algorithms
+from battery_algorithms import (
+    get_battery_parameters_ui, 
+    perform_comprehensive_battery_analysis,
+    create_battery_algorithms
+)
 
 
 def fmt(val):
@@ -212,11 +232,11 @@ def show():
             key="md_threshold_sensitivity"
         )
 
-    uploaded_file = st.file_uploader("Upload your Excel file", type=["xlsx"], key="md_shaving_file_uploader")
+    uploaded_file = st.file_uploader("Upload your data file", type=["csv", "xls", "xlsx"], key="md_shaving_file_uploader")
     
     if uploaded_file:
         try:
-            df = pd.read_excel(uploaded_file)
+            df = read_uploaded_file(uploaded_file)
             
             # Additional safety check for dataframe validity
             if df is None or df.empty:
@@ -652,10 +672,10 @@ def _perform_md_shaving_analysis(df, power_col, selected_tariff, holidays, targe
         st.markdown("## 🔋 Battery Energy Storage System (BESS) Analysis")
         
         # Get battery analysis parameters from sidebar
-        battery_params = _get_battery_parameters(event_summaries)
+        battery_params = get_battery_parameters_ui(event_summaries)
         
         # Perform battery sizing and analysis
-        battery_analysis = _perform_battery_analysis(
+        battery_analysis = perform_comprehensive_battery_analysis(
             df, power_col, event_summaries, target_demand, 
             interval_hours, battery_params, total_md_rate
         )
@@ -951,7 +971,7 @@ def _display_peak_event_analysis(event_summaries, total_md_rate):
         min_daily_md_kwh = min(daily_md_kwh_ranges) if daily_md_kwh_ranges else 0
         max_daily_md_kwh = max(daily_md_kwh_ranges) if daily_md_kwh_ranges else 0
         avg_events_per_day = total_events / len(daily_events) if daily_events else 0
-        days_with_events = len(daily_events)
+        days_with_events = len(daily_events);
         
         # Display enhanced summary
         col1, col2, col3, col4 = st.columns(4)
@@ -1729,77 +1749,20 @@ def _display_battery_analysis(battery_analysis, battery_params, target_demand):
         st.metric("Energy Efficiency", f"{simulation['total_energy_discharged']/simulation['total_energy_charged']*100:.0f}%" if simulation['total_energy_charged'] > 0 else "N/A")
     
     # Battery Operation Visualization
-    visualization_mode = st.radio(
-        "Battery Visualization Mode:",
-        ["Standard Simulation", "Enhanced MD Analysis", "Both Views"],
-        index=0,
-        help="Choose visualization type for battery analysis"
-    )
+    st.markdown("#### 🔋 Battery Operation Simulation")
+    _display_battery_simulation_chart(simulation['df_simulation'], target_demand, sizing)
     
-    if visualization_mode in ["Standard Simulation", "Both Views"]:
-        st.markdown("#### 🔋 Standard Battery Operation Simulation")
-        _display_battery_simulation_chart(simulation['df_simulation'])
-    
-    if visualization_mode in ["Enhanced MD Analysis", "Both Views"]:
-        st.markdown("---")
-        st.markdown("#### 📊 Enhanced MD Shaving Analysis Dashboard")
-        st.info("💡 **Enhanced visualization for MD shaving effectiveness and battery utilization analysis**")
-        _display_enhanced_md_analysis(simulation['df_simulation'], sizing, battery_params, target_demand)
-    
-    # Financial Analysis
-    st.markdown("### 📈 Financial Analysis")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        if financial['simple_payback_years'] != float('inf'):
-            st.metric("Simple Payback", f"{financial['simple_payback_years']:.1f} years")
-        else:
-            st.metric("Simple Payback", "∞", delta="Not viable")
-    with col2:
-        npv_color = "normal" if financial['npv'] >= 0 else "inverse"
-        st.metric("NPV", f"RM {financial['npv']:,.0f}", delta="Positive" if financial['npv'] >= 0 else "Negative")
-    with col3:
-        if financial['irr_percent'] is not None:
-            st.metric("IRR", f"{financial['irr_percent']:.1f}%")
-        else:
-            st.metric("IRR", "> 100%")
-    with col4:
-        st.metric("Benefit-Cost Ratio", f"{financial['benefit_cost_ratio']:.2f}")
-    
-    # Financial Summary
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("**Annual Savings Breakdown:**")
-        st.write(f"• MD Savings: RM {financial['annual_md_savings']:,.0f}")
-        st.write(f"• Less O&M: RM {costs['annual_opex']:,.0f}")
-        st.write(f"• **Net Annual Savings: RM {financial['net_annual_savings']:,.0f}**")
-    
-    with col2:
-        st.markdown("**Investment Summary:**")
-        st.write(f"• Initial Investment: RM {costs['total_capex']:,.0f}")
-        st.write(f"• Total Lifecycle Value: RM {financial['total_lifecycle_savings']:,.0f}")
-        st.write(f"• **ROI: {financial['roi_percent']:+.1f}%**")
-    
-    # Investment Recommendation
-    st.markdown("### 🎯 Investment Recommendation")
-    
-    if financial['npv'] > 0 and financial['simple_payback_years'] <= 10:
-        st.success("✅ **RECOMMENDED INVESTMENT**")
-        st.success(f"This battery system shows strong financial returns with a {financial['simple_payback_years']:.1f}-year payback and positive NPV of RM {financial['npv']:,.0f}.")
-    elif financial['npv'] > 0:
-        st.warning("⚠️ **MARGINAL INVESTMENT**")
-        st.warning(f"Positive NPV but long payback period ({financial['simple_payback_years']:.1f} years). Consider optimizing system size or waiting for cost reductions.")
-    else:
-        st.error("❌ **NOT RECOMMENDED**")
-        st.error(f"Negative NPV (RM {financial['npv']:,.0f}) indicates the investment is not financially viable under current assumptions.")
-    
-    # Sensitivity note
-    st.info("💡 **Note:** Results are based on historical peak events. Actual performance may vary. Consider conducting a detailed feasibility study for large investments.")
 
-
-def _display_battery_simulation_chart(df_sim):
+def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None):
     """Display enhanced battery operation simulation chart with integrated charge/discharge visualization."""
     import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+    
+    # Handle None parameters with safe defaults
+    if target_demand is None:
+        target_demand = df_sim['Original_Demand'].quantile(0.9) if 'Original_Demand' in df_sim.columns else 0
+    if sizing is None:
+        sizing = {'power_rating_kw': 100}  # Default power rating for calculations
     from plotly.subplots import make_subplots
     
     # Create subplots with improved layout
@@ -1867,7 +1830,6 @@ def _display_battery_simulation_chart(df_sim):
                 yaxis='y2'
             ))
     
-    # Update layout with dual y-axes
     fig.update_layout(
         title='🎯 MD Shaving Effectiveness: Demand vs Battery vs Target',
         xaxis_title='Time',

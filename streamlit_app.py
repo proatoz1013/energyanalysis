@@ -95,12 +95,22 @@ with tabs[1]:
     }
     st.markdown(f"**Charging Rate:** {charging_rates.get(tariff_rate, 'N/A')}")
 
-    uploaded_file = st.file_uploader("Upload your Excel file", type=["xlsx"])
+    uploaded_file = st.file_uploader("Upload your data file", type=["csv", "xls", "xlsx"])
+
+    # Helper function to read different file formats
+    def read_uploaded_file(file):
+        """Read uploaded file based on its extension"""
+        if file.name.endswith('.csv'):
+            return pd.read_csv(file)
+        elif file.name.endswith(('.xls', '.xlsx')):
+            return pd.read_excel(file)
+        else:
+            raise ValueError("Unsupported file format")
 
     # Add preprocessing logic to handle any type of timestamp format
     if uploaded_file:
         try:
-            df = pd.read_excel(uploaded_file)
+            df = read_uploaded_file(uploaded_file)
             st.success("File uploaded and read successfully!")
 
             st.subheader("Raw Data Preview")
@@ -779,11 +789,11 @@ with tabs[3]:
     from utils.old_cost_calculator import calculate_old_cost
     from old_rate import charging_rates, old_to_new_tariff_map
     
-    uploaded_file = st.file_uploader("Upload your Excel file for monthly analysis", type=["xlsx"], key="monthly_file_uploader")
+    uploaded_file = st.file_uploader("Upload your data file for monthly analysis", type=["csv", "xls", "xlsx"], key="monthly_file_uploader")
     
     if uploaded_file:
         try:
-            df = pd.read_excel(uploaded_file)
+            df = read_uploaded_file(uploaded_file)
             st.success("File uploaded successfully!")
             
             # Data Configuration
