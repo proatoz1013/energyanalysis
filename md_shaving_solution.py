@@ -1993,46 +1993,71 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None):
     
     st.plotly_chart(fig3, use_container_width=True)
     
-    # Panel 4: Daily Peak Shave Effectiveness Bar Chart
-    st.markdown("##### 4️⃣ Daily Peak Shave Effectiveness")
+    # Panel 4: Daily Peak Shave Effectiveness Analysis
+    st.markdown("##### 4️⃣ Daily Peak Shave Effectiveness & Success Analysis")
     
-    # Calculate daily peaks
+    # Calculate detailed daily analysis
     daily_analysis = df_sim.groupby(df_sim.index.date).agg({
         'Original_Demand': 'max',
         'Net_Demand_kW': 'max',
-        'Battery_Power_kW': 'max'
+        'Battery_Power_kW': 'max',
+        'Battery_SOC_Percent': ['min', 'mean']
     }).reset_index()
-    daily_analysis.columns = ['Date', 'Original_Peak', 'Net_Peak', 'Max_Battery_Power']
     
-    # Calculate savings (simplified - assumes MD rate)
+    # Flatten column names
+    daily_analysis.columns = ['Date', 'Original_Peak', 'Net_Peak', 'Max_Battery_Power', 'Min_SOC', 'Avg_SOC']
+    
+    # Calculate detailed metrics
     md_rate_estimate = 97.06  # RM/kW from Medium Voltage TOU
     daily_analysis['Peak_Reduction'] = daily_analysis['Original_Peak'] - daily_analysis['Net_Peak']
     daily_analysis['Est_Monthly_Saving'] = daily_analysis['Peak_Reduction'] * md_rate_estimate
+    daily_analysis['Success'] = daily_analysis['Net_Peak'] <= target_demand * 1.05  # 5% tolerance
+    daily_analysis['Peak_Shortfall'] = (daily_analysis['Net_Peak'] - target_demand).clip(lower=0)
+    daily_analysis['Required_Additional_Power'] = daily_analysis['Peak_Shortfall']
     
-    # Create bar chart
+    # Categorize failure reasons
+    def categorize_failure_reason(row):
+        if row['Success']:
+            return 'Success'
+        elif row['Min_SOC'] < 20:
+            return 'Low SOC (Battery Depleted)'
+        elif row['Max_Battery_Power'] < sizing['power_rating_kw'] * 0.9:
+            return 'Insufficient Battery Power'
+        elif row['Peak_Shortfall'] > sizing['power_rating_kw']:
+            return 'Demand Exceeds Battery Capacity'
+        else:
+            return 'Other (Algorithm/Timing)'
+    
+    daily_analysis['Failure_Reason'] = daily_analysis.apply(categorize_failure_reason, axis=1)
+    
+    # Create enhanced visualization
     fig4 = go.Figure()
     
     # Target line
     fig4.add_hline(y=target_demand, line_dash="dash", line_color="green", line_width=2,
                    annotation_text=f"MD Target: {target_demand:.0f} kW")
     
+    # Color code bars based on success/failure
+    bar_colors = ['green' if success else 'red' for success in daily_analysis['Success']]
+    
     # Original peaks
     fig4.add_trace(go.Bar(
         x=daily_analysis['Date'], y=daily_analysis['Original_Peak'],
-        name='Original Peak', marker_color='red', opacity=0.7,
+        name='Original Peak', marker_color='lightcoral', opacity=0.6,
         hovertemplate='Original: %{y:.0f} kW<br>Date: %{x}<extra></extra>'
     ))
     
-    # Net peaks (after battery)
+    # Net peaks (after battery) - color coded by success
     fig4.add_trace(go.Bar(
         x=daily_analysis['Date'], y=daily_analysis['Net_Peak'],
-        name='Net Peak (with Battery)', marker_color='blue', opacity=0.7,
-        hovertemplate='Net: %{y:.0f} kW<br>Saving: RM %{customdata:.0f}<extra></extra>',
-        customdata=daily_analysis['Est_Monthly_Saving']
+        name='Net Peak (with Battery)', 
+        marker_color=bar_colors, opacity=0.8,
+        hovertemplate='Net: %{y:.0f} kW<br>Status: %{customdata}<br>Date: %{x}<extra></extra>',
+        customdata=['SUCCESS' if s else 'FAILED' for s in daily_analysis['Success']]
     ))
     
     fig4.update_layout(
-        title='📊 Daily Peak Shaving Effectiveness with Financial Impact',
+        title='📊 Daily Peak Shaving Effectiveness (Green=Success, Red=Failed)',
         xaxis_title='Date',
         yaxis_title='Peak Demand (kW)',
         height=400,
@@ -2043,13 +2068,112 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None):
     
     # Summary stats
     total_days = len(daily_analysis)
-    successful_days = len(daily_analysis[daily_analysis['Net_Peak'] <= target_demand * 1.05])
-    total_estimated_savings = daily_analysis['Est_Monthly_Saving'].sum()
+    successful_days = sum(daily_analysis['Success'])
+    failed_days = total_days - successful_days
+    success_rate = (successful_days / total_days * 100) if total_days > 0 else 0
     
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Days Analyzed", f"{total_days}")
-    col2.metric("Successful Days", f"{successful_days} ({successful_days/total_days*100:.1f}%)")
-    col3.metric("Est. Total Monthly Savings", f"RM {total_estimated_savings:.0f}")
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Total Days", f"{total_days}")
+    col2.metric("Successful Days", f"{successful_days}", delta=f"{success_rate:.1f}%")
+    col3.metric("Failed Days", f"{failed_days}", delta=f"{100-success_rate:.1f}%")
+    col4.metric("Success Rate", f"{success_rate:.1f}%")
+    
+    # Detailed Success/Failure Analysis
+    st.markdown("#### 🔍 Detailed Success/Failure Analysis")
+    
+    # Separate successful and failed events
+    successful_events = daily_analysis[daily_analysis['Success']].copy()
+    failed_events = daily_analysis[~daily_analysis['Success']].copy()
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("##### ✅ **Successful Peak Shaving Days**")
+        if len(successful_events) > 0:
+            st.dataframe(successful_events[['Date', 'Original_Peak', 'Net_Peak', 'Peak_Reduction', 'Min_SOC']].style.format({
+                'Original_Peak': '{:.1f} kW',
+                'Net_Peak': '{:.1f} kW', 
+                'Peak_Reduction': '{:.1f} kW',
+                'Min_SOC': '{:.1f}%'
+            }), use_container_width=True)
+            
+            avg_reduction = successful_events['Peak_Reduction'].mean()
+            avg_min_soc = successful_events['Min_SOC'].mean()
+            st.info(f"📊 **Success Patterns:**\n- Average Peak Reduction: {avg_reduction:.1f} kW\n- Average Minimum SOC: {avg_min_soc:.1f}%")
+        else:
+            st.warning("No successful peak shaving days found.")
+    
+    with col2:
+        st.markdown("##### ❌ **Failed Peak Shaving Days**")
+        if len(failed_events) > 0:
+            st.dataframe(failed_events[['Date', 'Original_Peak', 'Net_Peak', 'Peak_Shortfall', 'Required_Additional_Power', 'Failure_Reason', 'Min_SOC']].style.format({
+                'Original_Peak': '{:.1f} kW',
+                'Net_Peak': '{:.1f} kW',
+                'Peak_Shortfall': '{:.1f} kW',
+                'Required_Additional_Power': '{:.1f} kW',
+                'Min_SOC': '{:.1f}%'
+            }), use_container_width=True)
+            
+            # Analyze failure patterns
+            failure_reasons = failed_events['Failure_Reason'].value_counts()
+            st.error("🚫 **Failure Analysis:**")
+            for reason, count in failure_reasons.items():
+                st.write(f"- {reason}: {count} days ({count/len(failed_events)*100:.1f}%)")
+        else:
+            st.success("🎉 All days were successfully managed!")
+    
+    # Recommendations for 100% Success Rate
+    if failed_days > 0:
+        st.markdown("#### 🎯 **Recommendations to Achieve 100% Success Rate**")
+        
+        # Analyze what's needed
+        max_shortfall = daily_analysis['Peak_Shortfall'].max()
+        avg_shortfall = daily_analysis[daily_analysis['Peak_Shortfall'] > 0]['Peak_Shortfall'].mean()
+        low_soc_days = sum(daily_analysis['Min_SOC'] < 20)
+        
+        recommendations = []
+        
+        if max_shortfall > 0:
+            current_power = sizing['power_rating_kw']
+            recommended_power = current_power + max_shortfall * 1.1  # 10% safety margin
+            recommendations.append(f"🔋 **Increase Battery Power Rating**: From {current_power:.0f} kW to {recommended_power:.0f} kW (+{max_shortfall*1.1:.0f} kW)")
+        
+        if low_soc_days > 0:
+            current_capacity = sizing['capacity_kwh']
+            recommended_capacity = current_capacity * 1.3  # 30% increase
+            recommendations.append(f"⚡ **Increase Battery Capacity**: From {current_capacity:.0f} kWh to {recommended_capacity:.0f} kWh (+30%)")
+        
+        # Check for timing issues
+        power_limited_days = sum((daily_analysis['Max_Battery_Power'] < sizing['power_rating_kw'] * 0.9) & (~daily_analysis['Success']))
+        if power_limited_days > 0:
+            recommendations.append(f"⏰ **Improve Charging Strategy**: {power_limited_days} days had insufficient charging before peak events")
+        
+        # Algorithm improvements
+        if any(daily_analysis['Failure_Reason'] == 'Other (Algorithm/Timing)'):
+            recommendations.append("🤖 **Optimize Battery Algorithm**: Consider predictive charging based on historical peak patterns")
+        
+        for i, rec in enumerate(recommendations, 1):
+            st.write(f"{i}. {rec}")
+        
+        # Cost-benefit analysis for improvements
+        if recommendations:
+            st.markdown("##### 💰 **Investment Analysis for 100% Success Rate**")
+            
+            potential_additional_savings = failed_events['Peak_Shortfall'].sum() * md_rate_estimate
+            st.write(f"**Additional Monthly MD Savings Potential**: RM {potential_additional_savings:.0f}")
+            st.write(f"**Annual Additional Savings**: RM {potential_additional_savings * 12:.0f}")
+            
+            if max_shortfall > 0:
+                additional_power_cost = max_shortfall * 1.1 * 400  # RM 400/kW for PCS
+                additional_capacity_cost = sizing['capacity_kwh'] * 0.3 * 1200  # 30% more at RM 1200/kWh
+                total_upgrade_cost = (additional_power_cost + additional_capacity_cost) * 1.4  # Installation factor
+                
+                payback_years = total_upgrade_cost / (potential_additional_savings * 12)
+                
+                st.write(f"**Estimated Upgrade Cost**: RM {total_upgrade_cost:,.0f}")
+                st.write(f"**Simple Payback Period**: {payback_years:.1f} years")
+    else:
+        st.success("🎉 **Congratulations!** You've already achieved 100% success rate in peak shaving!")
     
     # Panel 5: Cumulative Energy Analysis
     st.markdown("##### 5️⃣ Cumulative Energy Discharged vs Required (MD Peak Periods Only)")
