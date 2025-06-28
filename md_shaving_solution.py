@@ -1905,17 +1905,24 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None):
     
     st.plotly_chart(fig, use_container_width=True)
     
-    # Success/Failure Analysis
-    success_intervals = len(df_sim[
-        (df_sim['Original_Demand'] > target_demand) & 
-        (df_sim['Net_Demand_kW'] <= target_demand * 1.05)
-    ])
-    total_peak_intervals = len(df_sim[df_sim['Original_Demand'] > target_demand])
+    # Success/Failure Analysis (MD Peak Periods Only)
+    df_md_peak_sim = df_sim[df_sim.index.to_series().apply(lambda ts: ts.weekday() < 5 and 14 <= ts.hour < 22)]
     
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Peak Intervals Above Target", f"{total_peak_intervals}")
-    col2.metric("Successfully Shaved", f"{success_intervals}")
-    col3.metric("Success Rate", f"{(success_intervals/total_peak_intervals*100) if total_peak_intervals > 0 else 0:.1f}%")
+    if len(df_md_peak_sim) > 0:
+        success_intervals = len(df_md_peak_sim[
+            (df_md_peak_sim['Original_Demand'] > target_demand) & 
+            (df_md_peak_sim['Net_Demand_kW'] <= target_demand * 1.05)
+        ])
+        total_peak_intervals = len(df_md_peak_sim[df_md_peak_sim['Original_Demand'] > target_demand])
+        
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Peak Intervals Above Target (MD Periods)", f"{total_peak_intervals}")
+        col2.metric("Successfully Shaved (MD Periods)", f"{success_intervals}")
+        col3.metric("MD Success Rate", f"{(success_intervals/total_peak_intervals*100) if total_peak_intervals > 0 else 0:.1f}%")
+    else:
+        success_intervals = 0
+        total_peak_intervals = 0
+        st.warning("⚠️ No MD peak period data available for interval-based analysis")
     
     # Panel 2: Combined SOC and Battery Power Chart
     st.markdown("##### 2️⃣ Combined SOC and Battery Power Chart")
@@ -1993,27 +2000,44 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None):
     
     st.plotly_chart(fig3, use_container_width=True)
     
-    # Panel 4: Daily Peak Shave Effectiveness Analysis
-    st.markdown("##### 4️⃣ Daily Peak Shave Effectiveness & Success Analysis")
+    # Panel 4: Daily Peak Shave Effectiveness Analysis (MD Peak Periods Only)
+    st.markdown("##### 4️⃣ Daily Peak Shave Effectiveness & Success Analysis (MD Peak Periods Only)")
     
-    # Calculate detailed daily analysis
-    daily_analysis = df_sim.groupby(df_sim.index.date).agg({
-        'Original_Demand': 'max',
-        'Net_Demand_kW': 'max',
-        'Battery_Power_kW': 'max',
-        'Battery_SOC_Percent': ['min', 'mean']
-    }).reset_index()
+    # Filter data for MD peak periods only (2 PM-10 PM, weekdays)
+    def is_md_peak_period_for_effectiveness(timestamp):
+        return timestamp.weekday() < 5 and 14 <= timestamp.hour < 22
     
-    # Flatten column names
-    daily_analysis.columns = ['Date', 'Original_Peak', 'Net_Peak', 'Max_Battery_Power', 'Min_SOC', 'Avg_SOC']
+    df_md_peak = df_sim[df_sim.index.to_series().apply(is_md_peak_period_for_effectiveness)]
     
-    # Calculate detailed metrics
-    md_rate_estimate = 97.06  # RM/kW from Medium Voltage TOU
-    daily_analysis['Peak_Reduction'] = daily_analysis['Original_Peak'] - daily_analysis['Net_Peak']
-    daily_analysis['Est_Monthly_Saving'] = daily_analysis['Peak_Reduction'] * md_rate_estimate
-    daily_analysis['Success'] = daily_analysis['Net_Peak'] <= target_demand * 1.05  # 5% tolerance
-    daily_analysis['Peak_Shortfall'] = (daily_analysis['Net_Peak'] - target_demand).clip(lower=0)
-    daily_analysis['Required_Additional_Power'] = daily_analysis['Peak_Shortfall']
+    # Calculate daily analysis using MD peak periods only
+    if len(df_md_peak) > 0:
+        daily_analysis = df_md_peak.groupby(df_md_peak.index.date).agg({
+            'Original_Demand': 'max',
+            'Net_Demand_kW': 'max',
+            'Battery_Power_kW': 'max',
+            'Battery_SOC_Percent': ['min', 'mean']
+        }).reset_index()
+        
+        # Flatten column names
+        daily_analysis.columns = ['Date', 'Original_Peak_MD', 'Net_Peak_MD', 'Max_Battery_Power', 'Min_SOC', 'Avg_SOC']
+        
+        # Calculate detailed metrics based on MD peak periods only
+        md_rate_estimate = 97.06  # RM/kW from Medium Voltage TOU
+        daily_analysis['Peak_Reduction'] = daily_analysis['Original_Peak_MD'] - daily_analysis['Net_Peak_MD']
+        daily_analysis['Est_Monthly_Saving'] = daily_analysis['Peak_Reduction'] * md_rate_estimate
+        daily_analysis['Success'] = daily_analysis['Net_Peak_MD'] <= target_demand * 1.05  # 5% tolerance
+        daily_analysis['Peak_Shortfall'] = (daily_analysis['Net_Peak_MD'] - target_demand).clip(lower=0)
+        daily_analysis['Required_Additional_Power'] = daily_analysis['Peak_Shortfall']
+        
+        # Add informational note about MD-focused analysis
+        st.info("""
+        📋 **MD-Focused Analysis Note:**
+        This analysis considers only **MD peak periods (2-10 PM weekdays)** for success/failure calculation.
+        Success rate reflects effectiveness during actual MD recording hours, not 24/7 performance.
+        """)
+    else:
+        st.warning("⚠️ No MD peak period data found (weekdays 2-10 PM). Cannot calculate MD-focused effectiveness.")
+        return
     
     # Categorize failure reasons
     def categorize_failure_reason(row):
@@ -2040,26 +2064,26 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None):
     # Color code bars based on success/failure
     bar_colors = ['green' if success else 'red' for success in daily_analysis['Success']]
     
-    # Original peaks
+    # Original peaks (MD peak periods only)
     fig4.add_trace(go.Bar(
-        x=daily_analysis['Date'], y=daily_analysis['Original_Peak'],
-        name='Original Peak', marker_color='lightcoral', opacity=0.6,
-        hovertemplate='Original: %{y:.0f} kW<br>Date: %{x}<extra></extra>'
+        x=daily_analysis['Date'], y=daily_analysis['Original_Peak_MD'],
+        name='Original Peak (MD Periods)', marker_color='lightcoral', opacity=0.6,
+        hovertemplate='Original MD Peak: %{y:.0f} kW<br>Date: %{x}<extra></extra>'
     ))
     
     # Net peaks (after battery) - color coded by success
     fig4.add_trace(go.Bar(
-        x=daily_analysis['Date'], y=daily_analysis['Net_Peak'],
-        name='Net Peak (with Battery)', 
+        x=daily_analysis['Date'], y=daily_analysis['Net_Peak_MD'],
+        name='Net Peak (MD Periods with Battery)', 
         marker_color=bar_colors, opacity=0.8,
-        hovertemplate='Net: %{y:.0f} kW<br>Status: %{customdata}<br>Date: %{x}<extra></extra>',
+        hovertemplate='Net MD Peak: %{y:.0f} kW<br>Status: %{customdata}<br>Date: %{x}<extra></extra>',
         customdata=['SUCCESS' if s else 'FAILED' for s in daily_analysis['Success']]
     ))
     
     fig4.update_layout(
-        title='📊 Daily Peak Shaving Effectiveness (Green=Success, Red=Failed)',
+        title='📊 Daily Peak Shaving Effectiveness - MD Periods Only (Green=Success, Red=Failed)',
         xaxis_title='Date',
-        yaxis_title='Peak Demand (kW)',
+        yaxis_title='Peak Demand during MD Hours (kW)',
         height=400,
         barmode='group'
     )
@@ -2088,27 +2112,27 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None):
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown("##### ✅ **Successful Peak Shaving Days**")
+        st.markdown("##### ✅ **Successful Peak Shaving Days (MD Periods)**")
         if len(successful_events) > 0:
-            st.dataframe(successful_events[['Date', 'Original_Peak', 'Net_Peak', 'Peak_Reduction', 'Min_SOC']].style.format({
-                'Original_Peak': '{:.1f} kW',
-                'Net_Peak': '{:.1f} kW', 
+            st.dataframe(successful_events[['Date', 'Original_Peak_MD', 'Net_Peak_MD', 'Peak_Reduction', 'Min_SOC']].style.format({
+                'Original_Peak_MD': '{:.1f} kW',
+                'Net_Peak_MD': '{:.1f} kW', 
                 'Peak_Reduction': '{:.1f} kW',
                 'Min_SOC': '{:.1f}%'
             }), use_container_width=True)
             
             avg_reduction = successful_events['Peak_Reduction'].mean()
             avg_min_soc = successful_events['Min_SOC'].mean()
-            st.info(f"📊 **Success Patterns:**\n- Average Peak Reduction: {avg_reduction:.1f} kW\n- Average Minimum SOC: {avg_min_soc:.1f}%")
+            st.info(f"📊 **Success Patterns (MD Periods):**\n- Average Peak Reduction: {avg_reduction:.1f} kW\n- Average Minimum SOC: {avg_min_soc:.1f}%")
         else:
-            st.warning("No successful peak shaving days found.")
+            st.warning("No successful peak shaving days found during MD periods.")
     
     with col2:
-        st.markdown("##### ❌ **Failed Peak Shaving Days**")
+        st.markdown("##### ❌ **Failed Peak Shaving Days (MD Periods)**")
         if len(failed_events) > 0:
-            st.dataframe(failed_events[['Date', 'Original_Peak', 'Net_Peak', 'Peak_Shortfall', 'Required_Additional_Power', 'Failure_Reason', 'Min_SOC']].style.format({
-                'Original_Peak': '{:.1f} kW',
-                'Net_Peak': '{:.1f} kW',
+            st.dataframe(failed_events[['Date', 'Original_Peak_MD', 'Net_Peak_MD', 'Peak_Shortfall', 'Required_Additional_Power', 'Failure_Reason', 'Min_SOC']].style.format({
+                'Original_Peak_MD': '{:.1f} kW',
+                'Net_Peak_MD': '{:.1f} kW',
                 'Peak_Shortfall': '{:.1f} kW',
                 'Required_Additional_Power': '{:.1f} kW',
                 'Min_SOC': '{:.1f}%'
@@ -2116,11 +2140,11 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None):
             
             # Analyze failure patterns
             failure_reasons = failed_events['Failure_Reason'].value_counts()
-            st.error("🚫 **Failure Analysis:**")
+            st.error("🚫 **Failure Analysis (MD Periods):**")
             for reason, count in failure_reasons.items():
                 st.write(f"- {reason}: {count} days ({count/len(failed_events)*100:.1f}%)")
         else:
-            st.success("🎉 All days were successfully managed!")
+            st.success("🎉 All MD peak periods were successfully managed!")
     
     # Recommendations for 100% Success Rate
     if failed_days > 0:
