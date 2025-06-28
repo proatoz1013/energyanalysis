@@ -459,16 +459,21 @@ class BatteryAlgorithms:
         total_lifecycle_costs = battery_costs['total_capex'] + battery_costs['total_lifecycle_opex']
         benefit_cost_ratio = total_lifecycle_savings / total_lifecycle_costs if total_lifecycle_costs > 0 else 0
         
+        # Calculate simple annual ROI based on net annual savings
+        # ROI% = (Net Annual Savings / Total CAPEX) × 100
+        net_annual_savings = total_annual_savings - battery_costs['annual_opex']
+        annual_roi_percent = (net_annual_savings / battery_costs['total_capex'] * 100) if battery_costs['total_capex'] > 0 else 0
+        
         return {
             'annual_md_savings': annual_md_savings,
             'total_annual_savings': total_annual_savings,
-            'net_annual_savings': total_annual_savings - battery_costs['annual_opex'],
+            'net_annual_savings': net_annual_savings,
             'simple_payback_years': simple_payback_years,
             'npv': npv,
             'irr_percent': irr * 100 if irr is not None else None,
             'benefit_cost_ratio': benefit_cost_ratio,
             'total_lifecycle_savings': total_lifecycle_savings,
-            'roi_percent': (npv / battery_costs['total_capex'] * 100) if battery_costs['total_capex'] > 0 else 0,
+            'roi_percent': annual_roi_percent,
             'cash_flows': cash_flows
         }
     

@@ -681,7 +681,7 @@ def _perform_md_shaving_analysis(df, power_col, selected_tariff, holidays, targe
         )
         
         # Display battery results
-        _display_battery_analysis(battery_analysis, battery_params, target_demand)
+        _display_battery_analysis(battery_analysis, battery_params, target_demand, max_md_cost_impact)
         
     else:
         st.success("🎉 No peak events detected above target demand!")
@@ -1784,6 +1784,9 @@ def _calculate_financial_metrics(battery_costs, event_summaries, total_md_rate, 
     total_lifecycle_costs = battery_costs['total_capex'] + battery_costs['total_lifecycle_opex']
     benefit_cost_ratio = total_lifecycle_savings / total_lifecycle_costs if total_lifecycle_costs > 0 else 0
     
+    # Calculate simple annual ROI based on net annual savings
+    annual_roi_percent = ((total_annual_savings - battery_costs['annual_opex']) / battery_costs['total_capex'] * 100) if battery_costs['total_capex'] > 0 else 0
+    
     return {
         'annual_md_savings': annual_md_savings,
         'total_annual_savings': total_annual_savings,
@@ -1793,7 +1796,7 @@ def _calculate_financial_metrics(battery_costs, event_summaries, total_md_rate, 
         'irr_percent': irr * 100 if irr is not None else None,
         'benefit_cost_ratio': benefit_cost_ratio,
         'total_lifecycle_savings': total_lifecycle_savings,
-        'roi_percent': (npv / battery_costs['total_capex'] * 100) if battery_costs['total_capex'] > 0 else 0,
+        'roi_percent': annual_roi_percent,
         'cash_flows': cash_flows
     }
 
@@ -1815,7 +1818,7 @@ def _calculate_irr_approximation(cash_flows):
         return None
 
 
-def _display_battery_analysis(battery_analysis, battery_params, target_demand):
+def _display_battery_analysis(battery_analysis, battery_params, target_demand, max_md_cost_impact=None):
     """Display comprehensive battery analysis results."""
     
     sizing = battery_analysis['sizing']
@@ -1855,6 +1858,51 @@ def _display_battery_analysis(battery_analysis, battery_params, target_demand):
         st.metric("Total Lifecycle Cost", f"RM {costs['total_lifecycle_cost']:,.0f}")
         st.caption(f"Over {battery_params['battery_life_years']} years")
     
+    # ROI and Potential MD Savings Analysis
+    st.markdown("### 📈 ROI & Potential MD Savings")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        roi_percent = financial.get('roi_percent', 0)
+        if roi_percent > 0:
+            st.metric("ROI", f"{roi_percent:.1f}%", delta="Positive", delta_color="normal")
+        else:
+            st.metric("ROI", f"{roi_percent:.1f}%", delta="Negative", delta_color="inverse")
+        st.caption("Return on Investment")
+    
+    with col2:
+        if max_md_cost_impact is not None:
+            monthly_savings = max_md_cost_impact
+            st.metric("Max Monthly MD Savings", f"RM {monthly_savings:,.0f}")
+            st.caption("Peak month potential savings")
+        else:
+            st.metric("Monthly MD Savings", "N/A")
+            st.caption("Data not available")
+    
+    with col3:
+        if max_md_cost_impact is not None:
+            annual_savings = max_md_cost_impact * 12
+            st.metric("Annual MD Savings Potential", f"RM {annual_savings:,.0f}")
+            st.caption("Maximum annual savings estimate")
+        else:
+            st.metric("Annual MD Savings", "N/A")
+            st.caption("Data not available")
+    
+    # Additional financial insights
+    if max_md_cost_impact is not None and max_md_cost_impact > 0:
+        payback_period = costs['total_capex'] / (max_md_cost_impact * 12)
+        if payback_period > 0:
+            st.info(f"💡 **Simple Payback Period:** {payback_period:.1f} years (based on maximum MD savings)")
+        
+        # ROI context
+        if roi_percent > 15:
+            st.success("🎯 **Excellent ROI** - This battery investment shows strong financial returns!")
+        elif roi_percent > 8:
+            st.info("👍 **Good ROI** - This battery investment is financially viable.")
+        elif roi_percent > 0:
+            st.warning("⚠️ **Marginal ROI** - Consider optimizing battery sizing or exploring alternatives.")
+        else:
+            st.error("❌ **Negative ROI** - Current configuration may not be financially justified.")
 
     
     # Battery Operation Visualization
