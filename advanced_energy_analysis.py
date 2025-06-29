@@ -83,13 +83,19 @@ def show():
             # Column Selection and Holiday Configuration
             timestamp_col, power_col, holidays = _configure_data_inputs(df)
             
-            # Only proceed if both columns are selected and valid
-            if (timestamp_col and power_col and 
-                timestamp_col != "Please select..." and power_col != "Please select..." and
-                hasattr(df, 'columns') and df.columns is not None and
-                timestamp_col in df.columns and power_col in df.columns):
+            # Simple validation - just check that columns exist
+            if timestamp_col and power_col and timestamp_col in df.columns and power_col in df.columns:
                 # Process data
                 df = _process_dataframe(df, timestamp_col)
+                
+                # Final validation after processing
+                if df.empty:
+                    st.error("❌ No data remaining after processing. Please check your timestamp column format.")
+                    return
+                    
+                if power_col not in df.columns:
+                    st.error(f"❌ Power column '{power_col}' not found after data processing.")
+                    return
                 
                 if not df.empty and power_col in df.columns:
                     # Tariff Selection
@@ -106,47 +112,29 @@ def show():
             else:
                 st.info("👆 Please select both timestamp and power columns to start the analysis.")
                     
+        except TypeError as e:
+            if "argument of type 'NoneType' is not iterable" in str(e):
+                st.error("❌ Column selection error: Please ensure both timestamp and power columns are properly selected.")
+                st.info("💡 This usually happens when your data has no numeric columns or invalid column names.")
+            else:
+                st.error(f"❌ Type error: {str(e)}")
+        except KeyError as e:
+            st.error(f"❌ Column not found: {str(e)}")
+            st.info("💡 Please check that the selected columns exist in your data.")
         except Exception as e:
-            st.error(f"Error processing file: {str(e)}")
+            st.error(f"❌ Error processing file: {str(e)}")
             st.error("Please ensure your Excel file has proper timestamp and power columns.")
 
 
 def _configure_data_inputs(df):
     """Configure data inputs including column selection and holiday setup."""
     st.subheader("Data Configuration")
-    
-    # Check if dataframe is valid first
-    if df is None or df.empty or not hasattr(df, 'columns') or df.columns is None:
-        st.error("Invalid data file. Please check your Excel file format.")
-        return "Please select...", "Please select...", set()
-    
     col1, col2 = st.columns(2)
     
     with col1:
-        # Auto-select first column as timestamp by default
-        timestamp_columns = ["Please select..."] + list(df.columns)
-        default_timestamp_idx = 1 if len(df.columns) > 0 else 0  # Select first column by default
-        timestamp_col_idx = st.selectbox("Select timestamp column", 
-                                       range(len(timestamp_columns)),
-                                       format_func=lambda x: timestamp_columns[x],
-                                       index=default_timestamp_idx,
-                                       key="adv_timestamp_col")
-        timestamp_col = timestamp_columns[timestamp_col_idx] if timestamp_col_idx > 0 else "Please select..."
-        
-        # Auto-select first numeric column as power by default
-        numeric_columns = df.select_dtypes(include='number').columns.tolist()
-        if numeric_columns:
-            power_columns = ["Please select..."] + numeric_columns
-            default_power_idx = 1 if len(numeric_columns) > 0 else 0  # Select first numeric column by default
-            power_col_idx = st.selectbox("Select power (kW) column",
-                                       range(len(power_columns)),
-                                       format_func=lambda x: power_columns[x],
-                                       index=default_power_idx,
-                                       key="adv_power_col")
-            power_col = power_columns[power_col_idx] if power_col_idx > 0 else "Please select..."
-        else:
-            st.error("No numeric columns found in the uploaded file!")
-            power_col = "Please select..."
+        timestamp_col = st.selectbox("Select timestamp column", df.columns, key="adv_timestamp_col")
+        power_col = st.selectbox("Select power (kW) column", 
+                               df.select_dtypes(include='number').columns, key="adv_power_col")
     
     with col2:
         holidays = _configure_holidays(df, timestamp_col)
@@ -156,39 +144,25 @@ def _configure_data_inputs(df):
 
 def _configure_holidays(df, timestamp_col):
     """Configure holiday selection for RP4 peak logic."""
-    st.markdown("**Public Holidays**")
-    holidays = set()
+    st.markdown("**Public Holidays (for RP4 peak logic)**")
+    holidays = set()  # Default empty set
     
-    # Add additional safety checks
-    if (df is None or df.empty or not hasattr(df, 'columns') or df.columns is None or 
-        not timestamp_col or timestamp_col == "Please select..." or timestamp_col not in df.columns):
-        st.info("Please select a valid timestamp column to configure holidays.")
-        return holidays
+    # Simple holiday input - user can add holidays manually
+    holiday_input = st.text_area(
+        "Enter holidays (one per line, YYYY-MM-DD format):",
+        placeholder="2024-01-01\n2024-02-10\n2024-04-10",
+        key="adv_holidays_input"
+    )
     
-    try:
-        df_temp = df.copy()
-        df_temp["Parsed Timestamp"] = pd.to_datetime(df_temp[timestamp_col], errors="coerce")
-        df_temp = df_temp.dropna(subset=["Parsed Timestamp"])
-        
-        if not df_temp.empty:
-            min_date = df_temp["Parsed Timestamp"].min().date()
-            max_date = df_temp["Parsed Timestamp"].max().date()
-            unique_dates = pd.date_range(min_date, max_date).date
-            
-            holiday_options = [d.strftime('%A, %d %B %Y') for d in unique_dates]
-            selected_labels = st.multiselect(
-                "Select public holidays:",
-                options=holiday_options,
-                default=[],
-                key="adv_holidays",
-                help="Select all public holidays in the data period"
-            )
-            
-            # Convert back to date objects
-            label_to_date = {d.strftime('%A, %d %B %Y'): d for d in unique_dates}
-            holidays = set(label_to_date[label] for label in selected_labels)
-    except Exception as e:
-        st.warning(f"Error processing holidays: {e}")
+    if holiday_input.strip():
+        try:
+            holiday_lines = [line.strip() for line in holiday_input.split('\n') if line.strip()]
+            holidays = set()
+            for date_str in holiday_lines:
+                holidays.add(pd.to_datetime(date_str).date())
+            st.success(f"Added {len(holidays)} holidays")
+        except Exception as e:
+            st.warning(f"Some holiday dates couldn't be parsed: {e}")
 
     return holidays
 
@@ -411,7 +385,13 @@ def _perform_cost_analysis(df, selected_tariff, power_col, holidays):
         
         total_cost = cost_breakdown.get('Total Cost', 0)
         energy_cost = cost_breakdown.get('Peak Energy Cost', 0) + cost_breakdown.get('Off-Peak Energy Cost', 0) if 'Peak Energy Cost' in cost_breakdown else cost_breakdown.get('Energy Cost', 0)
-        demand_cost = cost_breakdown.get('Capacity Cost', 0) + cost_breakdown.get('Network Cost', 0)
+        
+        # Calculate demand cost - handle both RP4 style (Capacity + Network) and general tariff style (Demand Cost)
+        demand_cost = 0
+        demand_cost += cost_breakdown.get('Capacity Cost', 0)  # RP4 tariffs
+        demand_cost += cost_breakdown.get('Network Cost', 0)   # RP4 tariffs
+        demand_cost += cost_breakdown.get('Demand Cost', 0)   # General tariffs
+        demand_cost += cost_breakdown.get('Maximum Demand Cost', 0)  # Alternative naming
         
         col1.metric("Total Cost", f"RM {fmt(total_cost)}")
         col2.metric("Energy Cost", f"RM {fmt(energy_cost)}")
@@ -443,6 +423,15 @@ def _display_cost_breakdown_chart(cost_breakdown):
     if cost_breakdown.get('Network Cost', 0) > 0:
         cost_categories.append('Network')
         cost_values.append(cost_breakdown.get('Network Cost', 0))
+    
+    # Add general tariff demand costs
+    if cost_breakdown.get('Demand Cost', 0) > 0:
+        cost_categories.append('Demand')
+        cost_values.append(cost_breakdown.get('Demand Cost', 0))
+    
+    if cost_breakdown.get('Maximum Demand Cost', 0) > 0:
+        cost_categories.append('Maximum Demand')
+        cost_values.append(cost_breakdown.get('Maximum Demand Cost', 0))
     
     if cost_breakdown.get('ICPT Cost', 0) != 0:
         cost_categories.append('ICPT')

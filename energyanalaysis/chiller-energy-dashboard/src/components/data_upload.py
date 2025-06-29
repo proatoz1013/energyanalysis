@@ -133,11 +133,28 @@ def validate_file_format(uploaded_file):
         return validation_result
     
     try:
-        # Try to read the file
+        # Reset file pointer to beginning
+        uploaded_file.seek(0)
+        
+        # Try to read the file with proper error handling
         if file_extension == '.csv':
-            df = pd.read_csv(uploaded_file)
+            try:
+                df = pd.read_csv(uploaded_file)
+            except pd.errors.EmptyDataError:
+                validation_result['valid'] = False
+                validation_result['errors'].append("CSV file is empty")
+                return validation_result
+            except pd.errors.ParserError:
+                validation_result['valid'] = False
+                validation_result['errors'].append("CSV file has parsing errors")
+                return validation_result
         else:
-            df = pd.read_excel(uploaded_file)
+            try:
+                df = pd.read_excel(uploaded_file)
+            except Exception as e:
+                validation_result['valid'] = False
+                validation_result['errors'].append(f"Excel file error: {str(e)}")
+                return validation_result
         
         # Check if file has data
         if len(df) == 0:
@@ -151,13 +168,21 @@ def validate_file_format(uploaded_file):
         
         # Check for minimum number of numeric columns
         numeric_cols = df.select_dtypes(include=['number']).columns
-        if len(numeric_cols) < 2:
+        if len(numeric_cols) < 1:
             validation_result['valid'] = False
-            validation_result['errors'].append("File must have at least 2 numeric columns")
+            validation_result['errors'].append("File must have at least 1 numeric column for analysis")
+        
+        # Reset file pointer for next read
+        uploaded_file.seek(0)
             
     except Exception as e:
         validation_result['valid'] = False
         validation_result['errors'].append(f"Error reading file: {str(e)}")
+        # Reset file pointer even on error
+        try:
+            uploaded_file.seek(0)
+        except:
+            pass
     
     return validation_result
 
@@ -189,6 +214,9 @@ def render_data_upload():
             for key, value in file_details.items():
                 st.text(f"{key}: {value}")
         
+        # Reset file pointer before validation
+        uploaded_file.seek(0)
+        
         # Validate file format
         validation = validate_file_format(uploaded_file)
         
@@ -198,12 +226,60 @@ def render_data_upload():
                 st.error(f"• {error}")
             return None
         
+        # Reset file pointer again before reading
+        uploaded_file.seek(0)
+        
         try:
-            # Read the file
+            # Read the file with better error handling
             if uploaded_file.name.endswith('.csv'):
-                df = pd.read_csv(uploaded_file)
+                # Try reading CSV with different parameters
+                try:
+                    df = pd.read_csv(uploaded_file)
+                except pd.errors.EmptyDataError:
+                    st.error("❌ The CSV file is empty or has no data rows.")
+                    return None
+                except pd.errors.ParserError as e:
+                    st.error(f"❌ Error parsing CSV file: {str(e)}")
+                    st.info("💡 Try saving your file with UTF-8 encoding or check for formatting issues.")
+                    return None
+                except Exception as e:
+                    # Try with different encoding
+                    try:
+                        uploaded_file.seek(0)  # Reset file pointer
+                        df = pd.read_csv(uploaded_file, encoding='latin-1')
+                        st.warning("⚠️ File read with latin-1 encoding. Some characters might appear differently.")
+                    except Exception as e2:
+                        st.error(f"❌ Error reading CSV file: {str(e)}")
+                        st.info("💡 Please check that your file contains valid data with proper column headers.")
+                        return None
             else:
-                df = pd.read_excel(uploaded_file)
+                # Handle Excel files
+                try:
+                    df = pd.read_excel(uploaded_file)
+                except Exception as e:
+                    # Try reading the first sheet explicitly
+                    try:
+                        uploaded_file.seek(0)  # Reset file pointer
+                        df = pd.read_excel(uploaded_file, sheet_name=0)
+                    except Exception as e2:
+                        st.error(f"❌ Error reading Excel file: {str(e)}")
+                        st.info("💡 Please ensure your Excel file has data and is not corrupted.")
+                        return None
+            
+            # Additional validation after reading
+            if df.empty:
+                st.error("❌ The uploaded file contains no data.")
+                return None
+            
+            if len(df.columns) == 0:
+                st.error("❌ The uploaded file has no columns.")
+                return None
+            
+            # Check for columns with meaningful names (not just 'Unnamed')
+            unnamed_cols = [col for col in df.columns if str(col).startswith('Unnamed')]
+            if len(unnamed_cols) == len(df.columns):
+                st.warning("⚠️ All columns appear to be unnamed. Please ensure your file has proper column headers.")
+                st.info("💡 The first row should contain column names.")
             
             # Display upload status
             display_upload_status(df, uploaded_file.name)
@@ -211,7 +287,14 @@ def render_data_upload():
             return df
             
         except Exception as e:
-            st.error(f"❌ Error reading file: {str(e)}")
+            st.error(f"❌ Unexpected error reading file: {str(e)}")
+            st.info("""
+            💡 **Troubleshooting tips:**
+            - Ensure your file is not empty
+            - Check that the first row contains column headers
+            - Verify the file is not corrupted
+            - Try saving as CSV with UTF-8 encoding
+            """)
             return None
     
     else:

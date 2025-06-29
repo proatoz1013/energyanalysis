@@ -82,7 +82,8 @@ def main():
             "📁 Data Upload",
             "👀 Data Preview", 
             "🔗 Column Mapping",
-            "📊 Analysis & Results"
+            "📊 Analysis & Results",
+            "🛠️ Equipment Performance"
         ]
         
         # Determine current step based on session state
@@ -204,6 +205,264 @@ Column Mapping Used:
                     )
         else:
             st.warning("Please complete the column mapping step first.")
+    
+    elif selected_step == "🛠️ Equipment Performance":
+        if st.session_state.column_mapping and st.session_state.processed_data is not None:
+            st.markdown("### 🛠️ Equipment Performance Breakdown")
+            st.markdown("Detailed performance analysis for individual equipment components")
+            
+            df = st.session_state.processed_data
+            original_df = st.session_state.uploaded_data
+            mapping = st.session_state.column_mapping
+            
+            # Create tabs for different equipment types
+            eq_tabs = st.tabs(["❄️ Chiller", "💧 Pump System", "🌀 Cooling Tower", "📊 Comparative Analysis"])
+            
+            with eq_tabs[0]:
+                render_chiller_performance(original_df, df, mapping)
+            
+            with eq_tabs[1]:
+                render_pump_performance(original_df, df, mapping)
+            
+            with eq_tabs[2]:
+                render_cooling_tower_performance(original_df, df, mapping)
+            
+            with eq_tabs[3]:
+                render_comparative_analysis(original_df, df, mapping)
+        
+        else:
+            st.warning("Please complete the column mapping step first to see equipment performance.")
+
+def render_chiller_performance(original_df, processed_df, mapping):
+    """Render chiller-specific performance analysis."""
+    st.subheader("❄️ Chiller Performance Analysis")
+    
+    # Check if chiller data is available
+    chiller_power_col = mapping.get('chiller_power')
+    cooling_load_col = mapping.get('cooling_load')
+    
+    if not chiller_power_col and not cooling_load_col:
+        st.warning("No chiller performance data available. Please ensure chiller power and cooling load are mapped.")
+        return
+    
+    col1, col2, col3 = st.columns(3)
+    
+    # Chiller Power Analysis
+    if chiller_power_col and chiller_power_col in original_df.columns:
+        with col1:
+            avg_chiller_power = original_df[chiller_power_col].mean()
+            max_chiller_power = original_df[chiller_power_col].max()
+            min_chiller_power = original_df[chiller_power_col].min()
+            
+            st.metric("Average Chiller Power", f"{avg_chiller_power:.2f} kW")
+            st.metric("Max Chiller Power", f"{max_chiller_power:.2f} kW")
+            st.metric("Min Chiller Power", f"{min_chiller_power:.2f} kW")
+    
+    # Cooling Load Analysis
+    if cooling_load_col and cooling_load_col in original_df.columns:
+        with col2:
+            avg_cooling_load = original_df[cooling_load_col].mean()
+            max_cooling_load = original_df[cooling_load_col].max()
+            min_cooling_load = original_df[cooling_load_col].min()
+            
+            st.metric("Average Cooling Load", f"{avg_cooling_load:.2f} TR")
+            st.metric("Max Cooling Load", f"{max_cooling_load:.2f} TR")
+            st.metric("Min Cooling Load", f"{min_cooling_load:.2f} TR")
+    
+    # Efficiency Metrics
+    if 'kW_per_TR' in processed_df.columns:
+        with col3:
+            avg_kw_tr = processed_df['kW_per_TR'].mean()
+            best_kw_tr = processed_df['kW_per_TR'].min()
+            worst_kw_tr = processed_df['kW_per_TR'].max()
+            
+            st.metric("Average kW/TR", f"{avg_kw_tr:.3f}")
+            st.metric("Best kW/TR", f"{best_kw_tr:.3f}")
+            st.metric("Worst kW/TR", f"{worst_kw_tr:.3f}")
+    
+    # Performance Charts
+    st.markdown("#### 📈 Chiller Performance Trends")
+    
+    chart_col1, chart_col2 = st.columns(2)
+    
+    with chart_col1:
+        if chiller_power_col and chiller_power_col in original_df.columns:
+            st.markdown("**Chiller Power Consumption Over Time**")
+            st.line_chart(original_df[chiller_power_col])
+    
+    with chart_col2:
+        if 'kW_per_TR' in processed_df.columns:
+            st.markdown("**Chiller Efficiency (kW/TR) Over Time**")
+            st.line_chart(processed_df['kW_per_TR'])
+
+def render_pump_performance(original_df, processed_df, mapping):
+    """Render pump system performance analysis."""
+    st.subheader("💧 Pump System Performance Analysis")
+    
+    pump_power_col = mapping.get('pump_power')
+    
+    # Look for flow and head columns in the original data
+    flow_cols = [col for col in original_df.columns if 'flow' in col.lower() and 'gpm' in col.lower()]
+    head_cols = [col for col in original_df.columns if 'head' in col.lower()]
+    
+    if not pump_power_col and not flow_cols:
+        st.warning("No pump performance data available. Please ensure pump power is mapped.")
+        return
+    
+    col1, col2, col3 = st.columns(3)
+    
+    # Pump Power Analysis
+    if pump_power_col and pump_power_col in original_df.columns:
+        with col1:
+            avg_pump_power = original_df[pump_power_col].mean()
+            max_pump_power = original_df[pump_power_col].max()
+            min_pump_power = original_df[pump_power_col].min()
+            
+            st.metric("Average Pump Power", f"{avg_pump_power:.2f} kW")
+            st.metric("Max Pump Power", f"{max_pump_power:.2f} kW")
+            st.metric("Min Pump Power", f"{min_pump_power:.2f} kW")
+    
+    # Flow Analysis
+    if flow_cols:
+        flow_col = flow_cols[0]  # Use first flow column found
+        with col2:
+            avg_flow = original_df[flow_col].mean()
+            max_flow = original_df[flow_col].max()
+            min_flow = original_df[flow_col].min()
+            
+            st.metric("Average Flow", f"{avg_flow:.2f} GPM")
+            st.metric("Max Flow", f"{max_flow:.2f} GPM")
+            st.metric("Min Flow", f"{min_flow:.2f} GPM")
+    
+    # Head Analysis
+    if head_cols:
+        head_col = head_cols[0]  # Use first head column found
+        with col3:
+            avg_head = original_df[head_col].mean()
+            max_head = original_df[head_col].max()
+            min_head = original_df[head_col].min()
+            
+            st.metric("Average Head", f"{avg_head:.2f} ft")
+            st.metric("Max Head", f"{max_head:.2f} ft")
+            st.metric("Min Head", f"{min_head:.2f} ft")
+    
+    # Performance Charts
+    st.markdown("#### 📈 Pump Performance Trends")
+    
+    chart_col1, chart_col2 = st.columns(2)
+    
+    with chart_col1:
+        if pump_power_col and pump_power_col in original_df.columns:
+            st.markdown("**Pump Power Consumption Over Time**")
+            st.line_chart(original_df[pump_power_col])
+    
+    with chart_col2:
+        if flow_cols:
+            st.markdown("**Pump Flow Over Time**")
+            st.line_chart(original_df[flow_cols[0]])
+
+def render_cooling_tower_performance(original_df, processed_df, mapping):
+    """Render cooling tower performance analysis."""
+    st.subheader("🌀 Cooling Tower Performance Analysis")
+    
+    cooling_tower_power_col = mapping.get('cooling_tower_power')
+    
+    # Look for temperature columns
+    temp_cols = [col for col in original_df.columns if 'temp' in col.lower()]
+    
+    if not cooling_tower_power_col and not temp_cols:
+        st.warning("No cooling tower performance data available. Please ensure cooling tower power is mapped.")
+        return
+    
+    col1, col2, col3 = st.columns(3)
+    
+    # Cooling Tower Power Analysis
+    if cooling_tower_power_col and cooling_tower_power_col in original_df.columns:
+        with col1:
+            avg_ct_power = original_df[cooling_tower_power_col].mean()
+            max_ct_power = original_df[cooling_tower_power_col].max()
+            min_ct_power = original_df[cooling_tower_power_col].min()
+            
+            st.metric("Average CT Power", f"{avg_ct_power:.2f} kW")
+            st.metric("Max CT Power", f"{max_ct_power:.2f} kW")
+            st.metric("Min CT Power", f"{min_ct_power:.2f} kW")
+    
+    # Temperature Analysis
+    if temp_cols:
+        temp_col = temp_cols[0]  # Use first temperature column found
+        with col2:
+            avg_temp = original_df[temp_col].mean()
+            max_temp = original_df[temp_col].max()
+            min_temp = original_df[temp_col].min()
+            
+            st.metric("Average Temperature", f"{avg_temp:.1f} °C")
+            st.metric("Max Temperature", f"{max_temp:.1f} °C")
+            st.metric("Min Temperature", f"{min_temp:.1f} °C")
+    
+    # Performance Charts
+    st.markdown("#### 📈 Cooling Tower Performance Trends")
+    
+    if cooling_tower_power_col and cooling_tower_power_col in original_df.columns:
+        st.markdown("**Cooling Tower Power Consumption Over Time**")
+        st.line_chart(original_df[cooling_tower_power_col])
+
+def render_comparative_analysis(original_df, processed_df, mapping):
+    """Render comparative analysis across all equipment."""
+    st.subheader("📊 Comparative Equipment Analysis")
+    
+    # Power Distribution Analysis
+    st.markdown("#### ⚡ Power Distribution")
+    
+    power_data = {}
+    
+    if mapping.get('chiller_power') and mapping['chiller_power'] in original_df.columns:
+        power_data['Chiller'] = original_df[mapping['chiller_power']].mean()
+    
+    if mapping.get('pump_power') and mapping['pump_power'] in original_df.columns:
+        power_data['Pump'] = original_df[mapping['pump_power']].mean()
+    
+    if mapping.get('cooling_tower_power') and mapping['cooling_tower_power'] in original_df.columns:
+        power_data['Cooling Tower'] = original_df[mapping['cooling_tower_power']].mean()
+    
+    if mapping.get('aux_power') and mapping['aux_power'] in original_df.columns:
+        power_data['Auxiliary'] = original_df[mapping['aux_power']].mean()
+    
+    if power_data:
+        # Create power distribution chart
+        import plotly.express as px
+        power_df = pd.DataFrame(list(power_data.items()), columns=['Equipment', 'Average Power (kW)'])
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            fig_bar = px.bar(power_df, x='Equipment', y='Average Power (kW)', 
+                           title='Average Power Consumption by Equipment')
+            st.plotly_chart(fig_bar, use_container_width=True)
+        
+        with col2:
+            fig_pie = px.pie(power_df, values='Average Power (kW)', names='Equipment',
+                           title='Power Distribution by Equipment')
+            st.plotly_chart(fig_pie, use_container_width=True)
+        
+        # Power consumption table
+        st.markdown("#### 📋 Power Consumption Summary")
+        
+        total_power = sum(power_data.values())
+        power_summary = []
+        
+        for equipment, power in power_data.items():
+            percentage = (power / total_power) * 100 if total_power > 0 else 0
+            power_summary.append({
+                'Equipment': equipment,
+                'Average Power (kW)': f"{power:.2f}",
+                'Percentage of Total': f"{percentage:.1f}%"
+            })
+        
+        summary_df = pd.DataFrame(power_summary)
+        st.dataframe(summary_df, use_container_width=True)
+    
+    else:
+        st.warning("No power consumption data available for comparative analysis.")
 
 if __name__ == "__main__":
     main()

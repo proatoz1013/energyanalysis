@@ -1344,7 +1344,7 @@ with tabs[3]:
                             
                             # Old Tariff Structure
                             'Old Peak Energy (kWh)': old_peak_energy,
-                            'Old Off-Peak Energy (kWh)': old_offpeak_energy,
+                            'Old Off-Peak Energy (kWh)': offpeak_energy,
                             'Old Peak %': old_peak_percentage,
                             'Old Peak Cost (RM)': old_peak_cost,
                             'Old Off-Peak Cost (RM)': old_offpeak_cost,
@@ -1993,17 +1993,18 @@ with tabs[5]:
             from components.column_mapper import render_column_mapper, calculate_derived_metrics
             from components.metrics_calculator import render_metrics_display, calculate_efficiency_metrics
             from components.visualizations import render_visualizations
+            from components.equipment_performance import render_equipment_performance
             
             # Sidebar for chiller dashboard navigation
             with st.sidebar:
                 st.markdown("---")
                 st.markdown("### ❄️ Chiller Dashboard")
-                
                 chiller_steps = [
                     "📁 Data Upload",
                     "👀 Data Preview", 
                     "🔗 Column Mapping",
-                    "📊 Analysis & Results"
+                    "📊 Analysis & Results",
+                    "🛠️ Equipment Performance"
                 ]
                 
                 # Determine current step based on session state
@@ -2126,6 +2127,17 @@ Column Mapping Used:
                                 )
                 else:
                     st.warning("Please complete the column mapping step first.")
+            
+            elif chiller_selected_step == "🛠️ Equipment Performance":
+                if st.session_state.chiller_column_mapping and st.session_state.chiller_processed_data is not None:
+                    # Show equipment performance analysis
+                    render_equipment_performance(
+                        st.session_state.chiller_uploaded_data,
+                        st.session_state.chiller_processed_data, 
+                        st.session_state.chiller_column_mapping
+                    )
+                else:
+                    st.warning("Please complete the column mapping step first to see equipment performance.")
         
         except ImportError as e:
             st.error(f"❌ Chiller Dashboard components not found: {str(e)}")
