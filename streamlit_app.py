@@ -6,6 +6,11 @@ import plotly.graph_objects as go
 from tnb_tariff_comparison import show as show_tnb_tariff_comparison
 from advanced_energy_analysis import show as show_advanced_energy_analysis
 from md_shaving_solution import show as show_md_shaving_solution
+import sys
+import os
+
+# Add the chiller dashboard directory to Python path
+sys.path.append(os.path.join(os.path.dirname(__file__), 'energyanalaysis', 'chiller-energy-dashboard', 'src'))
 
 st.set_page_config(page_title="Load Profile Analysis", layout="wide")
 
@@ -65,7 +70,7 @@ This tool provides comprehensive analysis of:
 - Demand shaving analysis
 """)
 
-tabs = st.tabs(["TNB New Tariff Comparison", "Load Profile Analysis", "Advanced Energy Analysis", "Monthly Rate Impact Analysis", "MD Shaving Solution"])
+tabs = st.tabs(["TNB New Tariff Comparison", "Load Profile Analysis", "Advanced Energy Analysis", "Monthly Rate Impact Analysis", "MD Shaving Solution", "❄️ Chiller Energy Dashboard"])
 
 with tabs[1]:
     st.title("Energy Analysis Dashboard")
@@ -1244,10 +1249,10 @@ with tabs[3]:
                             lambda ts: ts.weekday() < 5 and 8 <= ts.hour < 22
                         )
                         old_peak_energy = energy_per_reading[old_peak_mask].sum()
-                        old_offpeak_energy = energy_per_reading[~old_peak_mask].sum()
+                        offpeak_energy = energy_per_reading[~old_peak_mask].sum()
                         
                         # Validation check
-                        energy_total_check = old_peak_energy + old_offpeak_energy
+                        energy_total_check = old_peak_energy + offpeak_energy
                         if abs(energy_total_check - total_energy_kwh) > 0.01:
                             st.error(f"Energy calculation error for {month_str}: {energy_total_check:.2f} vs {total_energy_kwh:.2f}")
                             continue
@@ -1260,7 +1265,7 @@ with tabs[3]:
                             total_kwh=total_energy_kwh,
                             max_demand_kw=max_demand_kw,
                             peak_kwh=old_peak_energy,
-                            offpeak_kwh=old_offpeak_energy,
+                            offpeak_kwh=offpeak_energy,
                             icpt=0.16
                         )
                         
@@ -1464,7 +1469,7 @@ with tabs[3]:
                     total_old_cost = df_monthly['Old Total Cost (RM)'].sum()
                     total_new_cost = df_monthly['RP4 Total Cost (RM)'].sum()
                     total_difference = total_new_cost - total_old_cost
-                    avg_percentage_change = (total_difference / total_old_cost * 100) if total_old_cost > 0 else 0
+                    avg_percentage_change = df_monthly['Change (%)'].mean()
                     
                     # Display summary metrics
                     col1, col2, col3, col4 = st.columns(4)
@@ -1530,7 +1535,7 @@ with tabs[3]:
                         
                         st.dataframe(formatted_old, use_container_width=True)
                         
-                        # Old tariff totals
+                        # Old tariff metrics
                         col1, col2, col3, col4 = st.columns(4)
                         col1.metric("Total Peak Energy", f"{df_monthly['Old Peak Energy (kWh)'].sum():,.0f} kWh")
                         col2.metric("Total Off-Peak Energy", f"{df_monthly['Old Off-Peak Energy (kWh)'].sum():,.0f} kWh")
@@ -1563,7 +1568,7 @@ with tabs[3]:
                         
                         st.dataframe(formatted_new, use_container_width=True)
                         
-                        # New tariff totals
+                        # New tariff metrics
                         col1, col2, col3, col4 = st.columns(4)
                         col1.metric("Total Peak Energy", f"{df_monthly['RP4 Peak Energy (kWh)'].sum():,.0f} kWh")
                         col2.metric("Total Off-Peak Energy", f"{df_monthly['RP4 Off-Peak Energy (kWh)'].sum():,.0f} kWh")
@@ -1676,41 +1681,11 @@ with tabs[3]:
                                 st.dataframe(styled_new, use_container_width=True, hide_index=True)
                                 
                                 # New tariff metrics
-                                st.metric("Cost per kWh", f"RM {row['RP4 Cost/kWh (RM)']:.4f}")
-                                
-                                # Peak percentage (with note for General tariffs)
-                                if tariff_type == "General":
-                                    st.metric("Peak Energy %", "0.0% (General tariff)")
-                                    st.caption("⚠️ General tariffs don't have peak/off-peak split")
-                                else:
-                                    st.metric("Peak Energy %", f"{row['RP4 Peak %']:.1f}%")
-                            
-                            # Comparison summary for this month
-                            st.markdown("---")
-                            st.markdown("#### 📊 Month Comparison Summary")
-                            
-                            comp_col1, comp_col2, comp_col3 = st.columns(3)
-                            
-                            with comp_col1:
-                                energy_cost_diff = (row['RP4 Peak Cost (RM)'] + row['RP4 Off-Peak Cost (RM)']) - (row['Old Peak Cost (RM)'] + row['Old Off-Peak Cost (RM)'])
-                                st.metric("Energy Cost Difference", f"RM {energy_cost_diff:+,.2f}")
-                                
-                            with comp_col2:
-                                demand_cost_diff = row['RP4 Demand Cost (RM)'] - (row['Old ICPT Cost (RM)'] + row['Old MD Cost (RM)'])
-                                st.metric("Demand Cost Difference", f"RM {demand_cost_diff:+,.2f}")
-                                
-                            with comp_col3:
-                                peak_classification_diff = row['RP4 Peak %'] - row['Old Peak %']
-                                st.metric("Peak Classification Δ", f"{peak_classification_diff:+.1f}%")
-                            
-                            # Status indicator
-                            status = row['Status']
-                            if "Savings" in status:
-                                st.success(f"✅ {status}: Save RM {abs(row['Cost Difference (RM)']):,.2f} this month")
-                            elif "Higher" in status:
-                                st.error(f"📈 {status}: Additional RM {row['Cost Difference (RM)']:,.2f} this month")
-                            else:
-                                st.info(f"📊 {status}")
+                                col1, col2, col3, col4 = st.columns(4)
+                                col1.metric("Total Peak Energy", f"{df_monthly['RP4 Peak Energy (kWh)'].sum():,.0f} kWh")
+                                col2.metric("Total Off-Peak Energy", f"{df_monthly['RP4 Off-Peak Energy (kWh)'].sum():,.0f} kWh")
+                                col3.metric("Total Energy Cost", f"RM {(df_monthly['RP4 Peak Cost (RM)'].sum() + df_monthly['RP4 Off-Peak Cost (RM)'].sum()):,.2f}")
+                                col4.metric("Total AFA + MD", f"RM {(df_monthly['RP4 AFA Cost (RM)'].sum() + df_monthly['RP4 Demand Cost (RM)'].sum()):,.2f}")
                     
                     # ===============================
                     # COMPONENT-WISE COMPARISON CHARTS
@@ -1918,7 +1893,7 @@ with tabs[3]:
                 
                 else:
                     st.warning("No sufficient monthly data found for analysis. Please ensure your data spans at least one full month.")
-                
+        
         except Exception as e:
             st.error(f"Error processing file: {str(e)}")
             st.error("Please ensure your Excel file has proper timestamp and power columns.")
@@ -1952,4 +1927,178 @@ with tabs[3]:
 
 with tabs[4]:
     show_md_shaving_solution()
+
+with tabs[5]:
+    # Chiller Energy Dashboard Tab
+    try:
+        # Import chiller dashboard components
+        from components.data_upload import render_data_upload
+        from components.data_preview import render_data_preview
+        from components.column_mapper import render_column_mapper, calculate_derived_metrics
+        from components.metrics_calculator import render_metrics_display, calculate_efficiency_metrics
+        from components.visualizations import render_visualizations
+        
+        st.title("❄️ Chiller Plant Energy Dashboard")
+        st.markdown("""
+        Comprehensive analysis of chiller plant energy efficiency, including data upload, 
+        column mapping, efficiency calculations, and visualizations.
+        """)
+        
+        # Initialize session state for chiller dashboard
+        if 'chiller_uploaded_data' not in st.session_state:
+            st.session_state.chiller_uploaded_data = None
+        if 'chiller_column_mapping' not in st.session_state:
+            st.session_state.chiller_column_mapping = {}
+        if 'chiller_processed_data' not in st.session_state:
+            st.session_state.chiller_processed_data = None
+        
+        # Sidebar for chiller dashboard navigation
+        with st.sidebar:
+            st.markdown("---")
+            st.markdown("### ❄️ Chiller Dashboard")
+            
+            chiller_steps = [
+                "📁 Data Upload",
+                "👀 Data Preview", 
+                "🔗 Column Mapping",
+                "📊 Analysis & Results"
+            ]
+            
+            # Determine current step based on session state
+            chiller_current_step = 0
+            if st.session_state.chiller_uploaded_data is not None:
+                chiller_current_step = max(chiller_current_step, 1)
+            if st.session_state.chiller_column_mapping:
+                chiller_current_step = max(chiller_current_step, 2)
+            if st.session_state.chiller_processed_data is not None:
+                chiller_current_step = max(chiller_current_step, 3)
+                
+            chiller_selected_step = st.radio("Chiller Steps:", chiller_steps, index=chiller_current_step)
+            
+            # Progress indicator
+            st.markdown("#### 📊 Progress")
+            chiller_progress_value = (chiller_current_step) / (len(chiller_steps) - 1)
+            st.progress(chiller_progress_value)
+            st.caption(f"Step {chiller_current_step + 1} of {len(chiller_steps)}")
+            
+            # Add some helpful information
+            st.markdown("#### 💡 Tips")
+            st.info("""
+            **Supported Formats:**
+            - Excel (.xlsx, .xls)
+            - CSV (.csv)
+            
+            **Required Data:**
+            - Timestamp column
+            - Power consumption data
+            - Cooling load information
+            
+            **Calculations:**
+            - Total Power = Sum of components
+            - kW/TR = Total Power / Cooling Load
+            - COP = (Cooling Load × 3.51685) / Total Power
+            """)
+        
+        # Main content area based on selected step
+        if chiller_selected_step == "📁 Data Upload":
+            st.session_state.chiller_uploaded_data = render_data_upload()
+            
+        elif chiller_selected_step == "👀 Data Preview":
+            if st.session_state.chiller_uploaded_data is not None:
+                render_data_preview(st.session_state.chiller_uploaded_data)
+            else:
+                st.warning("Please upload data first.")
+                
+        elif chiller_selected_step == "🔗 Column Mapping":
+            if st.session_state.chiller_uploaded_data is not None:
+                mapping = render_column_mapper(st.session_state.chiller_uploaded_data)
+                if mapping:
+                    st.session_state.chiller_column_mapping = mapping
+                    
+                    # Calculate derived metrics
+                    st.session_state.chiller_processed_data = calculate_derived_metrics(
+                        st.session_state.chiller_uploaded_data, 
+                        mapping
+                    )
+                    
+                    # Show metrics
+                    render_metrics_display(st.session_state.chiller_uploaded_data, mapping)
+            else:
+                st.warning("Please upload data first.")
+                
+        elif chiller_selected_step == "📊 Analysis & Results":
+            if st.session_state.chiller_column_mapping and st.session_state.chiller_processed_data is not None:
+                # Show final results and visualizations
+                render_visualizations(st.session_state.chiller_processed_data, st.session_state.chiller_column_mapping)
+                
+                # Export options
+                st.markdown("---")
+                st.subheader("📤 Export Results")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    if st.button("📊 Download Processed Data", key="chiller_download_data"):
+                        csv = st.session_state.chiller_processed_data.to_csv(index=False)
+                        st.download_button(
+                            label="Download CSV",
+                            data=csv,
+                            file_name="chiller_analysis_results.csv",
+                            mime="text/csv",
+                            key="chiller_csv_download"
+                        )
+                
+                with col2:
+                    if st.button("📋 Download Analysis Report", key="chiller_download_report"):
+                        # Generate a simple text report
+                        metrics = calculate_efficiency_metrics(
+                            st.session_state.chiller_uploaded_data, 
+                            st.session_state.chiller_column_mapping
+                        )
+                        
+                        report = f"""
+Chiller Plant Energy Analysis Report
+===================================
+
+Data Overview:
+- Total Records: {len(st.session_state.chiller_uploaded_data)}
+- Analysis Date: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+Performance Metrics:
+- Average kW/TR: {metrics['avg_kw_tr']:.3f}
+- Average COP: {metrics['avg_cop']:.2f}
+- Total kW/TR: {metrics['total_kw_tr']:.3f}
+- Total COP: {metrics['total_cop']:.2f}
+
+Column Mapping Used:
+{chr(10).join([f"- {k.replace('_', ' ').title()}: {v}" for k, v in st.session_state.chiller_column_mapping.items() if v])}
+                        """
+                        
+                        st.download_button(
+                            label="Download Report",
+                            data=report,
+                            file_name="chiller_analysis_report.txt",
+                            mime="text/plain",
+                            key="chiller_report_download"
+                        )
+            else:
+                st.warning("Please complete the column mapping step first.")
+        
+    except ImportError as e:
+        st.error(f"❌ Chiller Dashboard components not found: {str(e)}")
+        st.info("Please ensure the chiller dashboard components are properly installed.")
+        st.markdown("""
+        **Expected file structure:**
+        ```
+        energyanalaysis/chiller-energy-dashboard/src/components/
+        ├── data_upload.py
+        ├── data_preview.py  
+        ├── column_mapper.py
+        ├── metrics_calculator.py
+        └── visualizations.py
+        ```
+        """)
+    except Exception as e:
+        st.error(f"❌ Error loading chiller dashboard: {str(e)}")
+        st.info("There was an issue loading the chiller energy dashboard. Please check the component files.")
 

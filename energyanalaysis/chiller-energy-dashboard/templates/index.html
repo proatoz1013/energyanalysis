@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chiller Energy Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+    <header>
+        <h1>Chiller Energy Dashboard</h1>
+    </header>
+    <main>
+        <section id="upload-section">
+            <h2>Upload Data</h2>
+            <form id="upload-form" action="/upload" method="post" enctype="multipart/form-data">
+                <input type="file" name="file" accept=".csv, .xls, .xlsx" required>
+                <button type="submit">Upload</button>
+            </form>
+        </section>
+        <section id="preview-section">
+            <h2>Data Preview</h2>
+            <div id="data-preview"></div>
+        </section>
+        <section id="column-mapping-section">
+            <h2>Column Mapping</h2>
+            <form id="column-mapping-form">
+                <label for="time-column">Time Column:</label>
+                <select id="time-column" name="time_column"></select>
+                <label for="power-column">Chiller Power Column:</label>
+                <select id="power-column" name="power_column"></select>
+                <label for="pump-column">Pump Power Column:</label>
+                <select id="pump-column" name="pump_column"></select>
+                <label for="flowrate-column">Flowrate Column:</label>
+                <select id="flowrate-column" name="flowrate_column"></select>
+                <label for="cooling-load-column">Cooling Load Column:</label>
+                <select id="cooling-load-column" name="cooling_load_column"></select>
+                <label for="efficiency-column">Efficiency Column:</label>
+                <select id="efficiency-column" name="efficiency_column"></select>
+                <button type="submit">Map Columns</button>
+            </form>
+        </section>
+        <section id="results-section">
+            <h2>Results</h2>
+            <div id="results"></div>
+        </section>
+    </main>
+    <footer>
+        <p>&copy; 2023 Chiller Energy Dashboard</p>
+    </footer>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script>
+        // JavaScript for handling file upload and data preview
+        $(document).ready(function() {
+            $('#upload-form').on('submit', function(event) {
+                event.preventDefault();
+                var formData = new FormData(this);
+                $.ajax({
+                    url: '/upload',
+                    type: 'POST',
+                    data: formData,
+                    contentType: false,
+                    processData: false,
+                    success: function(data) {
+                        $('#data-preview').html(data);
+                        // Populate column mapping dropdowns based on uploaded data
+                    },
+                    error: function() {
+                        alert('Error uploading file.');
+                    }
+                });
+            });
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chiller Energy Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Chiller Energy Dashboard</h1>
+        </header>
+        <main>
+            <section id="data-upload">
+                <h2>Upload Data</h2>
+                <form action="/upload" method="post" enctype="multipart/form-data">
+                    <input type="file" name="file" accept=".csv, .xls, .xlsx" required>
+                    <button type="submit">Upload</button>
+                </form>
+            </section>
+
+            <section id="data-preview">
+                <h2>Data Preview</h2>
+                <div id="preview-table">
+                    <!-- Data preview will be injected here -->
+                </div>
+            </section>
+
+            <section id="column-mapping">
+                <h2>Column Mapping</h2>
+                <form id="mapping-form">
+                    <label for="time-column">Time Column:</label>
+                    <select name="time-column" id="time-column"></select>
+
+                    <label for="power-column">Chiller Power Column:</label>
+                    <select name="power-column" id="power-column"></select>
+
+                    <label for="pumps-column">Pumps Column:</label>
+                    <select name="pumps-column" id="pumps-column"></select>
+
+                    <label for="flowrate-column">Flowrate Column:</label>
+                    <select name="flowrate-column" id="flowrate-column"></select>
+
+                    <label for="cooling-load-column">Cooling Load Column:</label>
+                    <select name="cooling-load-column" id="cooling-load-column"></select>
+
+                    <label for="efficiency-column">Efficiency Column:</label>
+                    <select name="efficiency-column" id="efficiency-column"></select>
+
+                    <button type="button" id="calculate-metrics">Calculate Metrics</button>
+                </form>
+            </section>
+
+            <section id="metrics-results">
+                <h2>Performance Metrics</h2>
+                <div id="metrics-output">
+                    <!-- Metrics results will be displayed here -->
+                </div>
+            </section>
+
+            <section id="visualizations">
+                <h2>Visualizations</h2>
+                <div id="charts">
+                    <!-- Charts will be rendered here -->
+                </div>
+            </section>
+        </main>
+    </div>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+</body>
+</html>
