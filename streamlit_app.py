@@ -1929,134 +1929,177 @@ with tabs[4]:
     show_md_shaving_solution()
 
 with tabs[5]:
-    # Chiller Energy Dashboard Tab
+    # ❄️ Chiller Energy Dashboard Tab
+    st.title("❄️ Chiller Plant Energy Dashboard")
+    st.markdown("""
+    Comprehensive analysis of chiller plant energy efficiency, including data upload, 
+    column mapping, efficiency calculations, and visualizations.
+    """)
+    
+    # Initialize session state for chiller dashboard
+    if 'chiller_uploaded_data' not in st.session_state:
+        st.session_state.chiller_uploaded_data = None
+    if 'chiller_column_mapping' not in st.session_state:
+        st.session_state.chiller_column_mapping = {}
+    if 'chiller_processed_data' not in st.session_state:
+        st.session_state.chiller_processed_data = None
+    
+    # Try to import and use the chiller dashboard app_new.py main function
     try:
-        # Import chiller dashboard components
-        from components.data_upload import render_data_upload
-        from components.data_preview import render_data_preview
-        from components.column_mapper import render_column_mapper, calculate_derived_metrics
-        from components.metrics_calculator import render_metrics_display, calculate_efficiency_metrics
-        from components.visualizations import render_visualizations
+        # Import the chiller dashboard main function
+        import sys
+        chiller_path = os.path.join(os.path.dirname(__file__), 'energyanalaysis', 'chiller-energy-dashboard', 'src')
+        if chiller_path not in sys.path:
+            sys.path.insert(0, chiller_path)
         
-        st.title("❄️ Chiller Plant Energy Dashboard")
+        # Import the main function from app_new.py
+        from app_new import main as chiller_main
+        
+        # Call the chiller dashboard main function
+        # Note: We need to modify the main function to not call st.set_page_config
+        # since it's already set in the main app
+        
+        # Temporarily store the original session state keys
+        original_keys = list(st.session_state.keys())
+        
+        # Custom CSS for chiller dashboard
         st.markdown("""
-        Comprehensive analysis of chiller plant energy efficiency, including data upload, 
-        column mapping, efficiency calculations, and visualizations.
-        """)
+        <style>
+        .chiller-header {
+            font-size: 2rem;
+            color: #1f77b4;
+            text-align: center;
+            margin-bottom: 1.5rem;
+        }
+        .chiller-section-header {
+            font-size: 1.3rem;
+            color: #2c3e50;
+            margin-top: 1.5rem;
+            margin-bottom: 1rem;
+        }
+        .chiller-metric-container {
+            background-color: #f8f9fa;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            border-left: 4px solid #1f77b4;
+        }
+        </style>
+        """, unsafe_allow_html=True)
         
-        # Initialize session state for chiller dashboard
-        if 'chiller_uploaded_data' not in st.session_state:
-            st.session_state.chiller_uploaded_data = None
-        if 'chiller_column_mapping' not in st.session_state:
-            st.session_state.chiller_column_mapping = {}
-        if 'chiller_processed_data' not in st.session_state:
-            st.session_state.chiller_processed_data = None
-        
-        # Sidebar for chiller dashboard navigation
-        with st.sidebar:
-            st.markdown("---")
-            st.markdown("### ❄️ Chiller Dashboard")
+        # Import components individually to avoid conflicts
+        try:
+            from components.data_upload import render_data_upload
+            from components.data_preview import render_data_preview
+            from components.column_mapper import render_column_mapper, calculate_derived_metrics
+            from components.metrics_calculator import render_metrics_display, calculate_efficiency_metrics
+            from components.visualizations import render_visualizations
             
-            chiller_steps = [
-                "📁 Data Upload",
-                "👀 Data Preview", 
-                "🔗 Column Mapping",
-                "📊 Analysis & Results"
-            ]
-            
-            # Determine current step based on session state
-            chiller_current_step = 0
-            if st.session_state.chiller_uploaded_data is not None:
-                chiller_current_step = max(chiller_current_step, 1)
-            if st.session_state.chiller_column_mapping:
-                chiller_current_step = max(chiller_current_step, 2)
-            if st.session_state.chiller_processed_data is not None:
-                chiller_current_step = max(chiller_current_step, 3)
-                
-            chiller_selected_step = st.radio("Chiller Steps:", chiller_steps, index=chiller_current_step)
-            
-            # Progress indicator
-            st.markdown("#### 📊 Progress")
-            chiller_progress_value = (chiller_current_step) / (len(chiller_steps) - 1)
-            st.progress(chiller_progress_value)
-            st.caption(f"Step {chiller_current_step + 1} of {len(chiller_steps)}")
-            
-            # Add some helpful information
-            st.markdown("#### 💡 Tips")
-            st.info("""
-            **Supported Formats:**
-            - Excel (.xlsx, .xls)
-            - CSV (.csv)
-            
-            **Required Data:**
-            - Timestamp column
-            - Power consumption data
-            - Cooling load information
-            
-            **Calculations:**
-            - Total Power = Sum of components
-            - kW/TR = Total Power / Cooling Load
-            - COP = (Cooling Load × 3.51685) / Total Power
-            """)
-        
-        # Main content area based on selected step
-        if chiller_selected_step == "📁 Data Upload":
-            st.session_state.chiller_uploaded_data = render_data_upload()
-            
-        elif chiller_selected_step == "👀 Data Preview":
-            if st.session_state.chiller_uploaded_data is not None:
-                render_data_preview(st.session_state.chiller_uploaded_data)
-            else:
-                st.warning("Please upload data first.")
-                
-        elif chiller_selected_step == "🔗 Column Mapping":
-            if st.session_state.chiller_uploaded_data is not None:
-                mapping = render_column_mapper(st.session_state.chiller_uploaded_data)
-                if mapping:
-                    st.session_state.chiller_column_mapping = mapping
-                    
-                    # Calculate derived metrics
-                    st.session_state.chiller_processed_data = calculate_derived_metrics(
-                        st.session_state.chiller_uploaded_data, 
-                        mapping
-                    )
-                    
-                    # Show metrics
-                    render_metrics_display(st.session_state.chiller_uploaded_data, mapping)
-            else:
-                st.warning("Please upload data first.")
-                
-        elif chiller_selected_step == "📊 Analysis & Results":
-            if st.session_state.chiller_column_mapping and st.session_state.chiller_processed_data is not None:
-                # Show final results and visualizations
-                render_visualizations(st.session_state.chiller_processed_data, st.session_state.chiller_column_mapping)
-                
-                # Export options
+            # Sidebar for chiller dashboard navigation
+            with st.sidebar:
                 st.markdown("---")
-                st.subheader("📤 Export Results")
+                st.markdown("### ❄️ Chiller Dashboard")
                 
-                col1, col2 = st.columns(2)
+                chiller_steps = [
+                    "📁 Data Upload",
+                    "👀 Data Preview", 
+                    "🔗 Column Mapping",
+                    "📊 Analysis & Results"
+                ]
                 
-                with col1:
-                    if st.button("📊 Download Processed Data", key="chiller_download_data"):
-                        csv = st.session_state.chiller_processed_data.to_csv(index=False)
-                        st.download_button(
-                            label="Download CSV",
-                            data=csv,
-                            file_name="chiller_analysis_results.csv",
-                            mime="text/csv",
-                            key="chiller_csv_download"
-                        )
+                # Determine current step based on session state
+                chiller_current_step = 0
+                if st.session_state.chiller_uploaded_data is not None:
+                    chiller_current_step = max(chiller_current_step, 1)
+                if st.session_state.chiller_column_mapping:
+                    chiller_current_step = max(chiller_current_step, 2)
+                if st.session_state.chiller_processed_data is not None:
+                    chiller_current_step = max(chiller_current_step, 3)
+                    
+                chiller_selected_step = st.radio("Chiller Steps:", chiller_steps, index=chiller_current_step, key="chiller_steps")
                 
-                with col2:
-                    if st.button("📋 Download Analysis Report", key="chiller_download_report"):
-                        # Generate a simple text report
-                        metrics = calculate_efficiency_metrics(
+                # Progress indicator
+                st.markdown("#### 📊 Progress")
+                chiller_progress_value = (chiller_current_step) / (len(chiller_steps) - 1) if len(chiller_steps) > 1 else 0
+                st.progress(chiller_progress_value)
+                st.caption(f"Step {chiller_current_step + 1} of {len(chiller_steps)}")
+                
+                # Add some helpful information
+                st.markdown("#### 💡 Tips")
+                st.info("""
+                **Supported Formats:**
+                - Excel (.xlsx, .xls)
+                - CSV (.csv)
+                
+                **Required Data:**
+                - Timestamp column
+                - Power consumption data
+                - Cooling load information
+                
+                **Calculations:**
+                - Total Power = Sum of components
+                - kW/TR = Total Power / Cooling Load
+                - COP = (Cooling Load × 3.51685) / Total Power
+                """)
+            
+            # Main content area based on selected step
+            if chiller_selected_step == "📁 Data Upload":
+                st.session_state.chiller_uploaded_data = render_data_upload()
+                
+            elif chiller_selected_step == "👀 Data Preview":
+                if st.session_state.chiller_uploaded_data is not None:
+                    render_data_preview(st.session_state.chiller_uploaded_data)
+                else:
+                    st.warning("Please upload data first.")
+                    
+            elif chiller_selected_step == "🔗 Column Mapping":
+                if st.session_state.chiller_uploaded_data is not None:
+                    mapping = render_column_mapper(st.session_state.chiller_uploaded_data)
+                    if mapping:
+                        st.session_state.chiller_column_mapping = mapping
+                        
+                        # Calculate derived metrics
+                        st.session_state.chiller_processed_data = calculate_derived_metrics(
                             st.session_state.chiller_uploaded_data, 
-                            st.session_state.chiller_column_mapping
+                            mapping
                         )
                         
-                        report = f"""
+                        # Show metrics
+                        render_metrics_display(st.session_state.chiller_uploaded_data, mapping)
+                else:
+                    st.warning("Please upload data first.")
+                    
+            elif chiller_selected_step == "📊 Analysis & Results":
+                if st.session_state.chiller_column_mapping and st.session_state.chiller_processed_data is not None:
+                    # Show final results and visualizations
+                    render_visualizations(st.session_state.chiller_processed_data, st.session_state.chiller_column_mapping)
+                    
+                    # Export options
+                    st.markdown("---")
+                    st.subheader("📤 Export Results")
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        if st.button("📊 Download Processed Data", key="chiller_download_data"):
+                            csv = st.session_state.chiller_processed_data.to_csv(index=False)
+                            st.download_button(
+                                label="Download CSV",
+                                data=csv,
+                                file_name="chiller_analysis_results.csv",
+                                mime="text/csv",
+                                key="chiller_csv_download"
+                            )
+                    
+                    with col2:
+                        if st.button("📋 Download Analysis Report", key="chiller_download_report"):
+                            # Generate a simple text report
+                            if st.session_state.chiller_uploaded_data is not None:
+                                metrics = calculate_efficiency_metrics(
+                                    st.session_state.chiller_uploaded_data, 
+                                    st.session_state.chiller_column_mapping
+                                )
+                                
+                                report = f"""
 Chiller Plant Energy Analysis Report
 ===================================
 
@@ -2065,40 +2108,62 @@ Data Overview:
 - Analysis Date: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 Performance Metrics:
-- Average kW/TR: {metrics['avg_kw_tr']:.3f}
-- Average COP: {metrics['avg_cop']:.2f}
-- Total kW/TR: {metrics['total_kw_tr']:.3f}
-- Total COP: {metrics['total_cop']:.2f}
+- Average kW/TR: {metrics.get('avg_kw_tr', 0):.3f}
+- Average COP: {metrics.get('avg_cop', 0):.2f}
+- Total kW/TR: {metrics.get('total_kw_tr', 0):.3f}
+- Total COP: {metrics.get('total_cop', 0):.2f}
 
 Column Mapping Used:
 {chr(10).join([f"- {k.replace('_', ' ').title()}: {v}" for k, v in st.session_state.chiller_column_mapping.items() if v])}
-                        """
-                        
-                        st.download_button(
-                            label="Download Report",
-                            data=report,
-                            file_name="chiller_analysis_report.txt",
-                            mime="text/plain",
-                            key="chiller_report_download"
-                        )
-            else:
-                st.warning("Please complete the column mapping step first.")
+                                """
+                                
+                                st.download_button(
+                                    label="Download Report",
+                                    data=report,
+                                    file_name="chiller_analysis_report.txt",
+                                    mime="text/plain",
+                                    key="chiller_report_download"
+                                )
+                else:
+                    st.warning("Please complete the column mapping step first.")
         
-    except ImportError as e:
-        st.error(f"❌ Chiller Dashboard components not found: {str(e)}")
-        st.info("Please ensure the chiller dashboard components are properly installed.")
-        st.markdown("""
-        **Expected file structure:**
-        ```
-        energyanalaysis/chiller-energy-dashboard/src/components/
-        ├── data_upload.py
-        ├── data_preview.py  
-        ├── column_mapper.py
-        ├── metrics_calculator.py
-        └── visualizations.py
-        ```
-        """)
+        except ImportError as e:
+            st.error(f"❌ Chiller Dashboard components not found: {str(e)}")
+            st.info("Running in basic mode with file upload only.")
+            
+            # Basic file upload as fallback
+            st.markdown("### 📁 Upload Your Chiller Plant Data")
+            uploaded_file = st.file_uploader(
+                "Choose a file",
+                type=['csv', 'xlsx', 'xls'],
+                help="Upload your chiller plant data in CSV or Excel format",
+                key="basic_chiller_upload"
+            )
+            
+            if uploaded_file is not None:
+                try:
+                    if uploaded_file.name.endswith('.csv'):
+                        df = pd.read_csv(uploaded_file)
+                    else:
+                        df = pd.read_excel(uploaded_file)
+                    
+                    st.success(f"✅ File '{uploaded_file.name}' uploaded successfully!")
+                    st.dataframe(df.head(), use_container_width=True)
+                    
+                    # Basic statistics
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("📊 Rows", f"{len(df):,}")
+                    with col2:
+                        st.metric("📋 Columns", f"{len(df.columns)}")
+                    with col3:
+                        numeric_cols = df.select_dtypes(include=['number']).columns
+                        st.metric("🔢 Numeric Columns", f"{len(numeric_cols)}")
+                        
+                except Exception as e:
+                    st.error(f"❌ Error reading file: {str(e)}")
+                    
     except Exception as e:
         st.error(f"❌ Error loading chiller dashboard: {str(e)}")
-        st.info("There was an issue loading the chiller energy dashboard. Please check the component files.")
+        st.info("The chiller dashboard will be available once the components are properly installed.")
 
