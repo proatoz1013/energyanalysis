@@ -2065,46 +2065,122 @@ with tabs[5]:
                 st.warning(f"⚠️ Missing columns: {', '.join(missing_cols)}")
                 st.info("The analysis will continue with available columns.")
             
-            # Calculate and display summary statistics
-            st.subheader("📈 Load Profile Summary")
+            # Critical Event Analysis Sections
+            st.markdown("---")
+            st.header("🎯 Critical Event Analysis")
+            
+            # Section 1: Event with Maximum MD Excess
+            st.subheader("💰 Section 1: Highest MD Cost Event")
             
             try:
-                col1, col2, col3, col4 = st.columns(4)
-                
-                with col1:
-                    total_energy = df["Energy to Shave (kWh)"].sum() if "Energy to Shave (kWh)" in df.columns else 0
-                    st.metric("Total Energy to Shave", f"{total_energy:.1f} kWh")
-                
-                with col2:
-                    avg_duration = df["Duration (min)"].mean() if "Duration (min)" in df.columns else 0
-                    st.metric("Average Duration", f"{avg_duration:.1f} min")
-                
-                with col3:
-                    max_excess = df["Excess (kW)"].max() if "Excess (kW)" in df.columns else 0
-                    st.metric("Max Excess Demand", f"{max_excess:.1f} kW")
-                
-                with col4:
-                    max_energy_event = df["Energy to Shave (kWh)"].max() if "Energy to Shave (kWh)" in df.columns else 0
-                    st.metric("Max Energy per Event", f"{max_energy_event:.1f} kWh")
-                
-                # Additional statistics
-                st.markdown("---")
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    total_events = len(df)
-                    st.metric("Total Peak Events", total_events)
-                
-                with col2:
-                    total_md_cost = df["MD Cost Impact (RM)"].sum() if "MD Cost Impact (RM)" in df.columns else 0
-                    st.metric("Total MD Cost Impact", f"RM {total_md_cost:.2f}")
-                
-                with col3:
-                    peak_period_energy = df["Energy to Shave (Peak Period Only)"].sum() if "Energy to Shave (Peak Period Only)" in df.columns else 0
-                    st.metric("Peak Period Energy", f"{peak_period_energy:.1f} kWh")
+                if "MD Cost Impact (RM)" in df.columns and not df.empty:
+                    # Find event with maximum MD cost impact
+                    max_md_cost_idx = df["MD Cost Impact (RM)"].idxmax()
+                    max_md_event = df.loc[max_md_cost_idx]
+                    
+                    # Display event details in columns
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        st.metric("MD Excess", f"{max_md_event.get('MD Excess (kW)', 'N/A'):.2f} kW" if pd.notna(max_md_event.get('MD Excess (kW)')) else "N/A")
+                        st.metric("Peak Load", f"{max_md_event.get('Peak Load (kW)', 'N/A'):.2f} kW" if pd.notna(max_md_event.get('Peak Load (kW)')) else "N/A")
+                    
+                    with col2:
+                        st.metric("MD Cost Impact", f"RM {max_md_event.get('MD Cost Impact (RM)', 0):.2f}")
+                        st.metric("Duration", f"{max_md_event.get('Duration (min)', 'N/A'):.1f} min" if pd.notna(max_md_event.get('Duration (min)')) else "N/A")
+                    
+                    with col3:
+                        st.metric("Date", f"{max_md_event.get('Start Date', 'N/A')}")
+                        st.metric("Time", f"{max_md_event.get('Start Time', 'N/A')} - {max_md_event.get('End Time', 'N/A')}")
+                    
+                    # Additional details in expander
+                    with st.expander("📊 Detailed Event Information"):
+                        event_details = {}
+                        for col in df.columns:
+                            if col in max_md_event.index:
+                                value = max_md_event[col]
+                                if pd.notna(value):
+                                    event_details[col] = value
+                        
+                        # Create a single-row DataFrame for better display
+                        event_df = pd.DataFrame([event_details])
+                        st.dataframe(event_df, use_container_width=True)
+                        
+                        st.info("💡 **This is the most financially impactful event for MD charges.** Focus on preventing this level of excess demand.")
+                        
+                else:
+                    st.warning("No MD Cost Impact data available for critical event analysis.")
                     
             except Exception as e:
-                st.error(f"Error calculating statistics: {str(e)}")
+                st.error(f"Error analyzing maximum MD cost event: {str(e)}")
+            
+            # Section 2: Event with Maximum Energy to Shave
+            st.subheader("⚡ Section 2: Highest Energy Demand Event")
+            
+            try:
+                if "Energy to Shave (kWh)" in df.columns and not df.empty:
+                    # Find event with maximum energy to shave
+                    max_energy_idx = df["Energy to Shave (kWh)"].idxmax()
+                    max_energy_event = df.loc[max_energy_idx]
+                    
+                    # Display event details in columns
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        st.metric("Energy to Shave", f"{max_energy_event.get('Energy to Shave (kWh)', 0):.1f} kWh")
+                        st.metric("Peak Load", f"{max_energy_event.get('Peak Load (kW)', 'N/A'):.2f} kW" if pd.notna(max_energy_event.get('Peak Load (kW)')) else "N/A")
+                    
+                    with col2:
+                        st.metric("Duration", f"{max_energy_event.get('Duration (min)', 'N/A'):.1f} min" if pd.notna(max_energy_event.get('Duration (min)')) else "N/A")
+                        st.metric("Excess Power", f"{max_energy_event.get('Excess (kW)', 'N/A'):.2f} kW" if pd.notna(max_energy_event.get('Excess (kW)')) else "N/A")
+                    
+                    with col3:
+                        st.metric("Date", f"{max_energy_event.get('Start Date', 'N/A')}")
+                        st.metric("Time", f"{max_energy_event.get('Start Time', 'N/A')} - {max_energy_event.get('End Time', 'N/A')}")
+                    
+                    # Additional details in expander
+                    with st.expander("📊 Detailed Event Information"):
+                        event_details = {}
+                        for col in df.columns:
+                            if col in max_energy_event.index:
+                                value = max_energy_event[col]
+                                if pd.notna(value):
+                                    event_details[col] = value
+                        
+                        # Create a single-row DataFrame for better display
+                        event_df = pd.DataFrame([event_details])
+                        st.dataframe(event_df, use_container_width=True)
+                        
+                        st.info("💡 **This event requires the most battery capacity.** Size your battery system to handle this energy requirement.")
+                        
+                        # Calculate battery sizing recommendation for this specific event
+                        energy_required = max_energy_event.get('Energy to Shave (kWh)', 0)
+                        if energy_required > 0:
+                            # Assume 85% DoD and 20% safety factor
+                            recommended_capacity = energy_required / 0.85 * 1.2
+                            st.success(f"🔋 **Battery Sizing Recommendation**: {recommended_capacity:.1f} kWh capacity needed for this event (85% DoD + 20% safety)")
+                        
+                else:
+                    st.warning("No Energy to Shave data available for critical event analysis.")
+                    
+            except Exception as e:
+                st.error(f"Error analyzing maximum energy event: {str(e)}")
+            
+            # Comparison insight
+            try:
+                if ("MD Cost Impact (RM)" in df.columns and "Energy to Shave (kWh)" in df.columns and 
+                    not df.empty):
+                    
+                    max_md_cost_idx = df["MD Cost Impact (RM)"].idxmax()
+                    max_energy_idx = df["Energy to Shave (kWh)"].idxmax()
+                    
+                    if max_md_cost_idx != max_energy_idx:
+                        st.info("📋 **Key Insight**: The highest MD cost event and highest energy event are different. Consider both when sizing your battery system.")
+                    else:
+                        st.success("✅ **Key Insight**: The highest MD cost event and highest energy event are the same. This simplifies battery sizing requirements.")
+                        
+            except Exception as e:
+                st.warning("Unable to compare critical events.")
             
             # Section 2: Battery Selection and Degradation Analysis
             st.header("🔋 Section 2: Battery Selection & Degradation Analysis")
@@ -2122,8 +2198,7 @@ with tabs[5]:
             with col1:
                 st.markdown("**📊 Load Requirements (from uploaded data):**")
                 st.write(f"• **Max Excess Power:** {max_excess_kw:.1f} kW")
-                st.write(f"• **Max Event Energy:** {max_event_energy:.1f} kWh") 
-                st.write(f"• **Total Energy to Shave:** {total_energy_kwh:.1f} kWh")
+                st.write(f"• **Max Event Energy:** {max_event_energy:.1f} kWh")
                 
                 # Battery quantity calculation parameters
                 st.subheader("🔢 Battery Quantity Calculation")
