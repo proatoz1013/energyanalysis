@@ -70,7 +70,7 @@ This tool provides comprehensive analysis of:
 - Demand shaving analysis
 """)
 
-tabs = st.tabs(["TNB New Tariff Comparison", "Load Profile Analysis", "Advanced Energy Analysis", "Monthly Rate Impact Analysis", "MD Shaving Solution", "❄️ Chiller Energy Dashboard"])
+tabs = st.tabs(["TNB New Tariff Comparison", "Load Profile Analysis", "Advanced Energy Analysis", "Monthly Rate Impact Analysis", "MD Shaving Solution", "🔋 Advanced MD Shaving", "❄️ Chiller Energy Dashboard"])
 
 with tabs[1]:
     st.title("Energy Analysis Dashboard")
@@ -1929,6 +1929,1259 @@ with tabs[4]:
     show_md_shaving_solution()
 
 with tabs[5]:
+    # 🔋 Advanced MD Shaving Tab
+    st.title("🔋 Advanced MD Shaving")
+    st.markdown("""
+    **Advanced Maximum Demand (MD) shaving analysis with real battery degradation modeling.**
+    
+    This tool integrates actual WEIHENG TIANWU series degradation data to provide:
+    - **Real degradation curves** (not linear approximations)
+    - **20-year battery lifecycle analysis** with non-linear patterns
+    - **MD target vs capacity modeling** over extended timeframes
+    - **Investment planning** with accurate performance projections
+    """)
+    
+    # Add information box about real degradation data
+    with st.expander("🔬 About WEIHENG TIANWU Real Degradation Data", expanded=False):
+        st.markdown("""
+        **This analysis uses actual WEIHENG TIANWU series test data:**
+        
+        ✅ **Real Performance Data:**
+        - 21 data points over 20-year period (Year 0-20)
+        - State of Health (SOH) measurements from laboratory testing
+        - Non-linear degradation pattern with initial steep drop then gradual decline
+        - End-of-life defined at 80% SOH (typically achieved around year 15)
+        
+        📊 **Key Degradation Characteristics:**
+        - **Year 0:** 100.00% SOH (new battery)
+        - **Year 1:** 93.78% SOH (6.22% initial loss - typical for Li-ion)
+        - **Years 1-15:** Gradual linear decline (~0.93% per year)
+        - **Year 15:** 79.95% SOH (warranty end-of-life)
+        - **Year 20:** 60.48% SOH (calendar life end)
+        
+        🎯 **Advantages over Linear Models:**
+        - More accurate capacity predictions
+        - Better financial planning capabilities  
+        - Realistic performance expectations
+        - Validated against real test data
+        
+        ⚠️ **Important Notes:**
+        - Data represents laboratory conditions
+        - Real-world performance may vary with operating conditions
+        - Temperature, charge/discharge patterns affect actual degradation
+        - Regular monitoring recommended for validation
+        """)
+    
+    st.markdown("---")
+    
+    # Hardcoded battery database (WEIHENG specs)
+    battery_db = {
+        "TIANWU-50-233-0.25C": {
+            "company": "WEIHENG",
+            "model": "WH-TIANWU-50-233B",
+            "c_rate": 0.25,
+            "power_kW": 50,
+            "energy_kWh": 233,
+            "voltage_V": 832,
+            "lifespan_years": 15,
+            "eol_capacity_pct": 80,
+            "cycles_per_day": 1.0,
+            "cooling": "Liquid (Battery), Air (PCS)",
+            "weight_kg": 2700,
+            "dimensions_mm": [1400, 1350, 2100]
+        },
+        "TIANWU-100-233-0.5C": {
+            "company": "WEIHENG",
+            "model": "WH-TIANWU-100-233B",
+            "c_rate": 0.5,
+            "power_kW": 100,
+            "energy_kWh": 233,
+            "voltage_V": 832,
+            "lifespan_years": 15,
+            "eol_capacity_pct": 80,
+            "cycles_per_day": 1.0,
+            "cooling": "Liquid (Battery + PCS)",
+            "weight_kg": 2700,
+            "dimensions_mm": [1400, 1350, 2100]
+        },
+        "TIANWU-250-233-1C": {
+            "company": "WEIHENG",
+            "model": "WH-TIANWU-250-A",
+            "c_rate": 1.0,
+            "power_kW": 250,
+            "energy_kWh": 233,
+            "voltage_V": 832,
+            "lifespan_years": 15,
+            "eol_capacity_pct": 80,
+            "cycles_per_day": 1.0,
+            "cooling": "Liquid (Battery), Air (PCS)",
+            "weight_kg": 2600,
+            "dimensions_mm": [1400, 1350, 2100]
+        }
+    }
+    
+    # Section 1: Upload Load Profile
+    st.header("📊 Section 1: Upload Load Profile")
+    st.markdown("Upload a CSV file containing peak event data with the following columns:")
+    
+    expected_columns = [
+        "Start Date", "Start Time", "End Date", "End Time",
+        "Peak Load (kW)", "Excess (kW)", "Duration (min)",
+        "Energy to Shave (kWh)", "Energy to Shave (Peak Period Only)",
+        "MD Cost Impact (RM)"
+    ]
+    
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        st.markdown("**Expected columns:**")
+        for col in expected_columns[:5]:
+            st.write(f"• {col}")
+    with col2:
+        st.markdown("**Additional columns:**")
+        for col in expected_columns[5:]:
+            st.write(f"• {col}")
+    
+    # File upload
+    uploaded_file = st.file_uploader(
+        "Choose a CSV file with load profile data",
+        type=["csv"],
+        help="Upload your peak events data from MD shaving analysis"
+    )
+    
+    if uploaded_file is not None:
+        try:
+            # Read the CSV file
+            df = pd.read_csv(uploaded_file)
+            
+            st.success(f"✅ File uploaded successfully! Found {len(df)} peak events.")
+            
+            # Display file preview
+            with st.expander("📋 Data Preview", expanded=True):
+                st.dataframe(df.head(10), use_container_width=True)
+            
+            # Validate required columns
+            missing_cols = [col for col in expected_columns if col not in df.columns]
+            if missing_cols:
+                st.warning(f"⚠️ Missing columns: {', '.join(missing_cols)}")
+                st.info("The analysis will continue with available columns.")
+            
+            # Calculate and display summary statistics
+            st.subheader("📈 Load Profile Summary")
+            
+            try:
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    total_energy = df["Energy to Shave (kWh)"].sum() if "Energy to Shave (kWh)" in df.columns else 0
+                    st.metric("Total Energy to Shave", f"{total_energy:.1f} kWh")
+                
+                with col2:
+                    avg_duration = df["Duration (min)"].mean() if "Duration (min)" in df.columns else 0
+                    st.metric("Average Duration", f"{avg_duration:.1f} min")
+                
+                with col3:
+                    max_excess = df["Excess (kW)"].max() if "Excess (kW)" in df.columns else 0
+                    st.metric("Max Excess Demand", f"{max_excess:.1f} kW")
+                
+                with col4:
+                    max_energy_event = df["Energy to Shave (kWh)"].max() if "Energy to Shave (kWh)" in df.columns else 0
+                    st.metric("Max Energy per Event", f"{max_energy_event:.1f} kWh")
+                
+                # Additional statistics
+                st.markdown("---")
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    total_events = len(df)
+                    st.metric("Total Peak Events", total_events)
+                
+                with col2:
+                    total_md_cost = df["MD Cost Impact (RM)"].sum() if "MD Cost Impact (RM)" in df.columns else 0
+                    st.metric("Total MD Cost Impact", f"RM {total_md_cost:.2f}")
+                
+                with col3:
+                    peak_period_energy = df["Energy to Shave (Peak Period Only)"].sum() if "Energy to Shave (Peak Period Only)" in df.columns else 0
+                    st.metric("Peak Period Energy", f"{peak_period_energy:.1f} kWh")
+                    
+            except Exception as e:
+                st.error(f"Error calculating statistics: {str(e)}")
+            
+            # Section 2: Battery Selection and Degradation Analysis
+            st.header("🔋 Section 2: Battery Selection & Degradation Analysis")
+            
+            # Extract requirements from uploaded data
+            max_excess_kw = df["Excess (kW)"].max() if "Excess (kW)" in df.columns else 0
+            total_energy_kwh = df["Energy to Shave (kWh)"].sum() if "Energy to Shave (kWh)" in df.columns else 0
+            max_event_energy = df["Energy to Shave (kWh)"].max() if "Energy to Shave (kWh)" in df.columns else 0
+            
+            # Smart battery selection algorithm
+            st.subheader("🤖 Smart Battery Selection Algorithm")
+            
+            col1, col2 = st.columns([1, 1])
+            
+            with col1:
+                st.markdown("**📊 Load Requirements (from uploaded data):**")
+                st.write(f"• **Max Excess Power:** {max_excess_kw:.1f} kW")
+                st.write(f"• **Max Event Energy:** {max_event_energy:.1f} kWh") 
+                st.write(f"• **Total Energy to Shave:** {total_energy_kwh:.1f} kWh")
+                
+                # Battery quantity calculation parameters
+                st.subheader("🔢 Battery Quantity Calculation")
+                
+                # Depth of Discharge for usable capacity calculation
+                depth_of_discharge = st.slider(
+                    "Depth of Discharge (%)",
+                    min_value=70,
+                    max_value=95,
+                    value=85,
+                    step=5,
+                    help="Usable capacity percentage for battery longevity"
+                )
+                
+                # Safety factor for capacity
+                capacity_safety_factor = st.slider(
+                    "Capacity Safety Factor (%)",
+                    min_value=0,
+                    max_value=50,
+                    value=20,
+                    step=5,
+                    help="Additional capacity buffer for performance variations"
+                )
+                
+                # MD Target input
+                st.subheader("MD Target Configuration")
+                target_type = st.radio(
+                    "Target Type",
+                    ["kW (Power)", "RM (Cost)"],
+                    help="Set target as power limit or cost limit"
+                )
+                
+                if target_type == "kW (Power)":
+                    md_target_kw = st.number_input(
+                        "MD Target (kW)",
+                        min_value=0.0,
+                        max_value=1000.0,
+                        value=max(100.0, max_excess_kw * 0.8),
+                        step=1.0,
+                        help="Maximum demand target in kW"
+                    )
+                    md_target_rm = md_target_kw * 35.0  # Assume RM 35/kW rate
+                    st.info(f"Equivalent cost target: RM {md_target_rm:.2f}")
+                else:
+                    md_target_rm = st.number_input(
+                        "MD Target (RM)",
+                        min_value=0.0,
+                        max_value=50000.0,
+                        value=3500.0,
+                        step=100.0,
+                        help="Maximum demand cost target in RM"
+                    )
+                    md_target_kw = md_target_rm / 35.0  # Assume RM 35/kW rate
+                    st.info(f"Equivalent power target: {md_target_kw:.1f} kW")
+                
+                # Target year for degradation analysis
+                st.subheader("Analysis Parameters")
+                target_year = st.slider(
+                    "Target Analysis Year",
+                    min_value=1,
+                    max_value=20,
+                    value=15,
+                    help="Year to evaluate battery performance (typically 15 for warranty end)"
+                )
+                
+                min_capacity_ratio = st.slider(
+                    "Minimum Capacity Ratio",
+                    min_value=1.0,
+                    max_value=3.0,
+                    value=1.2,
+                    step=0.1,
+                    help="Minimum ratio of degraded capacity to energy requirement"
+                )
+            
+            with col2:
+                st.subheader("🔋 Battery Selection Analysis")
+                
+                # Real WEIHENG TIANWU series degradation data (SOH %)
+                real_degradation_data = {
+                    0: 100.00, 1: 93.78, 2: 90.85, 3: 88.69, 4: 87.04, 5: 85.73,
+                    6: 84.67, 7: 83.79, 8: 83.05, 9: 82.42, 10: 81.88, 11: 81.40,
+                    12: 80.98, 13: 80.60, 14: 80.26, 15: 79.95, 16: 79.67, 17: 79.41,
+                    18: 79.17, 19: 78.95, 20: 60.48
+                }
+                
+                # Battery selection algorithm
+                suitable_batteries = []
+                
+                for battery_key, battery_specs in battery_db.items():
+                    # Get degraded capacity at target year
+                    soh_at_target_year = real_degradation_data.get(target_year, 80)
+                    degraded_capacity = battery_specs["energy_kWh"] * (soh_at_target_year / 100)
+                    
+                    # Calculate usable capacity with DOD and safety factor
+                    usable_capacity_per_unit = degraded_capacity * (depth_of_discharge / 100)
+                    usable_capacity_with_safety = usable_capacity_per_unit / (1 + capacity_safety_factor / 100)
+                    
+                    # Battery quantity calculation using ceiling function
+                    import math
+                    qty_required_energy = math.ceil(max_event_energy / usable_capacity_with_safety) if usable_capacity_with_safety > 0 else float('inf')
+                    qty_required_power = math.ceil(max_excess_kw / battery_specs["power_kW"]) if battery_specs["power_kW"] > 0 else float('inf')
+                    
+                    # Final quantity is the maximum of energy and power requirements
+                    qty_required = max(qty_required_energy, qty_required_power)
+                    
+                    # Total system specifications
+                    total_power_rating = qty_required * battery_specs["power_kW"]
+                    total_energy_capacity = qty_required * battery_specs["energy_kWh"]
+                    total_usable_capacity = qty_required * usable_capacity_per_unit
+                    
+                    # Check power requirement
+                    power_adequate = total_power_rating >= max_excess_kw
+                    
+                    # Check energy requirement (use max event energy as critical requirement)
+                    energy_adequate = total_usable_capacity >= max_event_energy
+                    
+                    # Calculate capacity ratio
+                    capacity_ratio = total_usable_capacity / max_event_energy if max_event_energy > 0 else 0
+                    
+                    # Check if battery meets minimum criteria
+                    meets_criteria = (power_adequate and 
+                                    energy_adequate and 
+                                    capacity_ratio >= min_capacity_ratio and
+                                    qty_required < 20)  # Practical limit
+                    
+                    suitable_batteries.append({
+                        "Model": battery_key,
+                        "Initial Capacity (kWh)": battery_specs["energy_kWh"],
+                        "Qty Required": qty_required,
+                        "Total System Capacity (kWh)": total_energy_capacity,
+                        f"Degraded Capacity Year {target_year} (kWh)": degraded_capacity,
+                        "Unit Power (kW)": battery_specs["power_kW"],
+                        "Total Power (kW)": total_power_rating,
+                        "Total Usable (kWh)": total_usable_capacity,
+                        f"SOH Year {target_year} (%)": soh_at_target_year,
+                        "Power Adequate": "✅" if power_adequate else "❌",
+                        "Energy Adequate": "✅" if energy_adequate else "❌",
+                        "Capacity Ratio": capacity_ratio,
+                        "Meets Criteria": "✅ Suitable" if meets_criteria else "❌ Inadequate"
+                    })
+                
+                # Display battery comparison table
+                selection_df = pd.DataFrame(suitable_batteries)
+                
+                st.markdown("**Battery Comparison Table with Quantity Calculation:**")
+                
+                # Color coding function
+                def color_cells(val):
+                    if isinstance(val, str):
+                        if "✅" in val:
+                            return 'background-color: lightgreen'
+                        elif "❌" in val:
+                            return 'background-color: lightcoral'
+                    elif isinstance(val, (int, float)):
+                        if val >= min_capacity_ratio:
+                            return 'background-color: lightgreen'
+                        elif val >= 1.0:
+                            return 'background-color: lightyellow'
+                        else:
+                            return 'background-color: lightcoral'
+                    return ''
+                
+                # Apply styling
+                styled_selection = selection_df.style.applymap(
+                    color_cells, 
+                    subset=["Power Adequate", "Energy Adequate", "Capacity Ratio", "Meets Criteria"]
+                ).format({
+                    "Initial Capacity (kWh)": "{:.0f} kWh",
+                    "Qty Required": "{:.0f} units",
+                    "Total System Capacity (kWh)": "{:.0f} kWh",
+                    f"Degraded Capacity Year {target_year} (kWh)": "{:.1f} kWh",
+                    "Unit Power (kW)": "{:.0f} kW",
+                    "Total Power (kW)": "{:.0f} kW",
+                    "Total Usable (kWh)": "{:.1f} kWh",
+                    f"SOH Year {target_year} (%)": "{:.2f}%",
+                    "Capacity Ratio": "{:.2f}x"
+                })
+                
+                st.dataframe(styled_selection, use_container_width=True)
+                
+                # Display quantity calculation details
+                st.markdown("**🔢 Quantity Calculation Logic:**")
+                st.info(f"""
+                **Formula:** `qty_required = max(ceil(energy_req / usable_kWh_per_unit), ceil(power_req / power_kW_per_unit))`
+                
+                **Parameters:**
+                - Energy Requirement: {max_event_energy:.1f} kWh (worst single event)
+                - Power Requirement: {max_excess_kw:.1f} kW (maximum excess demand)
+                - Depth of Discharge: {depth_of_discharge}% (usable capacity)
+                - Safety Factor: {capacity_safety_factor}% (additional margin)
+                
+                **Example for first battery:**
+                - Usable capacity per unit = {battery_db[list(battery_db.keys())[0]]["energy_kWh"]:.0f} kWh × {real_degradation_data.get(target_year, 80):.1f}% × {depth_of_discharge}% = {battery_db[list(battery_db.keys())[0]]["energy_kWh"] * (real_degradation_data.get(target_year, 80)/100) * (depth_of_discharge/100):.1f} kWh
+                - With safety factor = {battery_db[list(battery_db.keys())[0]]["energy_kWh"] * (real_degradation_data.get(target_year, 80)/100) * (depth_of_discharge/100) / (1 + capacity_safety_factor/100):.1f} kWh per unit
+                - Quantity needed = ceil({max_event_energy:.1f} / {battery_db[list(battery_db.keys())[0]]["energy_kWh"] * (real_degradation_data.get(target_year, 80)/100) * (depth_of_discharge/100) / (1 + capacity_safety_factor/100):.1f}) = {math.ceil(max_event_energy / (battery_db[list(battery_db.keys())[0]]["energy_kWh"] * (real_degradation_data.get(target_year, 80)/100) * (depth_of_discharge/100) / (1 + capacity_safety_factor/100))) if (battery_db[list(battery_db.keys())[0]]["energy_kWh"] * (real_degradation_data.get(target_year, 80)/100) * (depth_of_discharge/100) / (1 + capacity_safety_factor/100)) > 0 else 'inf'} units
+                """)
+                
+                # Show recommendations
+                suitable_models = [battery for battery in suitable_batteries if "✅ Suitable" in battery["Meets Criteria"]]
+                
+                if suitable_models:
+                    st.success(f"✅ Found {len(suitable_models)} suitable battery configuration(s)")
+                    
+                    # Recommend the most efficient option (lowest total energy capacity)
+                    best_battery = min(suitable_models, key=lambda x: x["Total Energy (kWh)"])
+                    st.info(f"🎯 **Recommended:** {best_battery['Qty Required']} × {best_battery['Model']} (most cost-effective)")
+                    st.write(f"   **Total System:** {best_battery['Total Power (kW)']} kW / {best_battery['Total Energy (kWh)']} kWh")
+                    
+                    # Allow manual selection
+                    recommended_battery = st.selectbox(
+                        "Select Battery Configuration for Detailed Analysis",
+                        [f"{b['Qty Required']} × {b['Model']}" for b in suitable_models],
+                        index=0,
+                        help="Choose from suitable configurations for detailed degradation analysis"
+                    )
+                    
+                    # Extract selected battery details
+                    selected_config = recommended_battery.split(" × ")
+                    selected_qty = int(selected_config[0])
+                    selected_battery = selected_config[1]
+                    
+                else:
+                    st.error("❌ No battery configurations meet the current criteria")
+                    st.warning("Consider:")
+                    st.write("• Reducing minimum capacity ratio")
+                    st.write("• Increasing depth of discharge")
+                    st.write("• Reducing capacity safety factor")
+                    st.write("• Selecting earlier target year")
+                    st.write("• Exploring custom battery configurations")
+                    
+                    # Allow selection anyway for analysis
+                    battery_options = [f"1 × {key}" for key in battery_db.keys()]
+                    selected_config_override = st.selectbox(
+                        "Select Configuration for Analysis (Override)",
+                        battery_options,
+                        help="Analyze anyway to see performance"
+                    )
+                    selected_config = selected_config_override.split(" × ")
+                    selected_qty = int(selected_config[0])
+                    selected_battery = selected_config[1]
+            
+            # Section 3: Detailed Battery Analysis & Degradation Modeling
+            st.header("📉 Section 3: Detailed Battery Analysis")
+            
+            battery_specs = battery_db[selected_battery]
+            
+            col1, col2 = st.columns([1, 1])
+            
+            with col1:
+                st.subheader("Selected Battery Configuration")
+                
+                # Display battery specs in a nice format
+                specs_data = {
+                    "Configuration": f"{selected_qty} × {battery_specs['model']}",
+                    "Company": battery_specs["company"],
+                    "Model (Single Unit)": battery_specs["model"],
+                    "Quantity": f"{selected_qty} units",
+                    "C-Rate": f"{battery_specs['c_rate']}C",
+                    "Unit Power Rating": f"{battery_specs['power_kW']} kW",
+                    "Unit Energy Capacity": f"{battery_specs['energy_kWh']} kWh",
+                    "Total Power Rating": f"{selected_qty * battery_specs['power_kW']} kW",
+                    "Total Energy Capacity": f"{selected_qty * battery_specs['energy_kWh']} kWh",
+                    "Voltage (per unit)": f"{battery_specs['voltage_V']} V",
+                    "Lifespan": f"{battery_specs['lifespan_years']} years",
+                    "End of Life Capacity": f"{battery_specs['eol_capacity_pct']}%",
+                    "Cycles per Day": battery_specs["cycles_per_day"],
+                    "Cooling": battery_specs["cooling"],
+                    "Unit Weight": f"{battery_specs['weight_kg']} kg",
+                    "Total Weight": f"{selected_qty * battery_specs['weight_kg']} kg",
+                    "Unit Dimensions (L×W×H)": f"{battery_specs['dimensions_mm'][0]}×{battery_specs['dimensions_mm'][1]}×{battery_specs['dimensions_mm'][2]} mm"
+                }
+                
+                for key, value in specs_data.items():
+                    st.write(f"**{key}:** {value}")
+                    
+                # Performance vs Requirements
+                st.subheader("🎯 Performance vs Requirements")
+                
+                # Calculate total system specs
+                total_power_rating = selected_qty * battery_specs["power_kW"]
+                total_energy_capacity = selected_qty * battery_specs["energy_kWh"]
+                
+                # Power comparison
+                power_margin = total_power_rating - max_excess_kw
+                if power_margin >= 0:
+                    st.success(f"✅ Power: {total_power_rating} kW (Margin: +{power_margin:.1f} kW)")
+                else:
+                    st.error(f"❌ Power: {total_power_rating} kW (Shortfall: {power_margin:.1f} kW)")
+                
+                # Energy comparison at target year
+                target_soh = real_degradation_data.get(target_year, 80)
+                total_degraded_capacity_target = total_energy_capacity * (target_soh / 100)
+                total_usable_capacity_target = total_degraded_capacity_target * (depth_of_discharge / 100)
+                energy_margin = total_usable_capacity_target - max_event_energy
+                
+                if energy_margin >= 0:
+                    st.success(f"✅ Usable Energy (Year {target_year}): {total_usable_capacity_target:.1f} kWh (Margin: +{energy_margin:.1f} kWh)")
+                else:
+                    st.error(f"❌ Usable Energy (Year {target_year}): {total_usable_capacity_target:.1f} kWh (Shortfall: {energy_margin:.1f} kWh)")
+                    
+                # Capacity ratio
+                capacity_ratio_target = total_usable_capacity_target / max_event_energy if max_event_energy > 0 else 0
+                if capacity_ratio_target >= min_capacity_ratio:
+                    st.success(f"✅ Capacity Ratio: {capacity_ratio_target:.2f}x (Target: {min_capacity_ratio:.1f}x)")
+                else:
+                    st.warning(f"⚠️ Capacity Ratio: {capacity_ratio_target:.2f}x (Target: {min_capacity_ratio:.1f}x)")
+                
+                # System-level metrics
+                st.subheader("🏗️ System Configuration")
+                col1_sys, col2_sys = st.columns(2)
+                with col1_sys:
+                    st.metric("Battery Units", f"{selected_qty}")
+                    st.metric("Total Footprint", f"{selected_qty * battery_specs['weight_kg'] / 1000:.1f} tonnes")
+                with col2_sys:
+                    st.metric("Power Density", f"{total_power_rating / total_energy_capacity:.2f} kW/kWh")
+                    total_floor_area = selected_qty * (battery_specs['dimensions_mm'][0] * battery_specs['dimensions_mm'][1]) / 1_000_000
+                    st.metric("Floor Area", f"{total_floor_area:.1f} m²")
+            
+            with col2:
+                st.subheader("🔍 Advanced Analysis Options")
+                
+                # Real WEIHENG TIANWU series degradation data (SOH %) - Define early for use throughout
+                real_degradation_data = {
+                    0: 100.00, 1: 93.78, 2: 90.85, 3: 88.69, 4: 87.04, 5: 85.73,
+                    6: 84.67, 7: 83.79, 8: 83.05, 9: 82.42, 10: 81.88, 11: 81.40,
+                    12: 80.98, 13: 80.60, 14: 80.26, 15: 79.95, 16: 79.67, 17: 79.41,
+                    18: 79.17, 19: 78.95, 20: 60.48
+                }
+                
+                # Analysis options
+                show_comparison = st.checkbox("Compare with Linear Degradation", value=True)
+                show_cost_analysis = st.checkbox("Include Cost Analysis", value=False)
+                show_sensitivity = st.checkbox("Sensitivity Analysis", value=False)
+                
+                if show_cost_analysis:
+                    st.markdown("**Cost Parameters:**")
+                    cost_per_kwh = st.number_input("Battery Cost (RM/kWh)", value=1200, step=50)
+                    pcs_cost_per_kw = st.number_input("PCS Cost (RM/kW)", value=400, step=25)
+                    installation_factor = st.slider("Installation Factor", 1.1, 2.0, 1.4, 0.1)
+                    
+                    # Calculate costs
+                    battery_cost = battery_specs["energy_kWh"] * cost_per_kwh
+                    pcs_cost = battery_specs["power_kW"] * pcs_cost_per_kw
+                    total_cost = (battery_cost + pcs_cost) * installation_factor
+                    
+                    st.metric("Total System Cost", f"RM {total_cost:,.0f}")
+                    st.metric("Cost per kWh", f"RM {total_cost / battery_specs['energy_kWh']:,.0f}")
+                    st.metric("Cost per kW", f"RM {total_cost / battery_specs['power_kW']:,.0f}")
+                
+                if show_sensitivity:
+                    st.markdown("**Sensitivity Analysis:**")
+                    degradation_factor = st.slider("Degradation Multiplier", 0.8, 1.5, 1.0, 0.1, 
+                                                  help="1.0 = normal, >1.0 = faster degradation")
+                else:
+                    degradation_factor = 1.0
+                st.subheader("Selected Battery Specifications")
+                
+                battery_specs = battery_db[selected_battery]
+                
+                # Display battery specs in a nice format
+                specs_data = {
+                    "Company": battery_specs["company"],
+                    "Model": battery_specs["model"],
+                    "C-Rate": f"{battery_specs['c_rate']}C",
+                    "Power Rating": f"{battery_specs['power_kW']} kW",
+                    "Energy Capacity": f"{battery_specs['energy_kWh']} kWh",
+                    "Voltage": f"{battery_specs['voltage_V']} V",
+                    "Lifespan": f"{battery_specs['lifespan_years']} years",
+                    "End of Life Capacity": f"{battery_specs['eol_capacity_pct']}%",
+                    "Cycles per Day": battery_specs["cycles_per_day"],
+                    "Cooling": battery_specs["cooling"],
+                    "Weight": f"{battery_specs['weight_kg']} kg",
+                    "Dimensions (L×W×H)": f"{battery_specs['dimensions_mm'][0]}×{battery_specs['dimensions_mm'][1]}×{battery_specs['dimensions_mm'][2]} mm"
+                }
+                
+                for key, value in specs_data.items():
+                    st.write(f"**{key}:** {value}")
+            
+            # Calculate and display battery degradation
+            st.subheader("📉 20-Year Battery Degradation Analysis")
+            st.markdown(f"**Real WEIHENG TIANWU Series Degradation Curve - {selected_qty} Unit System**")
+            
+            initial_capacity = selected_qty * battery_specs["energy_kWh"]  # Total system capacity
+            
+            # Generate yearly data using real degradation curve with sensitivity
+            years = list(range(0, 21))  # 0 to 20 years
+            capacities = []
+            soh_percentages = []
+            linear_capacities = []  # For comparison
+            
+            for year in years:
+                # Real degradation data
+                base_soh_pct = real_degradation_data[year]
+                
+                # Apply sensitivity factor (accelerate/decelerate degradation)
+                if year == 0:
+                    adjusted_soh_pct = 100.0  # Always start at 100%
+                else:
+                    degradation_loss = 100 - base_soh_pct
+                    adjusted_loss = degradation_loss * degradation_factor
+                    adjusted_soh_pct = max(0, 100 - adjusted_loss)
+                
+                capacity_kwh = initial_capacity * (adjusted_soh_pct / 100)
+                capacities.append(capacity_kwh)
+                soh_percentages.append(adjusted_soh_pct)
+                
+                # Linear degradation for comparison (80% at 15 years)
+                linear_soh = max(0, 100 - (20 / 15 * year))  # 20% loss over 15 years
+                linear_capacity = initial_capacity * (linear_soh / 100)
+                linear_capacities.append(linear_capacity)
+            
+            # Create degradation DataFrame
+            degradation_df = pd.DataFrame({
+                'Year': years,
+                'SOH (%)': soh_percentages,
+                'Total Capacity (kWh)': capacities,
+                'Total Usable (kWh)': [cap * (depth_of_discharge / 100) for cap in capacities],
+                'Linear SOH (%)': [max(0, 100 - (20 / 15 * year)) for year in years],
+                'Linear Capacity (kWh)': linear_capacities,
+                'Max Event Energy (kWh)': [max_event_energy] * len(years),
+                'MD Target (kW)': [md_target_kw] * len(years),
+                'Capacity Ratio': [cap * (depth_of_discharge / 100) / max_event_energy if max_event_energy > 0 else 0 for cap in capacities]
+            })
+            
+            # Create enhanced dual-axis chart
+            fig = go.Figure()
+            
+            # Add Max Event Energy requirement line (right axis)
+            fig.add_trace(go.Scatter(
+                x=degradation_df['Year'],
+                y=degradation_df['Max Event Energy (kWh)'],
+                mode='lines',
+                name='Max Event Energy Requirement',
+                line=dict(color='red', width=3, dash='dash'),
+                yaxis='y2',
+                hovertemplate='<b>Energy Requirement</b><br>Year: %{x}<br>Energy: %{y:.1f} kWh<extra></extra>'
+            ))
+            
+            # Add degraded capacity line (right axis) - Real data
+            fig.add_trace(go.Scatter(
+                x=degradation_df['Year'],
+                y=degradation_df['Total Usable (kWh)'],
+                mode='lines+markers',
+                name=f'Real WEIHENG Usable Capacity ({selected_qty} units)',
+                line=dict(color='blue', width=3),
+                marker=dict(size=8, color='blue'),
+                yaxis='y2',
+                hovertemplate='<b>Real Battery Usable Capacity</b><br>Year: %{x}<br>Usable: %{y:.1f} kWh<br>SOH: %{customdata:.1f}%<extra></extra>',
+                customdata=degradation_df['SOH (%)']
+            ))
+            
+            # Add total capacity line for reference
+            fig.add_trace(go.Scatter(
+                x=degradation_df['Year'],
+                y=degradation_df['Total Capacity (kWh)'],
+                mode='lines',
+                name=f'Total Capacity ({selected_qty} units)',
+                line=dict(color='lightblue', width=2, dash='dot'),
+                yaxis='y2',
+                hovertemplate='<b>Total Battery Capacity</b><br>Year: %{x}<br>Total: %{y:.1f} kWh<br>SOH: %{customdata:.1f}%<extra></extra>',
+                customdata=degradation_df['SOH (%)']
+            ))
+            
+            # Add linear degradation for comparison if selected
+            if show_comparison:
+                fig.add_trace(go.Scatter(
+                    x=degradation_df['Year'],
+                    y=degradation_df['Linear Capacity (kWh)'],
+                    mode='lines',
+                    name='Linear Degradation Model',
+                    line=dict(color='gray', width=2, dash='dot'),
+                    yaxis='y2',
+                    hovertemplate='<b>Linear Model</b><br>Year: %{x}<br>Capacity: %{y:.1f} kWh<br>SOH: %{customdata:.1f}%<extra></extra>',
+                    customdata=degradation_df['Linear SOH (%)']
+                ))
+            
+            # Add capacity ratio line (left axis)
+            fig.add_trace(go.Scatter(
+                x=degradation_df['Year'],
+                y=degradation_df['Capacity Ratio'],
+                mode='lines+markers',
+                name='Capacity Ratio',
+                line=dict(color='green', width=2),
+                marker=dict(size=6, color='green'),
+                yaxis='y',
+                hovertemplate='<b>Capacity Ratio</b><br>Year: %{x}<br>Ratio: %{y:.2f}x<extra></extra>'
+            ))
+            
+            # Add minimum capacity ratio threshold
+            fig.add_hline(
+                y=min_capacity_ratio,
+                line_dash="dot",
+                line_color="orange",
+                annotation_text=f"Min Ratio: {min_capacity_ratio:.1f}x",
+                annotation_position="bottom right",
+                yref="y"
+            )
+            
+            # Add EOL threshold line (15 years)
+            eol_year = 15
+            fig.add_vline(
+                x=eol_year, 
+                line_dash="dot", 
+                line_color="orange",
+                annotation_text=f"Warranty EOL",
+                annotation_position="top"
+            )
+            
+            # Add target year line
+            if target_year != eol_year:
+                fig.add_vline(
+                    x=target_year,
+                    line_dash="dash",
+                    line_color="purple",
+                    annotation_text=f"Target Year {target_year}",
+                    annotation_position="top"
+                )
+            
+            # Update layout for dual y-axes
+            fig.update_layout(
+                title=f'Advanced MD Shaving Analysis - {selected_qty} × {battery_specs["model"]}<br><sub>Real WEIHENG Degradation vs Energy Requirements</sub>',
+                xaxis=dict(
+                    title='Year',
+                    showgrid=True,
+                    gridcolor='lightgray',
+                    range=[0, 20]
+                ),
+                yaxis=dict(
+                    title='Capacity Ratio (Usable Capacity/Requirement)',
+                    side='left',
+                    color='green',
+                    showgrid=True,
+                    gridcolor='lightgray',
+                    range=[0, max(5, max(degradation_df['Capacity Ratio']) * 1.1)]
+                ),
+                yaxis2=dict(
+                    title='Energy (kWh)',
+                    side='right',
+                    overlaying='y',
+                    color='blue',
+                    range=[0, max(max(degradation_df['Total Capacity (kWh)']), max_event_energy) * 1.1]
+                ),
+                legend=dict(x=0.02, y=0.98),
+                height=700,
+                hovermode='x unified',
+                plot_bgcolor='white'
+            )
+            
+            # Add colored background zones
+            fig.add_hrect(
+                y0=0, y1=1.0,
+                fillcolor="red", opacity=0.1,
+                layer="below", line_width=0,
+                annotation_text="Insufficient Capacity Zone",
+                annotation_position="inside top left",
+                yref="y"
+            )
+            fig.add_hrect(
+                y0=1.0, y1=min_capacity_ratio,
+                fillcolor="yellow", opacity=0.1,
+                layer="below", line_width=0,
+                annotation_text="Marginal Zone",
+                annotation_position="inside top left",
+                yref="y"
+            )
+            fig.add_hrect(
+                y0=min_capacity_ratio, y1=max(5, max(degradation_df['Capacity Ratio']) * 1.1),
+                fillcolor="green", opacity=0.1,
+                layer="below", line_width=0,
+                annotation_text="Adequate Zone",
+                annotation_position="inside top left",
+                yref="y"
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Display enhanced degradation table
+            st.subheader("📊 Enhanced Degradation Timeline Analysis")
+            
+            # Create comprehensive display table
+            display_df = degradation_df.copy()
+            display_df['SOH (%)'] = display_df['SOH (%)'].round(2)
+            display_df['Capacity (kWh)'] = display_df['Capacity (kWh)'].round(1)
+            display_df['Capacity Ratio'] = display_df['Capacity Ratio'].round(2)
+            display_df['Years from EOL'] = 15 - display_df['Year']
+            display_df['Years from EOL'] = display_df['Years from EOL'].apply(lambda x: f"+{abs(x)}" if x < 0 else str(x))
+            
+            # Add performance status
+            def get_performance_status(ratio):
+                if ratio >= 2.0:
+                    return "🟢 Excellent"
+                elif ratio >= min_capacity_ratio:
+                    return "🟡 Adequate"
+                elif ratio >= 1.0:
+                    return "🟠 Marginal"
+                else:
+                    return "🔴 Insufficient"
+            
+            display_df['Performance Status'] = display_df['Capacity Ratio'].apply(get_performance_status)
+            
+            # Add comparison with linear model if selected
+            if show_comparison:
+                display_df['Linear SOH (%)'] = display_df['Linear SOH (%)'].round(2)
+                display_df['Linear Capacity (kWh)'] = display_df['Linear Capacity (kWh)'].round(1)
+                display_df['Real vs Linear'] = (display_df['Capacity (kWh)'] - display_df['Linear Capacity (kWh)']).round(1)
+            
+            # Color coding functions
+            def color_capacity_ratio(val):
+                if val >= 2.0:
+                    return 'background-color: #28a745; color: white'  # Dark green
+                elif val >= min_capacity_ratio:
+                    return 'background-color: #90EE90'  # Light green
+                elif val >= 1.0:
+                    return 'background-color: #FFFFE0'  # Light yellow
+                else:
+                    return 'background-color: #F08080'  # Light coral
+            
+            def color_soh(val):
+                if val >= 90:
+                    return 'background-color: #90EE90'
+                elif val >= 80:
+                    return 'background-color: #FFFFE0'
+                elif val >= 70:
+                    return 'background-color: #FFA500'
+                else:
+                    return 'background-color: #F08080'
+            
+            def color_performance_status(val):
+                if "🟢" in val:
+                    return 'background-color: #28a745; color: white'
+                elif "🟡" in val:
+                    return 'background-color: #ffc107; color: black'
+                elif "🟠" in val:
+                    return 'background-color: #fd7e14; color: white'
+                else:
+                    return 'background-color: #dc3545; color: white'
+            
+            # Apply styling
+            columns_to_format = {
+                'SOH (%)': '{:.2f}%',
+                'Capacity (kWh)': '{:.1f} kWh',
+                'Capacity Ratio': '{:.2f}x'
+            }
+            
+            if show_comparison:
+                columns_to_format.update({
+                    'Linear SOH (%)': '{:.2f}%',
+                    'Linear Capacity (kWh)': '{:.1f} kWh',
+                    'Real vs Linear': '{:+.1f} kWh'
+                })
+            
+            styled_df = display_df.style.applymap(
+                color_capacity_ratio, 
+                subset=['Capacity Ratio']
+            ).applymap(
+                color_soh,
+                subset=['SOH (%)']
+            ).applymap(
+                color_performance_status,
+                subset=['Performance Status']
+            ).format(columns_to_format)
+            
+            # Show warranty period (0-15 years) by default
+            warranty_period_df = styled_df.data.iloc[:16]  # Years 0-15
+            
+            col1, col2 = st.columns([3, 1])
+            
+            with col1:
+                st.markdown("**Warranty Period Analysis (Years 0-15):**")
+                st.dataframe(warranty_period_df, use_container_width=True, height=400)
+            
+            with col2:
+                # Key metrics for warranty period
+                warranty_data = degradation_df.iloc[:16]
+                years_adequate = sum(warranty_data['Capacity Ratio'] >= min_capacity_ratio)
+                years_excellent = sum(warranty_data['Capacity Ratio'] >= 2.0)
+                first_inadequate_year = None
+                
+                for idx, ratio in enumerate(warranty_data['Capacity Ratio']):
+                    if ratio < min_capacity_ratio:
+                        first_inadequate_year = idx
+                        break
+                
+                st.markdown("**Warranty Period Summary:**")
+                st.metric("Years Meeting Target", f"{years_adequate}/16", f"{(years_adequate/16*100):.0f}%")
+                st.metric("Years Excellent", f"{years_excellent}/16", f"{(years_excellent/16*100):.0f}%")
+                
+                if first_inadequate_year is not None:
+                    st.metric("First Inadequate Year", first_inadequate_year, delta="⚠️ Early failure", delta_color="inverse")
+                else:
+                    st.metric("Performance", "All years adequate", delta="✅ Excellent", delta_color="normal")
+                
+                # EOL metrics
+                eol_soh = warranty_data.iloc[-1]['SOH (%)']
+                eol_capacity = warranty_data.iloc[-1]['Capacity (kWh)']
+                eol_ratio = warranty_data.iloc[-1]['Capacity Ratio']
+                
+                st.markdown("**15-Year EOL Metrics:**")
+                st.write(f"• SOH: **{eol_soh:.2f}%**")
+                st.write(f"• Capacity: **{eol_capacity:.1f} kWh**")
+                st.write(f"• Ratio: **{eol_ratio:.2f}x**")
+            
+            # Show extended data in expander
+            with st.expander("🔍 View Extended Timeline (16-20 years) - Calendar Life"):
+                extended_df = styled_df.data.iloc[16:]
+                st.dataframe(extended_df, use_container_width=True)
+                st.caption("⚠️ Years 16-20 represent calendar life extension beyond typical warranty period")
+                
+                # Extended period warnings
+                calendar_data = degradation_df.iloc[16:]
+                if len(calendar_data) > 0:
+                    min_calendar_ratio = calendar_data['Capacity Ratio'].min()
+                    final_soh = calendar_data.iloc[-1]['SOH (%)']
+                    
+                    if min_calendar_ratio < 1.0:
+                        st.error(f"⚠️ **Extended Period Risk:** Capacity ratio drops to {min_calendar_ratio:.2f}x by year 20")
+                    if final_soh < 70:
+                        st.warning(f"⚠️ **Calendar Life End:** Final SOH of {final_soh:.1f}% indicates end of useful life")
+            
+            # Enhanced analysis summary
+            st.subheader("🎯 Comprehensive Analysis Summary & Investment Guidance")
+            
+            
+            # Calculate comprehensive metrics using real degradation data
+            eol_15_year = degradation_df[degradation_df['Year'] == 15]
+            final_capacity_15 = eol_15_year['Capacity (kWh)'].iloc[0]
+            final_soh_15 = eol_15_year['SOH (%)'].iloc[0]
+            final_ratio_15 = eol_15_year['Capacity Ratio'].iloc[0]
+            
+            # Calendar life metrics (20 years)
+            calendar_life_capacity = degradation_df[degradation_df['Year'] == 20]['Capacity (kWh)'].iloc[0]
+            calendar_life_soh = degradation_df[degradation_df['Year'] == 20]['SOH (%)'].iloc[0]
+            calendar_life_ratio = degradation_df[degradation_df['Year'] == 20]['Capacity Ratio'].iloc[0]
+            
+            # Target year metrics
+            target_year_data = degradation_df[degradation_df['Year'] == target_year]
+            target_capacity = target_year_data['Capacity (kWh)'].iloc[0]
+            target_soh = target_year_data['SOH (%)'].iloc[0]
+            target_ratio = target_year_data['Capacity Ratio'].iloc[0]
+            
+            capacity_loss_15 = initial_capacity - final_capacity_15
+            years_above_target = sum(1 for ratio in degradation_df['Capacity Ratio'][:16] if ratio >= min_capacity_ratio)
+            
+            # Display key metrics
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                delta_text = f"-{(100 - final_soh_15):.2f}%"
+                st.metric(
+                    "SOH at 15 Years (EOL)",
+                    f"{final_soh_15:.2f}%",
+                    delta_text
+                )
+                st.caption("End of Life warranty period")
+            
+            with col2:
+                st.metric(
+                    "Capacity at 15 Years",
+                    f"{final_capacity_15:.1f} kWh",
+                    f"-{capacity_loss_15:.1f} kWh"
+                )
+                st.caption("Usable capacity remaining")
+            
+            with col3:
+                st.metric(
+                    "Years Above Target Ratio",
+                    f"{years_above_target}/16",
+                    f"{(years_above_target/16*100):.0f}%"
+                )
+                st.caption("Within warranty period")
+            
+            with col4:
+                if final_ratio_15 >= 2.0:
+                    status = "🟢 Excellent"
+                    color = "normal"
+                elif final_ratio_15 >= min_capacity_ratio:
+                    status = "🟡 Adequate"
+                    color = "normal"
+                else:
+                    status = "🔴 Insufficient"
+                    color = "inverse"
+                    
+                st.metric(
+                    "15-Year Capacity Ratio",
+                    f"{final_ratio_15:.2f}x",
+                    status,
+                    delta_color=color
+                )
+                st.caption(f"vs {min_capacity_ratio:.1f}x target")
+            
+            # Target year specific analysis
+            if target_year != 15:
+                st.markdown(f"### 📅 Target Year {target_year} Analysis")
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.metric(f"SOH at Year {target_year}", f"{target_soh:.2f}%")
+                with col2:
+                    st.metric(f"Capacity at Year {target_year}", f"{target_capacity:.1f} kWh")
+                with col3:
+                    if target_ratio >= min_capacity_ratio:
+                        status = "✅ Meets Target"
+                        color = "normal"
+                    else:
+                        status = "❌ Below Target"
+                        color = "inverse"
+                    st.metric(f"Capacity Ratio Year {target_year}", f"{target_ratio:.2f}x", status, delta_color=color)
+            
+            # Detailed degradation pattern analysis
+            st.markdown("### 📈 Advanced Degradation Pattern Analysis")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("**Early Years Performance (0-5 years):**")
+                year_1_loss = 100 - real_degradation_data[1] * degradation_factor if degradation_factor != 1.0 else 100 - real_degradation_data[1]
+                year_5_data = degradation_df[degradation_df['Year'] == 5]
+                year_5_loss = 100 - year_5_data['SOH (%)'].iloc[0]
+                year_5_ratio = year_5_data['Capacity Ratio'].iloc[0]
+                
+                st.write(f"• Year 1: {year_1_loss:.2f}% capacity loss")
+                st.write(f"• Year 5: {year_5_loss:.2f}% total loss")
+                st.write(f"• Year 5 ratio: {year_5_ratio:.2f}x")
+                
+                st.markdown("**Mid-Life Performance (5-15 years):**")
+                mid_life_loss = final_soh_15 - year_5_data['SOH (%)'].iloc[0]
+                avg_annual_loss = abs(mid_life_loss) / 10
+                st.write(f"• Years 5-15: {abs(mid_life_loss):.2f}% additional loss")
+                st.write(f"• Average: {avg_annual_loss:.2f}%/year")
+                st.write(f"• Final ratio: {final_ratio_15:.2f}x")
+            
+            with col2:
+                st.markdown("**Extended Life Analysis (15-20 years):**")
+                extended_loss = calendar_life_soh - final_soh_15
+                st.write(f"• Years 15-20: {abs(extended_loss):.2f}% additional loss")
+                st.write(f"• Final SOH: {calendar_life_soh:.2f}%")
+                st.write(f"• Final ratio: {calendar_life_ratio:.2f}x")
+                
+                st.markdown("**Comparison with Linear Model:**")
+                if show_comparison:
+                    linear_15_soh = max(0, 100 - (20 / 15 * 15))
+                    real_vs_linear = final_soh_15 - linear_15_soh
+                    st.write(f"• Linear model at 15y: {linear_15_soh:.1f}%")
+                    st.write(f"• Real WEIHENG data: {final_soh_15:.2f}%")
+                    comparison_text = "(better)" if real_vs_linear > 0 else "(worse)"
+                    st.write(f"• Difference: {real_vs_linear:+.2f}% {comparison_text}")
+                else:
+                    st.write("• Enable comparison to see linear model data")
+            
+            # Investment decision framework
+            st.markdown("### 💰 Investment Decision Framework")
+            
+            if final_ratio_15 < 1.0:
+                st.error(f"""
+                🚨 **Critical Investment Risk - Not Recommended**
+                
+                **Issues Identified:**
+                - Battery will fail to meet energy requirements by year {[i for i, r in enumerate(degradation_df['Capacity Ratio'][:16]) if r < 1.0][0] if any(r < 1.0 for r in degradation_df['Capacity Ratio'][:16]) else 'unknown'}
+                - 15-year capacity ratio: {final_ratio_15:.2f}x (below 1.0x minimum)
+                - Insufficient capacity for worst-case MD events
+                
+                **Required Actions:**
+                - Choose higher capacity battery model (consider TIANWU-250-233-1C)
+                - Increase system sizing by {((1.2 / final_ratio_15) - 1) * 100:.0f}% minimum
+                - Consider hybrid MD management approach
+                - Plan for mid-life battery replacement
+                """)
+                
+            elif final_ratio_15 < min_capacity_ratio:
+                st.warning(f"""
+                ⚠️ **Marginal Investment - High Risk**
+                
+                **Performance Concerns:**
+                - 15-year capacity ratio: {final_ratio_15:.2f}x (below {min_capacity_ratio:.1f}x target)
+                - Limited safety margin for performance variations
+                - {16 - years_above_target} years may not meet target ratio
+                
+                **Risk Mitigation:**
+                - Implement strict battery management protocols
+                - Plan preventive maintenance optimization
+                - Monitor real degradation vs predictions
+                - Prepare contingency plans for year {16 - years_above_target + 1}+
+                """)
+                
+            elif final_ratio_15 < 2.0:
+                st.info(f"""
+                ✅ **Viable Investment - Adequate Performance**
+                
+                **Performance Profile:**
+                - 15-year capacity ratio: {final_ratio_15:.2f}x (meets {min_capacity_ratio:.1f}x target)
+                - {years_above_target}/16 years meet target ratio
+                - Suitable for primary MD shaving application
+                
+                **Optimization Opportunities:**
+                - Monitor real degradation trends
+                - Optimize charging/discharging cycles
+                - Plan post-warranty operation strategy
+                - Consider capacity for load growth
+                """)
+                
+            else:
+                st.success(f"""
+                🎯 **Excellent Investment - Superior Performance**
+                
+                **Outstanding Characteristics:**
+                - 15-year capacity ratio: {final_ratio_15:.2f}x (well above {min_capacity_ratio:.1f}x target)
+                - All warranty years meet target with significant margin
+                - Oversized for current application requirements
+                
+                **Strategic Considerations:**
+                - Evaluate smaller, more cost-effective models
+                - Explore additional revenue streams (grid services, peak shaving expansion)
+                - Conservative operation for life extension
+                - Accommodate future load growth
+                """)
+            
+            # Cost analysis section
+            if show_cost_analysis:
+                st.markdown("### 💵 Financial Analysis Summary")
+                
+                # Calculate total system costs
+                battery_cost = battery_specs["energy_kWh"] * cost_per_kwh
+                pcs_cost = battery_specs["power_kW"] * pcs_cost_per_kw
+                total_system_cost = (battery_cost + pcs_cost) * installation_factor
+                
+                # Financial metrics
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric("Total Investment", f"RM {total_system_cost:,.0f}")
+                with col2:
+                    cost_per_kwh_total = total_system_cost / battery_specs["energy_kWh"]
+                    st.metric("Cost per kWh", f"RM {cost_per_kwh_total:,.0f}")
+                with col3:
+                    cost_per_kw_total = total_system_cost / battery_specs["power_kW"]
+                    st.metric("Cost per kW", f"RM {cost_per_kw_total:,.0f}")
+                with col4:
+                    # Estimate MD savings potential
+                    monthly_md_savings = max_excess_kw * 35  # Assume RM 35/kW
+                    annual_savings = monthly_md_savings * 12
+                    simple_payback = total_system_cost / annual_savings if annual_savings > 0 else float('inf')
+                    st.metric("Simple Payback", f"{simple_payback:.1f} years" if simple_payback < 50 else ">50 years")
+                
+                # ROI analysis
+                if annual_savings > 0:
+                    lifecycle_savings = annual_savings * 15  # 15-year warranty
+                    net_benefit = lifecycle_savings - total_system_cost
+                    roi_percent = (net_benefit / total_system_cost) * 100
+                    
+                    if roi_percent > 20:
+                        st.success(f"🎯 **Strong ROI:** {roi_percent:.1f}% over 15 years (RM {net_benefit:,.0f} net benefit)")
+                    elif roi_percent > 0:
+                        st.info(f"📊 **Positive ROI:** {roi_percent:.1f}% over 15 years (RM {net_benefit:,.0f} net benefit)")
+                    else:
+                        st.error(f"📉 **Negative ROI:** {roi_percent:.1f}% over 15 years (RM {net_benefit:,.0f} net loss)")
+            
+            # Action items and next steps
+            st.markdown("### 📋 Recommended Next Steps")
+            
+            next_steps = []
+            
+            if final_ratio_15 >= min_capacity_ratio:
+                next_steps.extend([
+                    "✅ **Proceed with detailed engineering design**",
+                    "📋 **Obtain formal quotations from WEIHENG or certified distributors**",
+                    "🔧 **Conduct site survey for installation requirements**",
+                    "📄 **Prepare regulatory applications and grid connection permits**"
+                ])
+            else:
+                next_steps.extend([
+                    "🔄 **Re-evaluate battery sizing requirements**",
+                    "🔍 **Consider alternative battery models or configurations**",
+                    "📊 **Analyze hybrid MD management strategies**",
+                    "💼 **Reassess financial justification**"
+                ])
+            
+            next_steps.extend([
+                "📈 **Develop battery monitoring and maintenance plan**",
+                "🎯 **Establish performance tracking KPIs**",
+                "⚡ **Design integration with existing electrical systems**",
+                "📚 **Prepare operator training and documentation**"
+            ])
+            
+            for i, step in enumerate(next_steps, 1):
+                st.write(f"{i}. {step}")
+            
+            # Add technical considerations
+            with st.expander("🔬 Technical Implementation Considerations"):
+                st.markdown("""
+                **System Integration Requirements:**
+                - Grid connection studies and protection coordination
+                - Power conversion system (PCS) specification and sizing
+                - SCADA/monitoring system integration with existing infrastructure
+                - Cooling system design and integration (liquid cooling for battery, air cooling for PCS)
+                
+                **Operational Considerations:**
+                - Daily cycling pattern optimization for MD shaving
+                - SOC management strategies to maximize lifespan
+                - Preventive maintenance scheduling and spare parts inventory
+                - Emergency response procedures and safety protocols
+                
+                **Performance Monitoring:**
+                - Real-time degradation tracking vs predicted curve
+                - Energy throughput and cycle counting
+                - Temperature monitoring and thermal management
+                - Power quality monitoring and grid compliance
+                
+                **Future Expansion Options:**
+                - Modular design for capacity expansion
+                - Grid services revenue opportunities (frequency regulation, voltage support)
+                - Integration with renewable energy systems
+                - Smart grid and demand response participation
+                """)
+                
+        except Exception as e:
+            st.error(f"❌ Error in advanced degradation analysis: {str(e)}")
+            st.info("Falling back to simplified analysis...")
+            
+            # Simplified fallback analysis
+            simple_15_year_soh = 80  # Conservative estimate
+            simple_capacity_15 = battery_specs["energy_kWh"] * 0.8
+            simple_ratio = simple_capacity_15 / max_event_energy if max_event_energy > 0 else 0
+            
+            st.metric("15-Year Capacity (Est.)", f"{simple_capacity_15:.1f} kWh")
+            st.metric("Capacity Ratio (Est.)", f"{simple_ratio:.2f}x")
+            
+            if simple_ratio >= 1.2:
+                st.success("✅ Battery appears suitable based on simplified analysis")
+            else:
+                st.warning("⚠️ Battery may be inadequate based on simplified analysis")
+                
+        except Exception as e:
+            st.error(f"❌ Error processing file: {str(e)}")
+            st.info("Please ensure your CSV file contains the expected columns and data format.")
+    
+    else:
+        st.info("👆 Please upload a CSV file to begin the analysis.")
+        
+        # Show example data format
+        with st.expander("📋 Example Data Format"):
+            example_data = {
+                "Start Date": ["2024-01-15", "2024-01-16", "2024-01-17"],
+                "Start Time": ["14:30", "15:45", "16:15"],
+                "End Date": ["2024-01-15", "2024-01-16", "2024-01-17"],
+                "End Time": ["15:15", "16:30", "17:00"],
+                "Peak Load (kW)": [145.2, 167.8, 134.5],
+                "Excess (kW)": [25.2, 47.8, 14.5],
+                "Duration (min)": [45, 45, 45],
+                "Energy to Shave (kWh)": [18.9, 35.85, 10.875],
+                "Energy to Shave (Peak Period Only)": [18.9, 35.85, 10.875],
+                "MD Cost Impact (RM)": [882.0, 1673.0, 507.5]
+            }
+            
+            example_df = pd.DataFrame(example_data)
+            st.dataframe(example_df, use_container_width=True)
+            st.caption("Sample format showing expected columns and data types")
+
+with tabs[6]:
     # ❄️ Chiller Energy Dashboard Tab
     st.title("❄️ Chiller Plant Energy Dashboard")
     st.markdown("""
