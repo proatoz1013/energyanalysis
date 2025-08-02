@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+import json
 from tnb_tariff_comparison import show as show_tnb_tariff_comparison
 from advanced_energy_analysis import show as show_advanced_energy_analysis
 from md_shaving_solution import show as show_md_shaving_solution
@@ -3012,7 +3013,7 @@ with tabs[5]:
             # Create comprehensive display table
             display_df = degradation_df.copy()
             display_df['SOH (%)'] = display_df['SOH (%)'].round(2)
-            display_df['Capacity (kWh)'] = display_df['Capacity (kWh)'].round(1)
+            display_df['Capacity (kWh)'] = display_df['Total Capacity (kWh)'].round(1)
             display_df['Capacity Ratio'] = display_df['Capacity Ratio'].round(2)
             display_df['Years from EOL'] = 15 - display_df['Year']
             display_df['Years from EOL'] = display_df['Years from EOL'].apply(lambda x: f"+{abs(x)}" if x < 0 else str(x))
@@ -3124,7 +3125,7 @@ with tabs[5]:
                 
                 # EOL metrics
                 eol_soh = warranty_data.iloc[-1]['SOH (%)']
-                eol_capacity = warranty_data.iloc[-1]['Capacity (kWh)']
+                eol_capacity = warranty_data.iloc[-1]['Total Capacity (kWh)']
                 eol_ratio = warranty_data.iloc[-1]['Capacity Ratio']
                 
                 st.markdown("**15-Year EOL Metrics:**")
@@ -3155,18 +3156,18 @@ with tabs[5]:
             
             # Calculate comprehensive metrics using real degradation data
             eol_15_year = degradation_df[degradation_df['Year'] == 15]
-            final_capacity_15 = eol_15_year['Capacity (kWh)'].iloc[0]
+            final_capacity_15 = eol_15_year['Total Capacity (kWh)'].iloc[0]
             final_soh_15 = eol_15_year['SOH (%)'].iloc[0]
             final_ratio_15 = eol_15_year['Capacity Ratio'].iloc[0]
             
             # Calendar life metrics (20 years)
-            calendar_life_capacity = degradation_df[degradation_df['Year'] == 20]['Capacity (kWh)'].iloc[0]
+            calendar_life_capacity = degradation_df[degradation_df['Year'] == 20]['Total Capacity (kWh)'].iloc[0]
             calendar_life_soh = degradation_df[degradation_df['Year'] == 20]['SOH (%)'].iloc[0]
             calendar_life_ratio = degradation_df[degradation_df['Year'] == 20]['Capacity Ratio'].iloc[0]
             
             # Target year metrics
             target_year_data = degradation_df[degradation_df['Year'] == target_year]
-            target_capacity = target_year_data['Capacity (kWh)'].iloc[0]
+            target_capacity = target_year_data['Total Capacity (kWh)'].iloc[0]
             target_soh = target_year_data['SOH (%)'].iloc[0]
             target_ratio = target_year_data['Capacity Ratio'].iloc[0]
             
@@ -3385,6 +3386,168 @@ with tabs[5]:
                         st.info(f"📊 **Positive ROI:** {roi_percent:.1f}% over 15 years (RM {net_benefit:,.0f} net benefit)")
                     else:
                         st.error(f"📉 **Negative ROI:** {roi_percent:.1f}% over 15 years (RM {net_benefit:,.0f} net loss)")
+            
+            # Data Export Section
+            st.markdown("### 📊 Data Export & Download")
+            st.markdown("**Export the complete 20-year degradation analysis data for external analysis or reporting.**")
+            
+            # Prepare export DataFrame with all relevant data
+            export_df = degradation_df.copy()
+            
+            # Add additional calculated fields for comprehensive export
+            export_df['System_Configuration'] = f"{selected_qty} x {battery_specs['model']}"
+            export_df['Initial_System_Capacity_kWh'] = initial_capacity
+            export_df['Depth_of_Discharge_Percent'] = depth_of_discharge
+            export_df['Discharge_Efficiency_Percent'] = discharge_efficiency
+            export_df['Max_Event_Energy_Requirement_kWh'] = max_event_energy
+            export_df['Degradation_Factor'] = degradation_factor
+            export_df['Min_Capacity_Ratio_Target'] = min_capacity_ratio
+            
+            # Add performance status columns
+            export_df['Meets_Minimum_Ratio'] = export_df['Capacity Ratio'] >= min_capacity_ratio
+            export_df['Performance_Category'] = export_df['Capacity Ratio'].apply(
+                lambda x: 'Excellent' if x >= 2.0 else 'Adequate' if x >= min_capacity_ratio else 'Marginal' if x >= 1.0 else 'Insufficient'
+            )
+            
+            # Add year-over-year changes
+            export_df['SOH_Change_From_Previous_Year'] = export_df['SOH (%)'].diff()
+            export_df['Capacity_Change_From_Previous_Year_kWh'] = export_df['Total Capacity (kWh)'].diff()
+            export_df['Capacity_Loss_From_Year_0_kWh'] = initial_capacity - export_df['Total Capacity (kWh)']
+            export_df['Capacity_Loss_From_Year_0_Percent'] = ((initial_capacity - export_df['Total Capacity (kWh)']) / initial_capacity * 100)
+            
+            # Reorder columns for better export readability
+            export_columns = [
+                'Year', 'System_Configuration', 'Initial_System_Capacity_kWh',
+                'SOH (%)', 'Total Capacity (kWh)', 'Total Usable (kWh)', 'Capacity Ratio',
+                'Depth_of_Discharge_Percent', 'Discharge_Efficiency_Percent',
+                'Max_Event_Energy_Requirement_kWh', 'MD Target (kW)',
+                'Performance_Category', 'Meets_Minimum_Ratio',
+                'SOH_Change_From_Previous_Year', 'Capacity_Change_From_Previous_Year_kWh',
+                'Capacity_Loss_From_Year_0_kWh', 'Capacity_Loss_From_Year_0_Percent',
+                'Degradation_Factor', 'Min_Capacity_Ratio_Target'
+            ]
+            
+            # Add linear comparison data if enabled
+            if show_comparison:
+                export_columns.extend(['Linear SOH (%)', 'Linear Capacity (kWh)', 'Max Event Energy (kWh)'])
+            
+            export_df_final = export_df[export_columns].copy()
+            
+            # Display preview of export data
+            col1, col2 = st.columns([3, 1])
+            
+            with col1:
+                st.markdown("**Preview of Export Data:**")
+                # Show key columns in preview
+                preview_columns = ['Year', 'SOH (%)', 'Total Capacity (kWh)', 'Total Usable (kWh)', 
+                                 'Capacity Ratio', 'Performance_Category', 'Meets_Minimum_Ratio']
+                preview_df = export_df_final[preview_columns].head(10)
+                st.dataframe(preview_df, use_container_width=True)
+                
+                if len(export_df_final) > 10:
+                    st.caption(f"Showing first 10 rows of {len(export_df_final)} total rows. Full data available in export.")
+            
+            with col2:
+                st.markdown("**Export Options:**")
+                
+                # Export metadata
+                export_metadata = {
+                    'Analysis_Date': pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'Battery_Model': battery_specs['model'],
+                    'System_Quantity': selected_qty,
+                    'Total_System_Capacity_kWh': initial_capacity,
+                    'Analysis_Target_Year': target_year,
+                    'Degradation_Factor_Applied': degradation_factor,
+                    'Total_Rows': len(export_df_final),
+                    'Data_Source': 'Real WEIHENG TIANWU Series Test Data'
+                }
+                
+                st.json(export_metadata)
+            
+            # Export buttons
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                # CSV Export
+                csv_data = export_df_final.to_csv(index=False)
+                filename_csv = f"WEIHENG_Battery_Degradation_{battery_specs['model']}_{selected_qty}units_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv"
+                
+                st.download_button(
+                    label="📄 Download CSV",
+                    data=csv_data,
+                    file_name=filename_csv,
+                    mime="text/csv",
+                    help="Download complete degradation data as CSV file for Excel analysis"
+                )
+            
+            with col2:
+                # Excel Export (using CSV format but with .xlsx extension for compatibility)
+                filename_excel = f"WEIHENG_Battery_Degradation_{battery_specs['model']}_{selected_qty}units_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx"
+                
+                # Create Excel-compatible CSV
+                excel_data = export_df_final.to_csv(index=False, sep=',')
+                
+                st.download_button(
+                    label="📊 Download Excel",
+                    data=excel_data,
+                    file_name=filename_excel,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    help="Download as Excel-compatible file for advanced analysis"
+                )
+            
+            with col3:
+                # JSON Export for API/programming use
+                json_export = {
+                    'metadata': export_metadata,
+                    'degradation_data': export_df_final.to_dict('records')
+                }
+                
+                json_data = json.dumps(json_export, indent=2, default=str)
+                filename_json = f"WEIHENG_Battery_Degradation_{battery_specs['model']}_{selected_qty}units_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.json"
+                
+                st.download_button(
+                    label="💾 Download JSON",
+                    data=json_data,
+                    file_name=filename_json,
+                    mime="application/json",
+                    help="Download as JSON for programming/API integration"
+                )
+            
+            # Additional export information
+            with st.expander("ℹ️ Export Data Documentation"):
+                st.markdown("""
+                **Column Descriptions:**
+                
+                **Basic Data:**
+                - `Year`: Analysis year (0-20)
+                - `SOH (%)`: State of Health percentage
+                - `Total Capacity (kWh)`: Total system capacity after degradation
+                - `Total Usable (kWh)`: Usable capacity considering DoD and discharge efficiency
+                - `Capacity Ratio`: Ratio of usable capacity to energy requirement
+                - `MD Target (kW)`: Maximum demand target power
+                
+                **Performance Analysis:**
+                - `Performance_Category`: Excellent/Adequate/Marginal/Insufficient
+                - `Meets_Minimum_Ratio`: Boolean indicator if meets minimum capacity ratio
+                
+                **Degradation Tracking:**
+                - `SOH_Change_From_Previous_Year`: Year-over-year SOH change
+                - `Capacity_Loss_From_Year_0_kWh`: Cumulative capacity loss from new
+                - `Capacity_Loss_From_Year_0_Percent`: Cumulative capacity loss percentage
+                
+                **Configuration Parameters:**
+                - `System_Configuration`: Battery model and quantity
+                - `Depth_of_Discharge_Percent`: Applied DoD setting
+                - `Discharge_Efficiency_Percent`: Applied discharge efficiency
+                - `Degradation_Factor`: Sensitivity factor applied
+                
+                **Data Source:**
+                This export contains real WEIHENG TIANWU series degradation data from laboratory testing,
+                not theoretical linear degradation models. Use this data for accurate long-term planning
+                and financial analysis.
+                """)
+            
+            st.markdown("---")
             
             # Action items and next steps
             st.markdown("### 📋 Recommended Next Steps")
