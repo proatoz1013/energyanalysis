@@ -22,7 +22,7 @@ warnings.filterwarnings('ignore')
 
 # Import RP4 and utility modules
 from tariffs.rp4_tariffs import get_tariff_data
-from tariffs.peak_logic import is_peak_rp4
+from tariffs.peak_logic import is_peak_rp4, get_period_classification
 from utils.cost_calculator import calculate_cost
 
 # Helper function to read different file formats
@@ -41,6 +41,107 @@ from battery_algorithms import (
     perform_comprehensive_battery_analysis,
     create_battery_algorithms
 )
+
+
+def create_conditional_demand_line_with_peak_logic(fig, df, power_col, target_demand, trace_name="Original Demand"):
+    """
+    Enhanced conditional coloring logic for Original Demand line with RP4 peak period logic.
+    Creates continuous line segments with different colors based on conditions.
+    
+    Color Logic:
+    - Red: Above target during RP4 Peak Periods (Mon-Fri 2PM-10PM, excluding Malaysia holidays) - Direct MD cost impact
+    - Green: Above target during Off-Peak Periods (nights, weekends, Malaysia holidays) - No MD cost impact  
+    - Blue: Below target (any time) - Within acceptable limits
+    """
+    # Convert index to datetime if it's not already
+    if not pd.api.types.is_datetime64_any_dtype(df.index):
+        df_copy = df.copy()
+        df_copy.index = pd.to_datetime(df.index)
+    else:
+        df_copy = df
+    
+    # Create a series with color classifications
+    df_copy = df_copy.copy()
+    df_copy['color_class'] = ''
+    
+    for i in range(len(df_copy)):
+        timestamp = df_copy.index[i]
+        demand_value = df_copy.iloc[i][power_col]
+        
+        # Classify peak period using enhanced Malaysia holidays logic
+        period_type = get_period_classification(timestamp)
+        
+        if demand_value > target_demand:
+            if period_type == 'Peak':
+                df_copy.iloc[i, df_copy.columns.get_loc('color_class')] = 'red'
+            else:
+                df_copy.iloc[i, df_copy.columns.get_loc('color_class')] = 'green'
+        else:
+            df_copy.iloc[i, df_copy.columns.get_loc('color_class')] = 'blue'
+    
+    # Create a single continuous line with color-coded segments
+    # First, add all data as individual colored traces for proper line continuity
+    x_data = df_copy.index
+    y_data = df_copy[power_col]
+    colors = df_copy['color_class']
+    
+    # Track legend status
+    legend_added = {'red': False, 'green': False, 'blue': False}
+    
+    # Create continuous line segments by color groups with bridge points
+    i = 0
+    while i < len(df_copy):
+        current_color = colors.iloc[i]
+        
+        # Find the end of current color segment
+        j = i
+        while j < len(colors) and colors.iloc[j] == current_color:
+            j += 1
+        
+        # Extract segment data
+        segment_x = list(x_data[i:j])
+        segment_y = list(y_data[i:j])
+        
+        # Add bridge points for better continuity (connect to adjacent segments)
+        if i > 0:  # Add connection point from previous segment
+            segment_x.insert(0, x_data[i-1])
+            segment_y.insert(0, y_data[i-1])
+        
+        if j < len(colors):  # Add connection point to next segment
+            segment_x.append(x_data[j])
+            segment_y.append(y_data[j])
+        
+        # Determine trace name based on color
+        if current_color == 'red':
+            segment_name = f'{trace_name} (Above Target - Peak Period)'
+            hover_info = '<b>Above Target - Peak Period</b><br><i>MD Cost Impact</i>'
+        elif current_color == 'green':
+            segment_name = f'{trace_name} (Above Target - Off-Peak)'
+            hover_info = '<b>Above Target - Off-Peak</b><br><i>No MD Cost Impact</i>'
+        else:  # blue
+            segment_name = f'{trace_name} (Below Target)'
+            hover_info = '<b>Below Target</b><br><i>Within Acceptable Limits</i>'
+        
+        # Only show legend for the first occurrence of each color
+        show_legend = not legend_added[current_color]
+        legend_added[current_color] = True
+        
+        # Add line segment
+        fig.add_trace(go.Scatter(
+            x=segment_x,
+            y=segment_y,
+            mode='lines',
+            line=dict(color=current_color, width=2),
+            name=segment_name,
+            hovertemplate=f'{trace_name}: %{{y:.2f}} kW<br>%{{x}}<br>{hover_info}<extra></extra>',
+            showlegend=show_legend,
+            legendgroup=current_color,
+            connectgaps=True  # Connect gaps within segments
+        ))
+        
+        i = j
+    
+    return fig
 
 
 def fmt(val):
@@ -848,15 +949,10 @@ def _display_peak_events_chart(df, power_col, event_summaries, target_demand):
     # Create the main power consumption chart
     fig_events = go.Figure()
     
-    # Add main power consumption line
-    fig_events.add_trace(go.Scatter(
-        x=df.index,
-        y=df[power_col],
-        mode='lines',
-        name='Power Consumption',
-        line=dict(color='blue', width=1),
-        hovertemplate='%{x}<br>Power: %{y:.2f} kW<extra></extra>'
-    ))
+    # Add enhanced conditional coloring for power consumption line
+    fig_events = create_conditional_demand_line_with_peak_logic(
+        fig_events, df, power_col, target_demand, trace_name="Power Consumption"
+    )
     
     # Add target demand line
     fig_events.add_hline(
@@ -1942,12 +2038,12 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None):
     
     fig = go.Figure()
     
-    # Base demand lines
-    fig.add_trace(
-        go.Scatter(x=df_sim.index, y=df_sim['Original_Demand'], 
-                  name='Original Demand', line=dict(color='red', width=2),
-                  hovertemplate='Original: %{y:.1f} kW<br>%{x}<extra></extra>')
+    # Enhanced conditional coloring for Original Demand line
+    fig = create_conditional_demand_line_with_peak_logic(
+        fig, df_sim, 'Original_Demand', target_demand, trace_name="Original Demand"
     )
+    
+    # Other demand lines
     fig.add_trace(
         go.Scatter(x=df_sim.index, y=df_sim['Net_Demand_kW'], 
                   name='Net Demand (with Battery)', line=dict(color='blue', width=2),
