@@ -1412,7 +1412,16 @@ def _get_battery_parameters(event_summaries=None):
             max_value=98, 
             value=92, 
             step=1,
-            help="Energy efficiency of charge/discharge cycle"
+            help="Energy efficiency of charge/discharge cycle (used in simulation)"
+        )
+        
+        battery_params['discharge_efficiency'] = st.slider(
+            "Discharge Efficiency (%)", 
+            min_value=85, 
+            max_value=98, 
+            value=94, 
+            step=1,
+            help="Energy delivered to load during discharge (used in battery quantity calculation)"
         )
         
         battery_params['c_rate'] = st.slider(

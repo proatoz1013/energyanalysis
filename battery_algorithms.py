@@ -31,6 +31,7 @@ class BatteryAlgorithms:
         self.default_params = {
             'depth_of_discharge': 85,  # %
             'round_trip_efficiency': 92,  # %
+            'discharge_efficiency': 94,  # %
             'c_rate': 0.5,  # C-rate
             'capex_per_kwh': 1200,  # RM/kWh
             'pcs_cost_per_kw': 400,  # RM/kW
@@ -809,6 +810,8 @@ def get_battery_parameters_ui(event_summaries=None):
         st.markdown("**System Specifications**")
         battery_params['depth_of_discharge'] = st.slider("Depth of Discharge (%)", 70, 95, 85, 5)
         battery_params['round_trip_efficiency'] = st.slider("Round-trip Efficiency (%)", 85, 98, 92, 1)
+        battery_params['discharge_efficiency'] = st.slider("Discharge Efficiency (%)", 85, 98, 94, 1, 
+            help="Energy delivered to load during discharge (used in battery sizing)")
         battery_params['c_rate'] = st.slider("C-Rate (Charge/Discharge)", 0.2, 2.0, 0.5, 0.1)
         
         # Financial parameters
