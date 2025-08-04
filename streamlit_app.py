@@ -1975,51 +1975,111 @@ with tabs[5]:
     
     st.markdown("---")
     
-    # Hardcoded battery database (from WEIHENG specs)
-    battery_db = {
-        "TIANWU-50-233-0.25C": {
-            "company": "WEIHENG",
-            "model": "WH-TIANWU-50-233B",
-            "c_rate": 0.25,
-            "power_kW": 50,
-            "energy_kWh": 233,
-            "voltage_V": 832,
-            "lifespan_years": 15,
-            "eol_capacity_pct": 80,
-            "cycles_per_day": 1.0,
-            "cooling": "Liquid (Battery), Air (PCS)",
-            "weight_kg": 2700,
-            "dimensions_mm": [1400, 1350, 2100]
-        },
-        "TIANWU-100-233-0.5C": {
-            "company": "WEIHENG",
-            "model": "WH-TIANWU-100-233B",
-            "c_rate": 0.5,
-            "power_kW": 100,
-            "energy_kWh": 233,
-            "voltage_V": 832,
-            "lifespan_years": 15,
-            "eol_capacity_pct": 80,
-            "cycles_per_day": 1.0,
-            "cooling": "Liquid (Battery + PCS)",
-            "weight_kg": 2700,
-            "dimensions_mm": [1400, 1350, 2100]
-        },
-        "TIANWU-250-233-1C": {
-            "company": "WEIHENG",
-            "model": "WH-TIANWU-250-A",
-            "c_rate": 1.0,
-            "power_kW": 250,
-            "energy_kWh": 233,
-            "voltage_V": 832,
-            "lifespan_years": 15,
-            "eol_capacity_pct": 80,
-            "cycles_per_day": 1.0,
-            "cooling": "Liquid (Battery), Air (PCS)",
-            "weight_kg": 2600,
-            "dimensions_mm": [1400, 1350, 2100]
-        }
-    }
+    # Load battery database from JSON file with fallback to hardcoded data
+    def load_battery_database():
+        """Load battery database from JSON file with fallback to hardcoded data"""
+        try:
+            with open('vendor_battery_database.json', 'r') as f:
+                battery_db = json.load(f)
+                st.success("✅ Battery database loaded from vendor_battery_database.json")
+                return battery_db
+        except FileNotFoundError:
+            st.warning("⚠️ vendor_battery_database.json not found. Using hardcoded battery database.")
+            # Fallback to hardcoded database
+            return {
+                "TIANWU-50-233-0.25C": {
+                    "company": "WEIHENG",
+                    "model": "WH-TIANWU-50-233B",
+                    "c_rate": 0.25,
+                    "power_kW": 50,
+                    "energy_kWh": 233,
+                    "voltage_V": 832,
+                    "lifespan_years": 15,
+                    "eol_capacity_pct": 80,
+                    "cycles_per_day": 1.0,
+                    "cooling": "Liquid (Battery), Air (PCS)",
+                    "weight_kg": 2700,
+                    "dimensions_mm": [1400, 1350, 2100]
+                },
+                "TIANWU-100-233-0.5C": {
+                    "company": "WEIHENG",
+                    "model": "WH-TIANWU-100-233B",
+                    "c_rate": 0.5,
+                    "power_kW": 100,
+                    "energy_kWh": 233,
+                    "voltage_V": 832,
+                    "lifespan_years": 15,
+                    "eol_capacity_pct": 80,
+                    "cycles_per_day": 1.0,
+                    "cooling": "Liquid (Battery + PCS)",
+                    "weight_kg": 2700,
+                    "dimensions_mm": [1400, 1350, 2100]
+                },
+                "TIANWU-250-233-1C": {
+                    "company": "WEIHENG",
+                    "model": "WH-TIANWU-250-A",
+                    "c_rate": 1.0,
+                    "power_kW": 250,
+                    "energy_kWh": 233,
+                    "voltage_V": 832,
+                    "lifespan_years": 15,
+                    "eol_capacity_pct": 80,
+                    "cycles_per_day": 1.0,
+                    "cooling": "Liquid (Battery), Air (PCS)",
+                    "weight_kg": 2600,
+                    "dimensions_mm": [1400, 1350, 2100]
+                }
+            }
+        except json.JSONDecodeError as e:
+            st.error(f"❌ Error reading vendor_battery_database.json: {e}. Using hardcoded database.")
+            # Fallback to hardcoded database on JSON error
+            return {
+                "TIANWU-50-233-0.25C": {
+                    "company": "WEIHENG",
+                    "model": "WH-TIANWU-50-233B",
+                    "c_rate": 0.25,
+                    "power_kW": 50,
+                    "energy_kWh": 233,
+                    "voltage_V": 832,
+                    "lifespan_years": 15,
+                    "eol_capacity_pct": 80,
+                    "cycles_per_day": 1.0,
+                    "cooling": "Liquid (Battery), Air (PCS)",
+                    "weight_kg": 2700,
+                    "dimensions_mm": [1400, 1350, 2100]
+                },
+                "TIANWU-100-233-0.5C": {
+                    "company": "WEIHENG",
+                    "model": "WH-TIANWU-100-233B",
+                    "c_rate": 0.5,
+                    "power_kW": 100,
+                    "energy_kWh": 233,
+                    "voltage_V": 832,
+                    "lifespan_years": 15,
+                    "eol_capacity_pct": 80,
+                    "cycles_per_day": 1.0,
+                    "cooling": "Liquid (Battery + PCS)",
+                    "weight_kg": 2700,
+                    "dimensions_mm": [1400, 1350, 2100]
+                },
+                "TIANWU-250-233-1C": {
+                    "company": "WEIHENG",
+                    "model": "WH-TIANWU-250-A",
+                    "c_rate": 1.0,
+                    "power_kW": 250,
+                    "energy_kWh": 233,
+                    "voltage_V": 832,
+                    "lifespan_years": 15,
+                    "eol_capacity_pct": 80,
+                    "cycles_per_day": 1.0,
+                    "cooling": "Liquid (Battery), Air (PCS)",
+                    "weight_kg": 2600,
+                    "dimensions_mm": [1400, 1350, 2100]
+                }
+            }
+    
+    # Load battery database
+    battery_db = load_battery_database()
     
     # Section 1: Upload Load Profile
     st.header("📊 Section 1: Upload Load Profile")
