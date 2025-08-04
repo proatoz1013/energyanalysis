@@ -79,18 +79,28 @@ def calculate_cost(df, tariff, power_col, holidays=None, afa_kwh=0, afa_rate=0):
             afa_kwh = 0
             afa_rate = 0
             
+        # Calculate KTWBB adjustment cost only if applicable
+        ktwbb_cost = 0
+        if rules.get("ktwbb_applicable", False):
+            ktwbb_rate = rates.get("KTWBB Rate", 0)
+            ktwbb_cost = total_kwh * ktwbb_rate
+        else:
+            ktwbb_rate = 0
+            
         breakdown = {
             "Total kWh": total_kwh,
             "Energy Rate": rates.get("Energy Rate", 0),
             "Capacity Rate": rates.get("Capacity Rate", 0),
             "Network Rate": rates.get("Network Rate", 0),
             "Retail Rate": rates.get("Retail Rate", 0),
+            "KTWBB Rate": rates.get("KTWBB Rate", 0) if rules.get("ktwbb_applicable", False) else 0,
             "Energy Cost (RM)": energy_cost,
             "Capacity Cost (RM)": capacity_cost,
             "Network Cost (RM)": network_cost,
             "Retail Cost": retail_cost,
+            "KTWBB Cost": ktwbb_cost,
             "AFA Adjustment": afa_cost,
-            "Total Cost": energy_cost + capacity_cost + network_cost + retail_cost + afa_cost,
+            "Total Cost": energy_cost + capacity_cost + network_cost + retail_cost + afa_cost + ktwbb_cost,
             # For General tariffs, show all energy as "Peak Energy" instead of "Off-Peak Energy"
             # This is more intuitive for users - all energy is treated as primary/main energy
             "Peak kWh": total_kwh,
@@ -145,6 +155,14 @@ def calculate_cost(df, tariff, power_col, holidays=None, afa_kwh=0, afa_rate=0):
             afa_kwh = 0
             afa_rate = 0
             
+        # Calculate KTWBB adjustment cost only if applicable
+        ktwbb_cost = 0
+        if rules.get("ktwbb_applicable", False):
+            ktwbb_rate = rates.get("KTWBB Rate", 0)
+            ktwbb_cost = total_kwh * ktwbb_rate
+        else:
+            ktwbb_rate = 0
+            
         breakdown = {
             "Peak kWh": peak_kwh,
             "Off-Peak kWh": offpeak_kwh,
@@ -153,15 +171,17 @@ def calculate_cost(df, tariff, power_col, holidays=None, afa_kwh=0, afa_rate=0):
             "Capacity Rate": rates.get("Capacity Rate", 0),
             "Network Rate": rates.get("Network Rate", 0),
             "Retail Rate": retail_cost,
+            "KTWBB Rate": rates.get("KTWBB Rate", 0) if rules.get("ktwbb_applicable", False) else 0,
             "Peak Energy Cost": peak_cost,
             "Off-Peak Energy Cost": offpeak_cost,
             "AFA kWh": afa_kwh if rules.get("afa_applicable", False) else 0,
             "AFA Rate": afa_rate if rules.get("afa_applicable", False) else 0,
             "AFA Adjustment": afa_cost,
+            "KTWBB Cost": ktwbb_cost,
             "Capacity Cost": capacity_cost,
             "Network Cost": network_cost,
             "Retail Cost": retail_cost,
-            "Total Cost": peak_cost + offpeak_cost + capacity_cost + network_cost + retail_cost + afa_cost,
+            "Total Cost": peak_cost + offpeak_cost + capacity_cost + network_cost + retail_cost + afa_cost + ktwbb_cost,
             "Total kWh": total_kwh
         }
         
@@ -208,6 +228,7 @@ def format_cost_breakdown(breakdown):
         {"No": "1", "Description": "Peak Period Consumption", "Unit": "kWh", "Value": fmt(breakdown.get("Peak kWh", "")), "Unit Rate (RM)": fmt(breakdown.get("Peak Rate", "")), "Total Cost (RM)": fmt(breakdown.get("Peak Energy Cost", ""))},
         {"No": "2", "Description": "Off-Peak Consumption", "Unit": "kWh", "Value": fmt(breakdown.get("Off-Peak kWh", "")), "Unit Rate (RM)": fmt(breakdown.get("Off-Peak Rate", "")), "Total Cost (RM)": fmt(breakdown.get("Off-Peak Energy Cost", ""))},
         {"No": "3", "Description": "AFA Consumption", "Unit": "kWh", "Value": fmt(breakdown.get("AFA kWh", "")), "Unit Rate (RM)": fmt(breakdown.get("AFA Rate", "")), "Total Cost (RM)": fmt(breakdown.get("AFA Adjustment", ""))},
+        {"No": "4", "Description": "KTWBB Consumption", "Unit": "kWh", "Value": fmt(breakdown.get("Total kWh", "")) if breakdown.get("KTWBB Rate", 0) > 0 else "", "Unit Rate (RM)": fmt(breakdown.get("KTWBB Rate", "")), "Total Cost (RM)": fmt(breakdown.get("KTWBB Cost", ""))},
     ]
     # Section B: Maximum Demand
     # Always show correct Capacity Cost (check both keys)
