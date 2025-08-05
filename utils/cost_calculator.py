@@ -54,15 +54,21 @@ def calculate_cost(df, tariff, power_col, holidays=None, afa_kwh=0, afa_rate=0):
         if rules.get("charge_capacity_by", "kWh") == "kWh":
             capacity_basis = total_kwh
             show_capacity_demand = False
-        else:
+        elif rules.get("charge_capacity_by") == "kW (peak only)":
             capacity_basis = peak_demand_kw
+            show_capacity_demand = True
+        else:
+            capacity_basis = max_demand_kw
             show_capacity_demand = True
             
         if rules.get("charge_network_by", "kWh") == "kWh":
             network_basis = total_kwh
             show_network_demand = False
-        else:
+        elif rules.get("charge_network_by") == "kW (peak only)":
             network_basis = peak_demand_kw
+            show_network_demand = True
+        else:
+            network_basis = max_demand_kw
             show_network_demand = True
             
         capacity_cost = capacity_basis * rates.get("Capacity Rate", 0)
@@ -130,6 +136,9 @@ def calculate_cost(df, tariff, power_col, holidays=None, afa_kwh=0, afa_rate=0):
         if rules.get("charge_capacity_by", "kWh") == "kWh":
             capacity_basis = total_kwh
             show_capacity_demand = False
+        elif rules.get("charge_capacity_by") == "kW (peak only)":
+            capacity_basis = peak_demand_kw
+            show_capacity_demand = True
         else:
             capacity_basis = max_demand_kw
             show_capacity_demand = True
@@ -137,6 +146,9 @@ def calculate_cost(df, tariff, power_col, holidays=None, afa_kwh=0, afa_rate=0):
         if rules.get("charge_network_by", "kWh") == "kWh":
             network_basis = total_kwh
             show_network_demand = False
+        elif rules.get("charge_network_by") == "kW (peak only)":
+            network_basis = peak_demand_kw
+            show_network_demand = True
         else:
             network_basis = max_demand_kw
             show_network_demand = True
