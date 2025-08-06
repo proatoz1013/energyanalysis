@@ -89,7 +89,9 @@ def calculate_cost(df, tariff, power_col, holidays=None, afa_kwh=0, afa_rate=0):
         ktwbb_cost = 0
         if rules.get("ktwbb_applicable", False):
             ktwbb_rate = rates.get("KTWBB Rate", 0)
-            ktwbb_cost = total_kwh * ktwbb_rate
+            # KTWBB = 1.6% of (Energy + Capacity + Network + Retail + AFA)
+            ktwbb_base = energy_cost + capacity_cost + network_cost + retail_cost + afa_cost
+            ktwbb_cost = ktwbb_base * ktwbb_rate
         else:
             ktwbb_rate = 0
             
@@ -171,7 +173,9 @@ def calculate_cost(df, tariff, power_col, holidays=None, afa_kwh=0, afa_rate=0):
         ktwbb_cost = 0
         if rules.get("ktwbb_applicable", False):
             ktwbb_rate = rates.get("KTWBB Rate", 0)
-            ktwbb_cost = total_kwh * ktwbb_rate
+            # KTWBB = 1.6% of (Energy + Capacity + Network + Retail + AFA)
+            ktwbb_base = peak_cost + offpeak_cost + capacity_cost + network_cost + retail_cost + afa_cost
+            ktwbb_cost = ktwbb_base * ktwbb_rate
         else:
             ktwbb_rate = 0
             
