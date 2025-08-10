@@ -329,13 +329,29 @@ def show():
             target_percent = None
             shave_percent = None
         
-        # Peak event filter
+        # Peak event filter with tariff-specific options
+        event_filter_options = ["All Events", "Peak Period Only", "Off-Peak Period Only"]
+        
+        # Get current tariff selection to determine filter options
+        tariff_selection = st.session_state.get('selected_tariff', {})
+        tariff_type = tariff_selection.get('Type', '').lower()
+        tariff_name = tariff_selection.get('Tariff', '').lower()
+        is_tou_tariff = tariff_type == 'tou' or 'tou' in tariff_name
+        
+        # Add tariff-specific filter options
+        if is_tou_tariff:
+            event_filter_options.extend(["MD Cost Impact Events", "No MD Cost Impact Events"])
+            help_text = "Filter events based on RP4 MD peak hours (2PM-10PM weekdays) and TOU tariff MD cost impact"
+        else:
+            event_filter_options.extend(["MD Cost Impact Events"])
+            help_text = "Filter events based on RP4 MD peak hours (2PM-10PM weekdays) - General tariffs have MD cost impact 24/7"
+        
         event_filter = st.radio(
             "Event Filter:",
-            options=["All Events", "Peak Period Only", "Off-Peak Period Only"],
+            options=event_filter_options,
             index=0,
             key="md_event_filter",
-            help="Filter events based on RP4 MD peak hours (2 PM-10 PM, weekdays)"
+            help=help_text
         )
         
         # Analysis options
@@ -383,6 +399,9 @@ def show():
                 if not df.empty and power_col in df.columns:
                     # Tariff Selection
                     selected_tariff = _configure_tariff_selection()
+                    
+                    # Store tariff selection in session state for sidebar access
+                    st.session_state['selected_tariff'] = selected_tariff
                     
                     if selected_tariff:
                         # Calculate target demand based on selected method
@@ -789,7 +808,7 @@ def _perform_md_shaving_analysis(df, power_col, selected_tariff, holidays, targe
     total_md_rate = capacity_rate + network_rate
     
     # Detect peak events first to get actual MD cost impact
-    event_summaries = _detect_peak_events(df, power_col, target_demand, total_md_rate, interval_hours)
+    event_summaries = _detect_peak_events(df, power_col, target_demand, total_md_rate, interval_hours, selected_tariff)
     
     # Calculate actual potential saving from maximum MD cost impact
     max_md_cost_impact = 0
@@ -889,11 +908,16 @@ def _detect_data_interval(df):
     return 0.25
 
 
-def _detect_peak_events(df, power_col, target_demand, total_md_rate, interval_hours):
-    """Detect peak events above target demand."""
+def _detect_peak_events(df, power_col, target_demand, total_md_rate, interval_hours, selected_tariff=None):
+    """Detect peak events above target demand with tariff-specific MD cost impact calculation."""
     df_events = df[[power_col]].copy()
     df_events['Above_Target'] = df_events[power_col] > target_demand
     df_events['Event_ID'] = (df_events['Above_Target'] != df_events['Above_Target'].shift()).cumsum()
+    
+    # Determine tariff type for MD cost impact logic
+    tariff_type = selected_tariff.get('Type', '').lower() if selected_tariff else 'general'
+    tariff_name = selected_tariff.get('Tariff', '').lower() if selected_tariff else ''
+    is_tou_tariff = tariff_type == 'tou' or 'tou' in tariff_name
     
     event_summaries = []
     for event_id, group in df_events.groupby('Event_ID'):
@@ -917,16 +941,25 @@ def _detect_peak_events(df, power_col, target_demand, total_md_rate, interval_ho
         group_md_peak = group_above[md_peak_mask]
         md_peak_energy_to_shave = ((group_md_peak[power_col] - target_demand) * interval_hours).sum() if not group_md_peak.empty else 0
         
-        # MD cost impact: excess MD during peak period × MD Rate
+        # Tariff-specific MD cost impact calculation
         md_excess_during_peak = 0
         md_peak_load_during_event = 0
         md_peak_time = None
+        has_md_cost_impact = False
         
-        if not group_md_peak.empty:
-            # Find the exact peak load and time during MD recording hours
-            md_peak_load_during_event = group_md_peak[power_col].max()
-            md_peak_time = group_md_peak[group_md_peak[power_col] == md_peak_load_during_event].index[0]
-            md_excess_during_peak = md_peak_load_during_event - target_demand
+        if is_tou_tariff:
+            # TOU tariffs: Only events during 2PM-10PM weekdays have MD cost impact
+            if not group_md_peak.empty:
+                md_peak_load_during_event = group_md_peak[power_col].max()
+                md_peak_time = group_md_peak[group_md_peak[power_col] == md_peak_load_during_event].index[0]
+                md_excess_during_peak = md_peak_load_during_event - target_demand
+                has_md_cost_impact = True
+        else:
+            # General tariffs: ALL events above target have MD cost impact 24/7
+            md_peak_load_during_event = peak_load
+            md_peak_time = group[group[power_col] == peak_load].index[0]
+            md_excess_during_peak = excess
+            has_md_cost_impact = True
         
         md_cost_impact = md_excess_during_peak * total_md_rate if md_excess_during_peak > 0 and total_md_rate > 0 else 0
         
@@ -943,16 +976,23 @@ def _detect_peak_events(df, power_col, target_demand, total_md_rate, interval_ho
             'Duration (min)': duration_minutes,
             'Energy to Shave (kWh)': total_energy_to_shave,
             'Energy to Shave (Peak Period Only)': md_peak_energy_to_shave,
-            'MD Cost Impact (RM)': md_cost_impact
+            'MD Cost Impact (RM)': md_cost_impact,
+            'Has MD Cost Impact': has_md_cost_impact,
+            'Tariff Type': 'TOU' if is_tou_tariff else 'General'
         })
     
     return event_summaries
 
 
-def _filter_events_by_period(event_summaries, filter_type):
-    """Filter events based on whether they occur during peak periods."""
+def _filter_events_by_period(event_summaries, filter_type, selected_tariff=None):
+    """Filter events based on whether they occur during peak periods or have MD cost impact."""
     if filter_type == "All Events":
         return event_summaries
+    
+    # Determine tariff type for filter options
+    tariff_type = selected_tariff.get('Type', '').lower() if selected_tariff else 'general'
+    tariff_name = selected_tariff.get('Tariff', '').lower() if selected_tariff else ''
+    is_tou_tariff = tariff_type == 'tou' or 'tou' in tariff_name
     
     filtered_events = []
     for event in event_summaries:
@@ -966,9 +1006,17 @@ def _filter_events_by_period(event_summaries, filter_type):
         # Check if event starts during RP4 MD peak hours (2 PM-10 PM, weekdays)
         is_peak_period_event = (start_weekday < 5) and (14 <= start_hour < 22)
         
+        # Check if event has MD cost impact (different logic for TOU vs General tariffs)
+        has_md_cost_impact = event.get('Has MD Cost Impact', False)
+        
+        # Apply filters based on type
         if filter_type == "Peak Period Only" and is_peak_period_event:
             filtered_events.append(event)
         elif filter_type == "Off-Peak Period Only" and not is_peak_period_event:
+            filtered_events.append(event)
+        elif filter_type == "MD Cost Impact Events" and has_md_cost_impact:
+            filtered_events.append(event)
+        elif filter_type == "No MD Cost Impact Events" and not has_md_cost_impact:
             filtered_events.append(event)
     
     return filtered_events
@@ -977,22 +1025,51 @@ def _filter_events_by_period(event_summaries, filter_type):
 def _display_peak_event_results(df, power_col, event_summaries, target_demand, total_md_rate, 
                                overall_max_demand, interval_hours, event_filter, show_detailed_analysis, 
                                selected_tariff=None, holidays=None):
-    """Display peak event detection results and analysis."""
+    """Display peak event detection results and analysis with tariff-specific enhancements."""
     
     st.subheader("⚡ Peak Event Detection Results")
     
+    # Determine tariff type for display enhancements
+    tariff_type = selected_tariff.get('Type', '').lower() if selected_tariff else 'general'
+    tariff_name = selected_tariff.get('Tariff', '').lower() if selected_tariff else ''
+    is_tou_tariff = tariff_type == 'tou' or 'tou' in tariff_name
+    
     # Filter events based on selection
-    filtered_events = _filter_events_by_period(event_summaries, event_filter)
+    filtered_events = _filter_events_by_period(event_summaries, event_filter, selected_tariff)
     
     if not filtered_events:
         st.warning(f"No events found for '{event_filter}' filter.")
         return
     
-    st.markdown(f"**Showing {len(filtered_events)} of {len(event_summaries)} total events ({event_filter})**")
+    # Enhanced summary with tariff context
+    total_events = len(event_summaries)
+    filtered_count = len(filtered_events)
     
-    # Display events table
+    if is_tou_tariff:
+        md_impact_events = len([e for e in event_summaries if e.get('Has MD Cost Impact', False)])
+        no_md_impact_events = total_events - md_impact_events
+        summary_text = f"**Showing {filtered_count} of {total_events} total events ({event_filter})**\n"
+        summary_text += f"📊 **TOU Tariff Summary:** {md_impact_events} events with MD cost impact, {no_md_impact_events} events without MD impact"
+    else:
+        summary_text = f"**Showing {filtered_count} of {total_events} total events ({event_filter})**\n"
+        summary_text += f"📊 **General Tariff:** All {total_events} events have MD cost impact (24/7 MD charges)"
+    
+    st.markdown(summary_text)
+    
+    # Prepare dataframe with color-coding information
     df_events_summary = pd.DataFrame(filtered_events)
-    st.dataframe(df_events_summary.style.format({
+    
+    # Create styled dataframe with color-coded rows
+    def apply_row_colors(row):
+        """Apply color coding based on MD cost impact."""
+        has_impact = row.get('Has MD Cost Impact', False)
+        if has_impact:
+            return ['background-color: rgba(255, 0, 0, 0.1)'] * len(row)  # Light red for MD cost impact
+        else:
+            return ['background-color: rgba(0, 128, 0, 0.1)'] * len(row)  # Light green for no MD cost impact
+    
+    # Apply styling and formatting
+    styled_df = df_events_summary.style.apply(apply_row_colors, axis=1).format({
         'Peak Load (kW)': lambda x: fmt(x),
         'Excess (kW)': lambda x: fmt(x),
         'MD Peak Load (kW)': lambda x: fmt(x) if x > 0 else 'N/A',
@@ -1001,20 +1078,44 @@ def _display_peak_event_results(df, power_col, event_summaries, target_demand, t
         'Energy to Shave (kWh)': lambda x: fmt(x),
         'Energy to Shave (Peak Period Only)': lambda x: fmt(x),
         'MD Cost Impact (RM)': lambda x: f'RM {fmt(x)}' if x is not None else 'RM 0.0000'
-    }), use_container_width=True)
+    })
     
-    # Display explanation
-    st.info("""
-    **Column Explanations:**
+    st.dataframe(styled_df, use_container_width=True)
+    
+    # Enhanced explanation with tariff-specific context
+    if is_tou_tariff:
+        explanation = """
+    **Column Explanations (TOU Tariff):**
     - **Peak Load (kW)**: Highest demand during entire event period (may include off-peak hours)
     - **Excess (kW)**: Overall event peak minus target (for reference only)
-    - **MD Peak Load (kW)**: Highest demand during MD recording hours only (2 PM-10 PM, weekdays)
-    - **MD Excess (kW)**: MD peak load minus target - this determines MD cost impact
+    - **MD Peak Load (kW)**: Highest demand during MD recording hours only (2PM-10PM, weekdays)
+    - **MD Excess (kW)**: MD peak load minus target - determines MD cost impact
     - **MD Peak Time**: Exact time when MD peak occurred (for MD cost calculation)
     - **Energy to Shave (kWh)**: Total energy above target for entire event duration
     - **Energy to Shave (Peak Period Only)**: Energy above target during MD recording hours only
-    - **MD Cost Impact**: MD Excess (kW) × MD Rate - based on MD peak, not overall event peak
-    """)
+    - **MD Cost Impact**: MD Excess (kW) × MD Rate - **ONLY for events during 2PM-10PM weekdays**
+    
+    **🎨 Row Colors:**
+    - 🔴 **Red background**: Events with MD cost impact (occur during 2PM-10PM weekdays)
+    - 🟢 **Green background**: Events without MD cost impact (occur during off-peak periods)
+        """
+    else:
+        explanation = """
+    **Column Explanations (General Tariff):**
+    - **Peak Load (kW)**: Highest demand during entire event period
+    - **Excess (kW)**: Event peak minus target
+    - **MD Peak Load (kW)**: Same as Peak Load (General tariffs have 24/7 MD impact)
+    - **MD Excess (kW)**: Same as Excess (all events affect MD charges)
+    - **MD Peak Time**: Time when peak occurred
+    - **Energy to Shave (kWh)**: Total energy above target for entire event duration
+    - **Energy to Shave (Peak Period Only)**: Energy above target during MD recording hours only
+    - **MD Cost Impact**: MD Excess (kW) × MD Rate - **ALL events have MD cost impact 24/7**
+    
+    **🎨 Row Colors:**
+    - 🔴 **Red background**: All events have MD cost impact (General tariffs charge MD 24/7)
+        """
+    
+    st.info(explanation)
     
     # Visualization of events
     _display_peak_events_chart(df, power_col, filtered_events, target_demand, selected_tariff, holidays)
