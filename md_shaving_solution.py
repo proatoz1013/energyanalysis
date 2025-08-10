@@ -2253,59 +2253,61 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None, s
                   hovertemplate='Target: %{y:.1f} kW<br>%{x}<extra></extra>')
     )
     
-    # Add charge/discharge areas on the demand chart
-    # Discharge periods (battery helping during high demand)
-    discharge_mask = df_sim['Battery_Power_kW'] > 0
-    if discharge_mask.any():
-        discharge_data = df_sim[discharge_mask]
-        
-        # Add discharge areas as scatter with fill
-        fig.add_trace(go.Scatter(
-            x=discharge_data.index, 
-            y=discharge_data['Battery_Power_kW'],
-            fill='tozeroy', 
-            fillcolor='rgba(255,165,0,0.3)',
-            line=dict(color='orange', width=1),
-            name='Battery Discharge Areas',
-            hovertemplate='Discharge: %{y:.1f} kW<br>%{x}<extra></extra>',
-            yaxis='y2'
-        ))
+    # Replace area fills with bar charts for battery discharge/charge
+    # Prepare series for bars (positive = discharge, negative = charge)
+    discharge_series = df_sim['Battery_Power_kW'].where(df_sim['Battery_Power_kW'] > 0, other=0)
+    charge_series = df_sim['Battery_Power_kW'].where(df_sim['Battery_Power_kW'] < 0, other=0)
     
-    # Add charging areas
-    charge_mask = df_sim['Battery_Power_kW'] < 0
-    if charge_mask.any():
-        charge_data = df_sim[charge_mask]
-        
-        # Add charging areas as scatter with fill
-        fig.add_trace(go.Scatter(
-            x=charge_data.index, 
-            y=charge_data['Battery_Power_kW'].abs(),
-            fill='tozeroy', 
-            fillcolor='rgba(0,255,0,0.3)',
-            line=dict(color='green', width=1),
-            name='Battery Charging Areas',
-            hovertemplate='Charging: %{y:.1f} kW<br>%{x}<extra></extra>',
-            yaxis='y2'
-        ))
+    # Discharge bars
+    fig.add_trace(go.Bar(
+        x=df_sim.index,
+        y=discharge_series,
+        name='Battery Discharge (kW)',
+        marker=dict(color='orange'),
+        opacity=0.6,
+        hovertemplate='Discharge: %{y:.1f} kW<br>%{x}<extra></extra>',
+        yaxis='y2'
+    ))
+    
+    # Charge bars (negative values)
+    fig.add_trace(go.Bar(
+        x=df_sim.index,
+        y=charge_series,
+        name='Battery Charge (kW)',
+        marker=dict(color='green'),
+        opacity=0.6,
+        hovertemplate='Charge: %{y:.1f} kW<br>%{x}<extra></extra>',
+        yaxis='y2'
+    ))
     
     # Add enhanced conditional coloring for Original Demand line LAST so it renders on top
     fig = create_conditional_demand_line_with_peak_logic(
         fig, df_sim, 'Original_Demand', target_demand, selected_tariff, holidays, "Original Demand"
     )
     
+    # Compute symmetric range for y2 to show positive/negative bars
+    try:
+        max_abs_power = float(df_sim['Battery_Power_kW'].abs().max())
+    except Exception:
+        max_abs_power = float(sizing.get('power_rating_kw', 100))
+    y2_limit = max(max_abs_power * 1.1, sizing.get('power_rating_kw', 100) * 0.5)
+    
     fig.update_layout(
         title='🎯 MD Shaving Effectiveness: Demand vs Battery vs Target',
         xaxis_title='Time',
         yaxis_title='Power Demand (kW)',
         yaxis2=dict(
-            title='Battery Power (kW)',
+            title='Battery Power (kW) [+ discharge | - charge]',
             overlaying='y',
             side='right',
-            range=[0, sizing['power_rating_kw'] * 1.1]
+            range=[-y2_limit, y2_limit],
+            zeroline=True,
+            zerolinecolor='gray'
         ),
         height=500,
         hovermode='x unified',
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        barmode='overlay'
     )
     
     st.plotly_chart(fig, use_container_width=True)
