@@ -1145,7 +1145,7 @@ def _display_peak_events_chart(df, power_col, event_summaries, target_demand, se
         annotation_text=f"Target: {fmt(target_demand)} kW"
     )
     
-    # Highlight peak events
+    # Highlight peak events using tariff/holiday-aware classification
     has_peak_period_events = False
     has_offpeak_period_events = False
     
@@ -1154,31 +1154,38 @@ def _display_peak_events_chart(df, power_col, event_summaries, target_demand, se
         start_time_str = event['Start Time']
         end_date = event['End Date']
         
-        # Determine if this is a peak period event
-        start_hour = int(start_time_str.split(':')[0])
-        start_weekday = start_date.weekday()
-        is_peak_period_event = (start_weekday < 5) and (14 <= start_hour < 22)
-        
-        # Choose colors based on period
-        if is_peak_period_event:
-            fill_color = 'rgba(255, 0, 0, 0.2)'  # Semi-transparent red
-            event_type = 'Peak Period Event'
-            has_peak_period_events = True
-        else:
-            fill_color = 'rgba(0, 128, 0, 0.2)'  # Semi-transparent green
-            event_type = 'Off-Peak Period Event'
-            has_offpeak_period_events = True
-        
-        # Create mask for event period
+        # Determine the event mask
         if start_date == end_date:
             event_mask = (df.index.date == start_date) & \
-                        (df.index.strftime('%H:%M') >= event['Start Time']) & \
-                        (df.index.strftime('%H:%M') <= event['End Time'])
+                         (df.index.strftime('%H:%M') >= event['Start Time']) & \
+                         (df.index.strftime('%H:%M') <= event['End Time'])
         else:
             event_mask = (df.index.date >= start_date) & (df.index.date <= end_date)
         
         if event_mask.any():
             event_data = df[event_mask]
+            
+            # Classify each timestamp according to tariff/holiday logic
+            if selected_tariff:
+                classifications = [get_tariff_period_classification(ts, selected_tariff, holidays) for ts in event_data.index]
+            else:
+                classifications = [get_period_classification(ts, holidays) for ts in event_data.index]
+            
+            # Decide event type by majority of samples
+            peak_count = sum(1 for c in classifications if c == 'Peak')
+            offpeak_count = len(classifications) - peak_count
+            is_peak_period_event = peak_count >= offpeak_count
+            
+            # Choose colors based on period
+            if is_peak_period_event:
+                fill_color = 'rgba(255, 0, 0, 0.2)'  # Semi-transparent red
+                event_type = 'Peak Period Event'
+                has_peak_period_events = True
+            else:
+                fill_color = 'rgba(0, 128, 0, 0.2)'  # Semi-transparent green
+                event_type = 'Off-Peak Period Event'
+                has_offpeak_period_events = True
+            
             event_label = f"{event_type} ({start_date})" if start_date == end_date else f"{event_type} ({start_date} to {end_date})"
             
             # Add filled area between power consumption and target line
@@ -1707,7 +1714,7 @@ def _perform_battery_analysis(df, power_col, event_summaries, target_demand,
 
 
 def _calculate_battery_sizing(event_summaries, target_demand, interval_hours, battery_params):
-    """Calculate optimal battery sizing based on peak events."""
+    """Calculate optimal battery sizing basedon peak events."""
     
     if battery_params['sizing_approach'] == "Manual Capacity":
         return {
@@ -2210,9 +2217,15 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None, s
     if sizing is None:
         sizing = {'power_rating_kw': 100}  # Default power rating for calculations
     
+    # Resolve Net Demand column name flexibly
+    net_candidates = ['Net_Demand_kW', 'Net_Demand_KW', 'Net_Demand']
+    net_col = next((c for c in net_candidates if c in df_sim.columns), None)
+    
     # Validate required columns exist
-    required_columns = ['Original_Demand', 'Net_Demand_kW', 'Battery_Power_kW', 'Battery_SOC_Percent']
-    missing_columns = [col for col in required_columns if col not in df_sim.columns]
+    required_base = ['Original_Demand', 'Battery_Power_kW', 'Battery_SOC_Percent']
+    missing_columns = [col for col in required_base if col not in df_sim.columns]
+    if net_col is None:
+        missing_columns.append('Net_Demand_kW')
     
     if missing_columns:
         st.error(f"❌ Missing required columns in simulation data: {missing_columns}")
@@ -2228,16 +2241,10 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None, s
     
     fig = go.Figure()
     
-    # Enhanced conditional coloring for Original Demand line
-    fig = create_conditional_demand_line_with_peak_logic(
-        fig, df_sim, 'Original_Demand', target_demand, trace_name="Original Demand",
-        selected_tariff=selected_tariff, holidays=holidays
-    )
-    
     # Other demand lines
     fig.add_trace(
-        go.Scatter(x=df_sim.index, y=df_sim['Net_Demand_kW'], 
-                  name='Net Demand (with Battery)', line=dict(color='blue', width=2),
+        go.Scatter(x=df_sim.index, y=df_sim[net_col], 
+                  name='Net Demand (with Battery)', line=dict(color='#00BFFF', width=2),
                   hovertemplate='Net: %{y:.1f} kW<br>%{x}<extra></extra>')
     )
     fig.add_trace(
@@ -2281,6 +2288,11 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None, s
             yaxis='y2'
         ))
     
+    # Add enhanced conditional coloring for Original Demand line LAST so it renders on top
+    fig = create_conditional_demand_line_with_peak_logic(
+        fig, df_sim, 'Original_Demand', target_demand, selected_tariff, holidays, "Original Demand"
+    )
+    
     fig.update_layout(
         title='🎯 MD Shaving Effectiveness: Demand vs Battery vs Target',
         xaxis_title='Time',
@@ -2304,7 +2316,7 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None, s
     if len(df_md_peak_sim) > 0:
         success_intervals = len(df_md_peak_sim[
             (df_md_peak_sim['Original_Demand'] > target_demand) & 
-            (df_md_peak_sim['Net_Demand_kW'] <= target_demand * 1.05)
+            (df_md_peak_sim[net_col] <= target_demand * 1.05)
         ])
         total_peak_intervals = len(df_md_peak_sim[df_md_peak_sim['Original_Demand'] > target_demand])
         
@@ -2861,7 +2873,7 @@ def get_tariff_period_classification(timestamp, selected_tariff, holidays=None):
             return 'Peak'  # General tariffs: always Peak (MD charges apply)
     
     # Get tariff type
-    tariff_name = selected_tariff.get('Tariff', '').lower()
+    tariff_name = selected_tariff.get('Tariff', '')
     tariff_type = selected_tariff.get('Type', '').lower()
     
     # Check if it's a TOU (Time of Use) tariff

@@ -19,6 +19,35 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+# Import RP4 peak logic functions
+from tariffs.peak_logic import is_peak_rp4, get_malaysia_holidays
+
+
+def detect_holidays_from_data(df, timestamp_col):
+    """
+    Detect holidays from data by analyzing patterns.
+    For now, returns default Malaysia holidays based on year range in data.
+    """
+    if len(df) == 0:
+        return get_malaysia_holidays(2025)
+    
+    # Get year range from data
+    try:
+        start_year = df.index.min().year if hasattr(df.index.min(), 'year') else 2025
+        end_year = df.index.max().year if hasattr(df.index.max(), 'year') else 2025
+    except:
+        # Fallback if no valid dates
+        return get_malaysia_holidays(2025)
+    
+    # Combine holidays from all years in the data range
+    all_holidays = set()
+    for year in range(start_year, end_year + 1):
+        year_holidays = get_malaysia_holidays(year)
+        if year_holidays:
+            all_holidays.update(year_holidays)
+    
+    return all_holidays if all_holidays else get_malaysia_holidays(2025)
+
 
 class BatteryAlgorithms:
     """
