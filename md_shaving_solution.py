@@ -43,14 +43,14 @@ from battery_algorithms import (
 )
 
 
-def create_conditional_demand_line_with_peak_logic(fig, df, power_col, target_demand, trace_name="Original Demand"):
+def create_conditional_demand_line_with_peak_logic(fig, df, power_col, target_demand, selected_tariff=None, holidays=None, trace_name="Original Demand"):
     """
-    Enhanced conditional coloring logic for Original Demand line with RP4 peak period logic.
+    Enhanced conditional coloring logic for Original Demand line with dynamic RP4 peak period logic.
     Creates continuous line segments with different colors based on conditions.
     
     Color Logic:
-    - Red: Above target during RP4 Peak Periods (Mon-Fri 2PM-10PM, excluding Malaysia holidays) - Direct MD cost impact
-    - Green: Above target during Off-Peak Periods (nights, weekends, Malaysia holidays) - No MD cost impact  
+    - Red: Above target during Peak Periods (based on selected tariff) - Direct MD cost impact
+    - Green: Above target during Off-Peak Periods - No MD cost impact  
     - Blue: Below target (any time) - Within acceptable limits
     """
     # Convert index to datetime if it's not already
@@ -68,8 +68,12 @@ def create_conditional_demand_line_with_peak_logic(fig, df, power_col, target_de
         timestamp = df_copy.index[i]
         demand_value = df_copy.iloc[i][power_col]
         
-        # Classify peak period using enhanced Malaysia holidays logic
-        period_type = get_period_classification(timestamp)
+        # Get peak period classification based on selected tariff
+        if selected_tariff:
+            period_type = get_tariff_period_classification(timestamp, selected_tariff, holidays)
+        else:
+            # Fallback to default RP4 logic
+            period_type = get_period_classification(timestamp, holidays)
         
         if demand_value > target_demand:
             if period_type == 'Peak':
@@ -111,13 +115,28 @@ def create_conditional_demand_line_with_peak_logic(fig, df, power_col, target_de
             segment_x.append(x_data[j])
             segment_y.append(y_data[j])
         
-        # Determine trace name based on color
+        # Determine trace name based on color and tariff type
+        tariff_description = _get_tariff_description(selected_tariff) if selected_tariff else "RP4 Peak Period"
+        
+        # Check if it's a TOU tariff for enhanced hover info
+        is_tou = False
+        if selected_tariff:
+            tariff_type = selected_tariff.get('Type', '').lower()
+            tariff_name = selected_tariff.get('Tariff', '').lower()
+            is_tou = tariff_type == 'tou' or 'tou' in tariff_name
+        
         if current_color == 'red':
-            segment_name = f'{trace_name} (Above Target - Peak Period)'
-            hover_info = '<b>Above Target - Peak Period</b><br><i>MD Cost Impact</i>'
+            segment_name = f'{trace_name} (Above Target - {tariff_description})'
+            if is_tou:
+                hover_info = f'<b>Above Target - TOU Peak Rate Period</b><br><i>High Energy Cost + MD Cost Impact</i>'
+            else:
+                hover_info = f'<b>Above Target - General Tariff</b><br><i>MD Cost Impact Only (Flat Energy Rate)</i>'
         elif current_color == 'green':
             segment_name = f'{trace_name} (Above Target - Off-Peak)'
-            hover_info = '<b>Above Target - Off-Peak</b><br><i>No MD Cost Impact</i>'
+            if is_tou:
+                hover_info = '<b>Above Target - TOU Off-Peak</b><br><i>Low Energy Cost, No MD Impact</i>'
+            else:
+                hover_info = '<b>Above Target - General Tariff</b><br><i>This should not appear for General tariffs</i>'
         else:  # blue
             segment_name = f'{trace_name} (Below Target)'
             hover_info = '<b>Below Target</b><br><i>Within Acceptable Limits</i>'
@@ -560,24 +579,50 @@ def _configure_holidays(df, timestamp_col):
             if not df_temp.empty:
                 min_date = df_temp["Parsed Timestamp"].min().date()
                 max_date = df_temp["Parsed Timestamp"].max().date()
-                unique_dates = pd.date_range(min_date, max_date).date
                 
-                holiday_options = [d.strftime('%A, %d %B %Y') for d in unique_dates]
-                selected_labels = st.multiselect(
-                    "Select public holidays:",
-                    options=holiday_options,
-                    default=[],
-                    help="Pick all public holidays in the data period",
-                    key="md_holidays"
+                # Add TNB holidays option
+                holiday_mode = st.radio(
+                    "Holiday Configuration:",
+                    ["Auto: TNB Official Holidays", "Manual: Select Dates"],
+                    index=0,
+                    help="Choose TNB's 15 official holidays or manually select",
+                    key="md_holiday_mode"
                 )
                 
-                # Map back to date objects
-                label_to_date = {d.strftime('%A, %d %B %Y'): d for d in unique_dates}
-                selected_holidays = [label_to_date[label] for label in selected_labels]
-                holidays = set(selected_holidays)
-                
-                st.info(f"Selected {len(holidays)} holidays")
-                return holidays
+                if holiday_mode == "Auto: TNB Official Holidays":
+                    tnb_holidays = get_tnb_holidays_2024_2025()
+                    # Filter to data range
+                    tnb_holidays = {h for h in tnb_holidays if min_date <= h <= max_date}
+                    st.success(f"✅ **TNB holidays**: {len(tnb_holidays)} official holidays applied")
+                    
+                    # Show the holidays in an expander
+                    with st.expander("📅 View TNB Official Holidays", expanded=False):
+                        if tnb_holidays:
+                            holiday_list = sorted(list(tnb_holidays))
+                            for holiday in holiday_list:
+                                st.write(f"• {holiday.strftime('%A, %d %B %Y')}")
+                        else:
+                            st.write("No TNB holidays found in your data period")
+                    
+                    return tnb_holidays
+                else:
+                    # Original manual selection code
+                    unique_dates = pd.date_range(min_date, max_date).date
+                    holiday_options = [d.strftime('%A, %d %B %Y') for d in unique_dates]
+                    selected_labels = st.multiselect(
+                        "Select public holidays:",
+                        options=holiday_options,
+                        default=[],
+                        help="Pick all public holidays in the data period",
+                        key="md_holidays"
+                    )
+                    
+                    # Map back to date objects
+                    label_to_date = {d.strftime('%A, %d %B %Y'): d for d in unique_dates}
+                    selected_holidays = [label_to_date[label] for label in selected_labels]
+                    holidays = set(selected_holidays)
+                    st.info(f"Selected {len(holidays)} holidays manually")
+                    return holidays
         except Exception as e:
             st.warning(f"Error processing dates: {e}")
     
@@ -645,7 +690,16 @@ def _configure_tariff_selection():
     
     if selected_tariff:
         # Display tariff info
+        tariff_type = selected_tariff.get('Type', '').lower()
+        is_tou = tariff_type == 'tou' or 'tou' in selected_tariff.get('Tariff', '').lower()
+        
         st.info(f"**Selected:** {selected_user_type} > {selected_tariff_group} > {selected_tariff_name}")
+        
+        # Show tariff type and peak period logic
+        if is_tou:
+            st.success("🎯 **TOU Tariff Detected**: Chart colors will reflect TOU peak periods (2PM-10PM weekdays)")
+        else:
+            st.info("📊 **General Tariff Detected**: Chart colors will reflect MD recording periods (2PM-10PM weekdays)")
         
         # Show MD rates
         capacity_rate = selected_tariff.get('Rates', {}).get('Capacity Rate', 0)
@@ -693,13 +747,40 @@ def _perform_md_shaving_analysis(df, power_col, selected_tariff, holidays, targe
     # Detect data interval
     interval_hours = _detect_data_interval(df)
     
-    # Display MD peak hours information
+    # Display MD peak hours information with tariff-specific color logic
     st.subheader("🎯 MD Shaving Analysis")
-    st.info("""
-    **RP4 Maximum Demand (MD) Peak Hours:**
+    
+    # Get tariff type for color explanation
+    tariff_type = selected_tariff.get('Type', '').lower()
+    tariff_name = selected_tariff.get('Tariff', '')
+    is_tou_tariff = tariff_type == 'tou' or 'tou' in tariff_name.lower()
+    
+    if is_tou_tariff:
+        color_explanation = """
+    **📈 Chart Color Legend (TOU Tariff):**
+    - 🔴 **Red**: Above target during TOU peak rate hours (2PM-10PM weekdays) → **High energy cost + MD charges**
+    - 🟢 **Green**: Above target during TOU off-peak hours → **Low energy cost, no MD charges**  
+    - 🔵 **Blue**: Below target (any time) → **Within acceptable limits**
+    
+    **TOU Impact:** Red periods have DOUBLE financial impact (energy + MD)
+        """
+    else:
+        color_explanation = """
+    **📈 Chart Color Legend (General Tariff):**
+    - 🔴 **Red**: Above target (any time) → **MD charges apply (flat energy rate 24/7)**
+    - 🟢 **Green**: N/A (no off-peak concept in general tariffs)
+    - 🔵 **Blue**: Below target (any time) → **Within acceptable limits**
+    
+    **General Tariff:** Red periods affect MD charges only (flat energy rate applies 24/7)
+        """
+    
+    st.info(f"""
+    **RP4 Maximum Demand (MD) Peak Hours & Chart Color Logic:**
     - **Peak Period:** Monday to Friday, **2:00 PM to 10:00 PM** (14:00-22:00)
     - **Off-Peak Period:** All other times including weekends and public holidays
     - **MD Calculation:** Maximum demand recorded during peak periods only
+
+{color_explanation}
     """)
     
     # Get MD rate from tariff
@@ -762,7 +843,7 @@ def _perform_md_shaving_analysis(df, power_col, selected_tariff, holidays, targe
         # Display peak event results
         _display_peak_event_results(df, power_col, event_summaries, target_demand, 
                                    total_md_rate, overall_max_demand, interval_hours, 
-                                   event_filter, show_detailed_analysis)
+                                   event_filter, show_detailed_analysis, selected_tariff, holidays)
         
         if show_threshold_sensitivity:
             # Display threshold sensitivity analysis
@@ -782,7 +863,7 @@ def _perform_md_shaving_analysis(df, power_col, selected_tariff, holidays, targe
         )
         
         # Display battery results
-        _display_battery_analysis(battery_analysis, battery_params, target_demand, max_md_cost_impact)
+        _display_battery_analysis(battery_analysis, battery_params, target_demand, max_md_cost_impact, selected_tariff, holidays)
         
     else:
         st.success("🎉 No peak events detected above target demand!")
@@ -894,7 +975,8 @@ def _filter_events_by_period(event_summaries, filter_type):
 
 
 def _display_peak_event_results(df, power_col, event_summaries, target_demand, total_md_rate, 
-                               overall_max_demand, interval_hours, event_filter, show_detailed_analysis):
+                               overall_max_demand, interval_hours, event_filter, show_detailed_analysis, 
+                               selected_tariff=None, holidays=None):
     """Display peak event detection results and analysis."""
     
     st.subheader("⚡ Peak Event Detection Results")
@@ -935,23 +1017,23 @@ def _display_peak_event_results(df, power_col, event_summaries, target_demand, t
     """)
     
     # Visualization of events
-    _display_peak_events_chart(df, power_col, filtered_events, target_demand)
+    _display_peak_events_chart(df, power_col, filtered_events, target_demand, selected_tariff, holidays)
     
     if show_detailed_analysis:
         # Peak Event Summary & Analysis
         _display_peak_event_analysis(filtered_events, total_md_rate)
 
 
-def _display_peak_events_chart(df, power_col, event_summaries, target_demand):
+def _display_peak_events_chart(df, power_col, event_summaries, target_demand, selected_tariff=None, holidays=None):
     """Display peak events visualization chart."""
     st.subheader("📈 Peak Events Timeline")
     
     # Create the main power consumption chart
     fig_events = go.Figure()
     
-    # Add enhanced conditional coloring for power consumption line
+    # Add enhanced conditional coloring for power consumption line with tariff-specific logic
     fig_events = create_conditional_demand_line_with_peak_logic(
-        fig_events, df, power_col, target_demand, trace_name="Power Consumption"
+        fig_events, df, power_col, target_demand, selected_tariff, holidays, trace_name="Power Consumption"
     )
     
     # Add target demand line
@@ -1681,6 +1763,7 @@ def _simulate_battery_operation(df, power_col, target_demand, battery_sizing, ba
             
             # Enhanced charging logic with better conditions and SOC awareness
             current_time = df_sim.index[i]
+
             hour = current_time.hour
             soc_percentage = (soc[i] / usable_capacity) * 100
             
@@ -1923,7 +2006,7 @@ def _calculate_irr_approximation(cash_flows):
         return None
 
 
-def _display_battery_analysis(battery_analysis, battery_params, target_demand, max_md_cost_impact=None):
+def _display_battery_analysis(battery_analysis, battery_params, target_demand, max_md_cost_impact=None, selected_tariff=None, holidays=None):
     """Display comprehensive battery analysis results."""
     
     sizing = battery_analysis['sizing']
@@ -2012,13 +2095,10 @@ def _display_battery_analysis(battery_analysis, battery_params, target_demand, m
     
     # Battery Operation Visualization
     st.markdown("#### 🔋 Battery Operation Simulation")
-    _display_battery_simulation_chart(simulation['df_simulation'], target_demand, sizing)
-    
-    # Charging/Discharging Analysis
-    _display_charging_analysis(simulation)
+    _display_battery_simulation_chart(simulation['df_simulation'], target_demand, sizing, selected_tariff, holidays)
 
 
-def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None):
+def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None, selected_tariff=None, holidays=None):
     """Display enhanced battery operation simulation chart with integrated charge/discharge visualization."""
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
@@ -2049,7 +2129,8 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None):
     
     # Enhanced conditional coloring for Original Demand line
     fig = create_conditional_demand_line_with_peak_logic(
-        fig, df_sim, 'Original_Demand', target_demand, trace_name="Original Demand"
+        fig, df_sim, 'Original_Demand', target_demand, trace_name="Original Demand",
+        selected_tariff=selected_tariff, holidays=holidays
     )
     
     # Other demand lines
@@ -2099,7 +2180,6 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None):
             yaxis='y2'
         ))
     
-    # Update layout for dual y-axes
     fig.update_layout(
         title='🎯 MD Shaving Effectiveness: Demand vs Battery vs Target',
         xaxis_title='Time',
@@ -2460,7 +2540,10 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None):
             ).fillna(0)
             
             daily_analysis_energy['Daily_Energy_Discharged_kWh'] = daily_analysis_energy['Daily_Battery_Discharge_kWh']
-        
+        else:
+            st.warning("No MD peak period data available for energy analysis.")
+            return
+    
         # Sort by date for cumulative calculation
         daily_analysis_energy = daily_analysis_energy.sort_values('Date').reset_index(drop=True)
         
@@ -2616,82 +2699,125 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None):
         st.info(insight)
 
 
-def _display_charging_analysis(simulation_results):
-    """Display detailed charging vs discharging analysis."""
-    df_sim = simulation_results['df_simulation']
+def get_tnb_holidays_2024_2025():
+    """Get TNB's 15 official public holidays for 2024-2025."""
+    import datetime
     
-    st.markdown("##### 🔋 Battery Charging/Discharging Analysis")
+    holidays_2024 = [
+        datetime.date(2024, 1, 1),   # New Year
+        datetime.date(2024, 2, 10),  # CNY Day 1
+        datetime.date(2024, 2, 11),  # CNY Day 2
+        datetime.date(2024, 4, 10),  # Aidil Fitri 1
+        datetime.date(2024, 4, 11),  # Aidil Fitri 2
+        datetime.date(2024, 5, 1),   # Labour Day
+        datetime.date(2024, 5, 22),  # Vesak Day
+        datetime.date(2024, 6, 3),   # Agong Birthday
+        datetime.date(2024, 6, 17),  # Aidil Adha
+        datetime.date(2024, 7, 7),   # Awal Muharram
+        datetime.date(2024, 8, 31),  # National Day
+        datetime.date(2024, 9, 15),  # Maulidur Rasul
+        datetime.date(2024, 9, 16),  # Malaysia Day
+        datetime.date(2024, 11, 1),  # Deepavali
+        datetime.date(2024, 12, 25), # Christmas
+    ]
     
-    # Calculate detailed metrics
-    charging_intervals = df_sim['Battery_Power_kW'] < 0
-    discharging_intervals = df_sim['Battery_Power_kW'] > 0
-    idle_intervals = df_sim['Battery_Power_kW'] == 0
+    holidays_2025 = [
+        datetime.date(2025, 1, 1),   # New Year
+        datetime.date(2025, 1, 29),  # CNY Day 1
+        datetime.date(2025, 1, 30),  # CNY Day 2
+        datetime.date(2025, 3, 31),  # Aidil Fitri 1 (est)
+        datetime.date(2025, 4, 1),   # Aidil Fitri 2 (est)
+        datetime.date(2025, 5, 1),   # Labour Day
+        datetime.date(2025, 5, 12),  # Vesak Day (est)
+        datetime.date(2025, 6, 2),   # Agong Birthday (est)
+        datetime.date(2025, 6, 7),   # Aidil Adha (est)
+        datetime.date(2025, 6, 27),  # Awal Muharram (est)
+        datetime.date(2025, 8, 31),  # National Day
+        datetime.date(2025, 9, 5),   # Maulidur Rasul (est)
+        datetime.date(2025, 9, 16),  # Malaysia Day
+        datetime.date(2025, 10, 20), # Deepavali (est)
+        datetime.date(2025, 12, 25), # Christmas
+    ]
     
-    total_energy_charged = simulation_results.get('total_energy_charged', 0)
-    total_energy_discharged = simulation_results.get('total_energy_discharged', 0)
+    return set(holidays_2024 + holidays_2025)
+
+
+def get_tariff_period_classification(timestamp, selected_tariff, holidays=None):
+    """
+    Get period classification (Peak/Off-Peak) based on selected tariff configuration.
+    Returns 'Peak' or 'Off-Peak' based on tariff-specific time bands.
+    """
+    # Handle holidays first
+    if holidays and timestamp.date() in holidays:
+        # For holidays, behavior depends on tariff type
+        tariff_type = selected_tariff.get('Type', '').lower()
+        tariff_name = selected_tariff.get('Tariff', '').lower()
+        is_tou_tariff = tariff_type == 'tou' or 'tou' in tariff_name
+        
+        if is_tou_tariff:
+            return 'Off-Peak'  # TOU tariffs have off-peak rates on holidays
+        else:
+            return 'Peak'  # General tariffs: always Peak (MD charges apply)
     
-    charging_count = len(df_sim[charging_intervals])
-    discharging_count = len(df_sim[discharging_intervals])
-    idle_count = len(df_sim[idle_intervals])
-    total_intervals = len(df_sim)
+    # Get tariff type
+    tariff_name = selected_tariff.get('Tariff', '').lower()
+    tariff_type = selected_tariff.get('Type', '').lower()
     
-    # Display metrics in columns
-    col1, col2, col3, col4 = st.columns(4)
+    # Check if it's a TOU (Time of Use) tariff
+    is_tou_tariff = tariff_type == 'tou' or 'tou' in tariff_name
     
-    with col1:
-        st.metric("Charging Intervals", f"{charging_count}")
-        st.metric("Charging %", f"{(charging_count/total_intervals*100):.1f}%")
-    
-    with col2:
-        st.metric("Discharging Intervals", f"{discharging_count}")
-        st.metric("Discharging %", f"{(discharging_count/total_intervals*100):.1f}%")
-    
-    with col3:
-        st.metric("Idle Intervals", f"{idle_count}")
-        st.metric("Idle %", f"{(idle_count/total_intervals*100):.1f}%")
-    
-    with col4:
-        st.metric("Energy Charged", f"{total_energy_charged:.1f} kWh")
-        st.metric("Energy Discharged", f"{total_energy_discharged:.1f} kWh")
-    
-    # Charging efficiency and balance
-    if total_energy_discharged > 0:
-        charge_efficiency = (total_energy_charged / total_energy_discharged) * 100
-        st.metric("Charge/Discharge Ratio", f"{charge_efficiency:.1f}%")
-    
-    # Analysis and recommendations
-    if charging_count == 0:
-        st.error("⚠️ **No Charging Detected!** The battery is not charging at all. This will lead to SOC depletion.")
-    elif charging_count < discharging_count * 0.5:
-        st.warning(f"⚠️ **Insufficient Charging**: Only {charging_count} charging intervals vs {discharging_count} discharging intervals. Consider relaxing charging conditions.")
-    elif total_energy_charged < total_energy_discharged * 0.8:
-        st.warning(f"⚠️ **Energy Imbalance**: Charging {total_energy_charged:.1f} kWh vs discharging {total_energy_discharged:.1f} kWh. Battery may become depleted over time.")
+    if is_tou_tariff:
+        # For TOU tariffs, use time-based classification (peak vs off-peak rates)
+        return _classify_tou_tariff_periods(timestamp)
     else:
-        st.success("✅ **Good Charging Balance**: Battery has adequate charging opportunities.")
+        # For General tariffs, there's no peak/off-peak pricing
+        # MD charges apply 24/7, so everything is "Peak" for visualization purposes
+        return _classify_general_tariff_periods(timestamp)
+
+
+def _classify_tou_tariff_periods(timestamp):
+    """
+    TOU Tariff Logic: Based on electricity pricing periods
+    - Peak = High electricity rate periods (2PM-10PM weekdays)
+    - Off-Peak = Low electricity rate periods (all other times)
+    """
+    hour = timestamp.hour
+    weekday = timestamp.weekday()
     
-    # Show charging pattern analysis
-    if charging_count > 0:
-        with st.expander("🔍 Detailed Charging Pattern Analysis"):
-            # Group charging intervals by hour to show time distribution
-            df_charging = df_sim[charging_intervals].copy()
-            df_charging['Hour'] = df_charging.index.hour
-            charging_by_hour = df_charging.groupby('Hour').size()
-            
-            st.markdown("**Charging Activity by Hour:**")
-            for hour in range(24):
-                count = charging_by_hour.get(hour, 0)
-                if count > 0:
-                    st.write(f"• **{hour:02d}:00-{hour:02d}:59**: {count} intervals ({count/charging_count*100:.1f}% of total charging)")
-            
-            # Show average charging power and SOC during charging
-            avg_charge_power = df_charging['Battery_Power_kW'].abs().mean()
-            avg_soc_during_charge = df_charging['Battery_SOC_Percent'].mean()
-            
-            col1, col2 = st.columns(2)
-            col1.metric("Avg Charging Power", f"{avg_charge_power:.1f} kW")
-            col2.metric("Avg SOC During Charging", f"{avg_soc_during_charge:.1f}%")
+    # TOU Peak Hours: When electricity rates are highest
+    # Standard RP4 TOU: 2PM-10PM weekdays
+    if weekday < 5 and 14 <= hour < 22:
+        return 'Peak'  # High energy rate + MD recording
+    else:
+        return 'Off-Peak'  # Low energy rate
 
 
-# ============================================================================
-# END OF MODULE
-# ============================================================================
+def _classify_general_tariff_periods(timestamp):
+    """
+    General Tariff Logic: No time-based pricing, but MD still applies
+    - Peak = Always (MD charges apply 24/7 on flat rate)
+    - Off-Peak = Never (no concept of off-peak in general tariffs)
+    
+    For visualization: everything above target should be red since MD charges
+    apply regardless of time under flat rate pricing.
+    """
+    # For General tariffs, there's no time-based pricing distinction
+    # MD charges apply whenever demand exceeds previous maximum
+    # So for visualization purposes, everything is "Peak" 
+    return 'Peak'
+
+
+def _get_tariff_description(selected_tariff):
+    """
+    Get a descriptive text for the tariff peak period.
+    """
+    if not selected_tariff:
+        return "Peak Period"
+    
+    tariff_name = selected_tariff.get('Tariff', '')
+    tariff_type = selected_tariff.get('Type', '').lower()
+    
+    if tariff_type == 'tou' or 'tou' in tariff_name.lower():
+        return "TOU Peak Rate Period (2PM-10PM weekdays)"
+    else:
+        return "General Tariff - MD Applies 24/7"
