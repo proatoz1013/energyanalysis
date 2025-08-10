@@ -75,7 +75,7 @@ def test_enhanced_battery_algorithm():
         
         # Run simulation
         results = battery_alg.simulate_battery_operation(
-            df, 'demand_kw', target_demand, battery_sizing, battery_params, interval_hours
+            df, 'demand_kw', target_demand, battery_sizing, battery_params, interval_hours, selected_tariff=None
         )
         
         print(f"\n📋 Algorithm Test Results:")

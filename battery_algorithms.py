@@ -235,23 +235,28 @@ class BatteryAlgorithms:
             'cost_per_kw': total_capex / power_kw
         }
     
-    def simulate_battery_operation(self, df, power_col, target_demand, battery_sizing, battery_params, interval_hours):
+    def simulate_battery_operation(self, df, power_col, target_demand, battery_sizing, battery_params, interval_hours, selected_tariff=None):
         """
-        ★ ENHANCED BATTERY ALGORITHM: RP4 Peak-Period-Only Discharge Strategy ★
+        ★ ENHANCED BATTERY ALGORITHM: Tariff-Aware Discharge Strategy ★
         
-        This method implements strict RP4 peak-period-only discharge logic that:
-        - Only discharges during RP4 peak periods (Mon-Fri 2PM-10PM, excluding holidays)
+        This method implements tariff-aware discharge logic that:
+        - General Tariff: Discharges ALL THE TIME when demand exceeds target (24/7 capability)
+        - TOU Tariff: Only discharges during RP4 peak periods (Mon-Fri 2PM-10PM, excluding holidays)
         - Validates all discharge events against Malaysia holidays
         - Provides compliance monitoring and violation detection
-        - Implements smart charging during off-peak periods
-        - Ensures zero off-peak discharge violations
+        - Implements smart charging during appropriate periods
         """
         
         # Import peak logic for RP4 period checking
         from tariffs.peak_logic import get_malaysia_holidays, is_peak_rp4, detect_holidays_from_data
         
-        # Import peak logic for RP4 period checking
-        from tariffs.peak_logic import get_malaysia_holidays, is_peak_rp4, detect_holidays_from_data
+        # Import tariff classification logic
+        from md_shaving_solution import get_tariff_period_classification
+        
+        # ★ STEP 1: DETERMINE TARIFF TYPE ★
+        tariff_type = selected_tariff.get('Type', '').lower() if selected_tariff else 'general'
+        tariff_name = selected_tariff.get('Tariff', '').lower() if selected_tariff else ''
+        is_tou_tariff = tariff_type == 'tou' or 'tou' in tariff_name
         
         # Create simulation dataframe
         df_sim = df[[power_col]].copy()
@@ -259,20 +264,26 @@ class BatteryAlgorithms:
         df_sim['Target_Demand'] = target_demand
         df_sim['Excess_Demand'] = (df_sim[power_col] - target_demand).clip(lower=0)
         
-        # ★ STEP 1: AUTO-DETECT HOLIDAYS FROM DATA ★
+        # ★ STEP 2: AUTO-DETECT HOLIDAYS FROM DATA ★
         try:
             holidays = detect_holidays_from_data(df, df.index.name or 'timestamp')
         except:
             # Fallback to 2025 holidays if auto-detection fails
             holidays = get_malaysia_holidays(2025)
         
-        # ★ STEP 2: ADD RP4 PERIOD CLASSIFICATION ★
-        df_sim['Is_RP4_Peak'] = df_sim.index.to_series().apply(lambda ts: is_peak_rp4(ts, holidays))
+        # ★ STEP 3: ADD TARIFF-AWARE PERIOD CLASSIFICATION ★
+        if is_tou_tariff:
+            # TOU Tariff: Use RP4 peak period logic (2PM-10PM weekdays)
+            df_sim['Is_Peak_Period'] = df_sim.index.to_series().apply(lambda ts: is_peak_rp4(ts, holidays))
+            df_sim['Is_RP4_Peak'] = df_sim['Is_Peak_Period']  # Backwards compatibility
+        else:
+            # General Tariff: All periods allow discharge (24/7 capability)
+            df_sim['Is_Peak_Period'] = pd.Series(True, index=df_sim.index)
+            df_sim['Is_RP4_Peak'] = df_sim['Is_Peak_Period']  # Backwards compatibility
         
-        # ★ STEP 3: COMPLIANCE TRACKING FOR VALIDATION ★
+        # ★ STEP 4: COMPLIANCE TRACKING FOR VALIDATION ★
         discharge_violations = []
         potential_violations = []
-        
         
         # Battery state variables
         battery_capacity = battery_sizing['capacity_kwh']
@@ -286,49 +297,60 @@ class BatteryAlgorithms:
         battery_power = np.zeros(len(df_sim))  # Positive = discharge, Negative = charge
         net_demand = df_sim[power_col].copy()
         
-        # ★ ENHANCED BATTERY OPERATION: STRICT RP4 PEAK-PERIOD-ONLY DISCHARGE ★
+        # ★ ENHANCED BATTERY OPERATION: TARIFF-AWARE DISCHARGE STRATEGY ★
         initial_soc = usable_capacity * 0.8  # Start at 80% SOC
         
         for i in range(len(df_sim)):
             current_demand = df_sim[power_col].iloc[i]
             current_time = df_sim.index[i]
             excess = max(0, current_demand - target_demand)
-            is_rp4_peak = df_sim['Is_RP4_Peak'].iloc[i]
+            is_peak_period = df_sim['Is_Peak_Period'].iloc[i]
             
             # Determine previous SOC
             previous_soc = initial_soc if i == 0 else soc[i-1]
             
-            # ★ CRITICAL DECISION LOGIC: PEAK-PERIOD-ONLY DISCHARGE ★
-            if excess > 0 and is_rp4_peak:
-                # ✅ COMPLIANT DISCHARGE: RP4 Peak Period + Peak Event
-                battery_action = self._calculate_discharge_action(
-                    excess, previous_soc, max_power, interval_hours
-                )
-                soc[i] = previous_soc - battery_action * interval_hours
-                battery_power[i] = battery_action
-                net_demand.iloc[i] = current_demand - battery_action
-                
-            elif excess > 0 and not is_rp4_peak:
-                # ❌ VIOLATION PREVENTION: Peak Event but Off-Peak Period
-                potential_violations.append({
-                    'timestamp': current_time,
-                    'demand': current_demand,
-                    'target': target_demand,
-                    'excess': excess,
-                    'period_type': 'Off-Peak',
-                    'weekday': current_time.strftime('%A'),
-                    'hour': current_time.hour
-                })
-                # NO DISCHARGE - Let demand exceed target during off-peak
-                soc[i] = previous_soc
-                battery_power[i] = 0
-                net_demand.iloc[i] = current_demand
-                
+            # ★ CRITICAL DECISION LOGIC: TARIFF-AWARE DISCHARGE ★
+            if excess > 0:
+                if is_tou_tariff:
+                    # TOU Tariff: Only discharge during RP4 peak periods (2PM-10PM weekdays)
+                    if is_peak_period:
+                        # ✅ COMPLIANT DISCHARGE: TOU Peak Period + Peak Event
+                        battery_action = self._calculate_discharge_action(
+                            excess, previous_soc, max_power, interval_hours
+                        )
+                        soc[i] = previous_soc - battery_action * interval_hours
+                        battery_power[i] = battery_action
+                        net_demand.iloc[i] = current_demand - battery_action
+                    else:
+                        # ❌ VIOLATION PREVENTION: Peak Event but TOU Off-Peak Period
+                        potential_violations.append({
+                            'timestamp': current_time,
+                            'demand': current_demand,
+                            'target': target_demand,
+                            'excess': excess,
+                            'period_type': 'TOU Off-Peak',
+                            'weekday': current_time.strftime('%A'),
+                            'hour': current_time.hour,
+                            'tariff_type': 'TOU'
+                        })
+                        # NO DISCHARGE - Let demand exceed target during TOU off-peak
+                        soc[i] = previous_soc
+                        battery_power[i] = 0
+                        net_demand.iloc[i] = current_demand
+                else:
+                    # General Tariff: Discharge ANYTIME when demand exceeds target (24/7 capability)
+                    # ✅ COMPLIANT DISCHARGE: General tariff allows discharge at all times
+                    battery_action = self._calculate_discharge_action(
+                        excess, previous_soc, max_power, interval_hours
+                    )
+                    soc[i] = previous_soc - battery_action * interval_hours
+                    battery_power[i] = battery_action
+                    net_demand.iloc[i] = current_demand - battery_action
             else:
-                # ⚡ ENHANCED CHARGING LOGIC: Smart Off-Peak Charging
+                # ⚡ ENHANCED CHARGING LOGIC: Smart Charging Strategy
                 battery_action = self._calculate_enhanced_charge_action(
                     current_demand, previous_soc, max_power, usable_capacity,
-                    efficiency, interval_hours, df_sim, i, is_rp4_peak
+                    efficiency, interval_hours, df_sim, i, is_peak_period
                 )
                 soc[i] = previous_soc + battery_action * interval_hours * efficiency
                 battery_power[i] = -battery_action  # Negative for charging
@@ -338,7 +360,6 @@ class BatteryAlgorithms:
             soc[i] = max(0, min(soc[i], usable_capacity))
             soc_percent[i] = (soc[i] / usable_capacity) * 100
         
-        
         # Add simulation results to dataframe
         df_sim['Battery_Power_kW'] = battery_power
         df_sim['Battery_SOC_kWh'] = soc
@@ -346,8 +367,11 @@ class BatteryAlgorithms:
         df_sim['Net_Demand_kW'] = net_demand
         df_sim['Peak_Shaved'] = df_sim['Original_Demand'] - df_sim['Net_Demand_kW']
         
+        # Add tariff-aware period classification for visualization
+        df_sim['Is_Tariff_Peak'] = df_sim['Is_Peak_Period']
+        
         # ★ POST-SIMULATION VALIDATION ★
-        validation_results = self._validate_peak_period_compliance(df_sim, potential_violations, holidays)
+        validation_results = self._validate_tariff_compliance(df_sim, potential_violations, holidays, is_tou_tariff)
         
         # Calculate enhanced performance metrics with compliance data
         simulation_metrics = self._calculate_simulation_metrics(df_sim, target_demand, soc_percent)
@@ -357,8 +381,12 @@ class BatteryAlgorithms:
             'validation_results': validation_results,
             'discharge_violations': potential_violations,
             'holidays_used': len(holidays),
-            'rp4_peak_periods': len(df_sim[df_sim['Is_RP4_Peak']]),
-            'off_peak_periods': len(df_sim[~df_sim['Is_RP4_Peak']])
+            'tariff_type': 'TOU' if is_tou_tariff else 'General',
+            'peak_periods': len(df_sim[df_sim['Is_Peak_Period']]),
+            'off_peak_periods': len(df_sim[~df_sim['Is_Peak_Period']]),
+            # Backwards compatibility
+            'rp4_peak_periods': len(df_sim[df_sim['Is_Peak_Period']]),
+            'off_peak_periods': len(df_sim[~df_sim['Is_Peak_Period']])
         })
         
         return simulation_metrics
@@ -456,7 +484,7 @@ class BatteryAlgorithms:
         return max(0, base_charge_power)
     
     def _calculate_enhanced_charge_action(self, current_demand, previous_soc, max_power, 
-                                          usable_capacity, efficiency, interval_hours, df_sim, i, is_rp4_peak):
+                                          usable_capacity, efficiency, interval_hours, df_sim, i, is_peak_period):
         """
         ★ ENHANCED CHARGING LOGIC: RP4-Aware Smart Charging ★
         
@@ -487,7 +515,7 @@ class BatteryAlgorithms:
             avg_demand = df_sim['Original_Demand'].mean()
             demand_25th = avg_demand * 0.6
         
-        # ★ RP4-AWARE CHARGING STRATEGY ★
+        # ★ PERIOD-AWARE CHARGING STRATEGY ★
         should_charge = False
         charge_rate_factor = 0.3  # Default conservative rate
         
@@ -498,7 +526,7 @@ class BatteryAlgorithms:
             
         # Low SOC - prioritize charging during off-peak
         elif soc_percentage < 50:
-            if not is_rp4_peak:  # Off-peak hours - charge aggressively
+            if not is_peak_period:  # Off-peak hours - charge aggressively
                 should_charge = current_demand < avg_demand * 0.85
                 charge_rate_factor = 0.7
             else:  # Peak hours - only charge during very low demand
@@ -507,7 +535,7 @@ class BatteryAlgorithms:
                 
         # Normal SOC - conservative charging, prioritize off-peak
         elif soc_percentage < 80:
-            if not is_rp4_peak:  # Off-peak hours
+            if not is_peak_period:  # Off-peak hours
                 should_charge = current_demand < avg_demand * 0.75
                 charge_rate_factor = 0.6
             else:  # Peak hours - very selective
@@ -516,7 +544,7 @@ class BatteryAlgorithms:
         
         # High SOC - minimal charging, off-peak only
         else:
-            if not is_rp4_peak and current_demand < demand_25th * 0.7:
+            if not is_peak_period and current_demand < demand_25th * 0.7:
                 should_charge = True
                 charge_rate_factor = 0.3
         
@@ -697,11 +725,11 @@ class BatteryAlgorithms:
         modified_params = battery_params.copy()
         modified_params['depth_of_discharge'] = min(80, battery_params['depth_of_discharge'])  # Max 80% DoD
         
-        return self.simulate_battery_operation(df, power_col, target_demand, battery_sizing, modified_params, interval_hours)
+        return self.simulate_battery_operation(df, power_col, target_demand, battery_sizing, modified_params, interval_hours, selected_tariff=None)
     
     def _balanced_optimization(self, df, power_col, target_demand, battery_sizing, battery_params, interval_hours):
         """Balanced battery operation - standard operation parameters."""
-        return self.simulate_battery_operation(df, power_col, target_demand, battery_sizing, battery_params, interval_hours)
+        return self.simulate_battery_operation(df, power_col, target_demand, battery_sizing, battery_params, interval_hours, selected_tariff=None)
     
     def _aggressive_optimization(self, df, power_col, target_demand, battery_sizing, battery_params, interval_hours):
         """Aggressive battery operation - maximize MD savings with higher utilization."""
@@ -710,37 +738,54 @@ class BatteryAlgorithms:
         modified_params = battery_params.copy()
         modified_params['depth_of_discharge'] = min(95, battery_params['depth_of_discharge'] + 5)  # Increase DoD by 5%
         
-        return self.simulate_battery_operation(df, power_col, target_demand, battery_sizing, modified_params, interval_hours)
+        return self.simulate_battery_operation(df, power_col, target_demand, battery_sizing, modified_params, interval_hours, selected_tariff=None)
     
-    def _validate_peak_period_compliance(self, df_sim, potential_violations, holidays):
+    def _validate_tariff_compliance(self, df_sim, potential_violations, holidays, is_tou_tariff):
         """
-        ★ COMPLIANCE VALIDATION: RP4 Peak-Period-Only Discharge Verification ★
+        ★ COMPLIANCE VALIDATION: Tariff-Aware Discharge Verification ★
         
-        This function validates that battery discharge only occurs during RP4 peak periods:
-        - Counts total discharge events
-        - Separates compliant vs violation discharges
-        - Calculates compliance rates and energy breakdowns
-        - Provides detailed violation reporting
+        This function validates that battery discharge occurs according to tariff rules:
+        - TOU Tariff: Discharge only during peak periods (Mon-Fri 2PM-10PM, excluding holidays)
+        - General Tariff: Discharge allowed anytime when demand exceeds target (24/7)
+        
+        Args:
+            df_sim: Simulation results dataframe
+            potential_violations: List of periods where demand exceeded target but battery didn't discharge
+            holidays: List of holiday dates
+            is_tou_tariff: Boolean indicating if this is a TOU tariff
+            
+        Returns:
+            Dictionary with compliance analysis results
         """
-        from tariffs.peak_logic import is_peak_rp4
-        
         # Count total discharge events
         discharge_events = df_sim[df_sim['Battery_Power_kW'] > 0]
         total_discharges = len(discharge_events)
         
-        # Count compliant discharges (during RP4 peak periods)
-        compliant_discharges = len(discharge_events[discharge_events['Is_RP4_Peak']])
-        
-        # Count violation discharges (outside RP4 peak periods)
-        violation_discharges = total_discharges - compliant_discharges
+        if is_tou_tariff:
+            # TOU Tariff: Validate discharge only during peak periods
+            compliant_discharges = len(discharge_events[discharge_events['Is_Peak_Period']])
+            violation_discharges = total_discharges - compliant_discharges
+            
+            # Energy analysis
+            total_energy_discharged = discharge_events['Battery_Power_kW'].sum() * 0.25  # Assuming 15-min intervals
+            compliant_energy = discharge_events[discharge_events['Is_Peak_Period']]['Battery_Power_kW'].sum() * 0.25
+            violation_energy = total_energy_discharged - compliant_energy
+            
+            compliance_rule = "TOU: Discharge only during peak periods (Mon-Fri 2PM-10PM, excluding holidays)"
+        else:
+            # General Tariff: All discharges are compliant (24/7 discharge allowed)
+            compliant_discharges = total_discharges
+            violation_discharges = 0
+            
+            # Energy analysis
+            total_energy_discharged = discharge_events['Battery_Power_kW'].sum() * 0.25
+            compliant_energy = total_energy_discharged
+            violation_energy = 0
+            
+            compliance_rule = "General: Discharge allowed anytime when demand exceeds target (24/7)"
         
         # Calculate compliance rate
         compliance_rate = (compliant_discharges / total_discharges * 100) if total_discharges > 0 else 100
-        
-        # Energy analysis
-        total_energy_discharged = discharge_events['Battery_Power_kW'].sum() * 0.25  # Assuming 15-min intervals
-        compliant_energy = discharge_events[discharge_events['Is_RP4_Peak']]['Battery_Power_kW'].sum() * 0.25
-        violation_energy = total_energy_discharged - compliant_energy
         
         return {
             'total_discharges': total_discharges,
@@ -752,8 +797,20 @@ class BatteryAlgorithms:
             'violation_energy': violation_energy,
             'potential_violations_logged': len(potential_violations),  # Demand exceeded target but no discharge
             'is_fully_compliant': violation_discharges == 0,
-            'holidays_count': len(holidays)
+            'holidays_count': len(holidays),
+            'tariff_type': 'TOU' if is_tou_tariff else 'General',
+            'compliance_rule': compliance_rule
         }
+    
+    def _validate_peak_period_compliance(self, df_sim, potential_violations, holidays):
+        """
+        ★ LEGACY COMPLIANCE VALIDATION: RP4 Peak-Period-Only Discharge Verification ★
+        
+        DEPRECATED: Use _validate_tariff_compliance instead.
+        This function is kept for backwards compatibility.
+        """
+        # Call the new tariff-aware validation with TOU settings for backwards compatibility
+        return self._validate_tariff_compliance(df_sim, potential_violations, holidays, is_tou_tariff=True)
     
 
 # Factory function to create battery algorithm instances
@@ -856,7 +913,7 @@ def get_battery_parameters_ui(event_summaries=None):
 
 
 def perform_comprehensive_battery_analysis(df, power_col, event_summaries, target_demand, 
-                                          interval_hours, battery_params, total_md_rate):
+                                          interval_hours, battery_params, total_md_rate, selected_tariff=None, holidays=None):
     """
     Perform comprehensive battery analysis using the new algorithms.
     This function coordinates all battery analysis steps.
@@ -874,7 +931,7 @@ def perform_comprehensive_battery_analysis(df, power_col, event_summaries, targe
     
     # Simulate battery operation
     battery_simulation = battery_algo.simulate_battery_operation(
-        df, power_col, target_demand, battery_sizing, battery_params, interval_hours
+        df, power_col, target_demand, battery_sizing, battery_params, interval_hours, selected_tariff
     )
     
     # Calculate financial metrics
