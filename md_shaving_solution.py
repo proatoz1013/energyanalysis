@@ -878,7 +878,7 @@ def _perform_md_shaving_analysis(df, power_col, selected_tariff, holidays, targe
         # Perform battery sizing and analysis
         battery_analysis = perform_comprehensive_battery_analysis(
             df, power_col, event_summaries, target_demand, 
-            interval_hours, battery_params, total_md_rate
+            interval_hours, battery_params, total_md_rate, selected_tariff, holidays
         )
         
         # Display battery results
@@ -1683,8 +1683,8 @@ def _get_battery_parameters(event_summaries=None):
 
 
 def _perform_battery_analysis(df, power_col, event_summaries, target_demand, 
-                             interval_hours, battery_params, total_md_rate):
-    """Perform comprehensive battery analysis."""
+                             interval_hours, battery_params, total_md_rate, selected_tariff=None, holidays=None):
+    """Perform comprehensive battery analysis with TOU tariff awareness."""
     
     # Calculate required battery capacity and power
     battery_sizing = _calculate_battery_sizing(
@@ -1696,7 +1696,7 @@ def _perform_battery_analysis(df, power_col, event_summaries, target_demand,
     
     # Simulate battery operation
     battery_simulation = _simulate_battery_operation(
-        df, power_col, target_demand, battery_sizing, battery_params, interval_hours
+        df, power_col, target_demand, battery_sizing, battery_params, interval_hours, selected_tariff, holidays
     )
     
     # Calculate financial metrics
@@ -1822,8 +1822,8 @@ def _calculate_battery_costs(battery_sizing, battery_params):
     }
 
 
-def _simulate_battery_operation(df, power_col, target_demand, battery_sizing, battery_params, interval_hours):
-    """Simulate battery charge/discharge operation."""
+def _simulate_battery_operation(df, power_col, target_demand, battery_sizing, battery_params, interval_hours, selected_tariff=None, holidays=None):
+    """Simulate battery charge/discharge operation with TOU tariff awareness."""
     
     # Create simulation dataframe
     df_sim = df[[power_col]].copy()
@@ -1849,8 +1849,24 @@ def _simulate_battery_operation(df, power_col, target_demand, battery_sizing, ba
     for i in range(len(df_sim)):
         current_demand = df_sim[power_col].iloc[i]
         excess = max(0, current_demand - target_demand)
+        current_timestamp = df_sim.index[i]
         
-        if excess > 0:  # Need to discharge battery
+        # Determine if discharge is allowed based on tariff type
+        should_discharge = excess > 0
+        
+        if selected_tariff and should_discharge:
+            # Apply TOU logic for discharge decisions
+            tariff_type = selected_tariff.get('Type', '').lower()
+            tariff_name = selected_tariff.get('Tariff', '').lower()
+            is_tou_tariff = tariff_type == 'tou' or 'tou' in tariff_name
+            
+            if is_tou_tariff:
+                # TOU tariffs: Only discharge during peak periods (2PM-10PM weekdays)
+                period_classification = get_tariff_period_classification(current_timestamp, selected_tariff, holidays)
+                should_discharge = (excess > 0) and (period_classification == 'Peak')
+            # For General tariffs, discharge anytime above target (original behavior)
+        
+        if should_discharge:  # Discharge battery with TOU awareness
             # Calculate required discharge power
             required_discharge = min(excess, max_power)
             # Check if battery has enough energy
