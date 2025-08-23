@@ -817,8 +817,8 @@ def _perform_md_shaving_analysis(df, power_col, selected_tariff, holidays, targe
     
     if event_summaries:
         max_md_cost_impact = max(event['MD Cost Impact (RM)'] for event in event_summaries)
-        max_energy_to_shave_peak_only = max(event['Energy to Shave (Peak Period Only)'] for event in event_summaries)
-        max_md_excess = max(event['MD Excess (kW)'] for event in event_summaries if event['MD Excess (kW)'] > 0)
+        max_energy_to_shave_peak_only = max(event['TOU Required Energy (kWh)'] for event in event_summaries)
+        max_md_excess = max(event['TOU Excess (kW)'] for event in event_summaries if event['TOU Excess (kW)'] > 0)
     
     # Display target and potential savings
     col1, col2, col3 = st.columns(3)
@@ -968,14 +968,14 @@ def _detect_peak_events(df, power_col, target_demand, total_md_rate, interval_ho
             'Start Time': start_time.strftime('%H:%M'),
             'End Date': end_time.date(),
             'End Time': end_time.strftime('%H:%M'),
-            'Peak Load (kW)': peak_load,
-            'Excess (kW)': excess,
-            'MD Peak Load (kW)': md_peak_load_during_event,
-            'MD Excess (kW)': md_excess_during_peak,
-            'MD Peak Time': md_peak_time.strftime('%H:%M') if md_peak_time else 'N/A',
+            'General Peak Load (kW)': peak_load,
+            'General Excess (kW)': excess,
+            'TOU Peak Load (kW)': md_peak_load_during_event,
+            'TOU Excess (kW)': md_excess_during_peak,
+            'TOU Peak Time': md_peak_time.strftime('%H:%M') if md_peak_time else 'N/A',
             'Duration (min)': duration_minutes,
-            'Energy to Shave (kWh)': total_energy_to_shave,
-            'Energy to Shave (Peak Period Only)': md_peak_energy_to_shave,
+            'General Required Energy (kWh)': total_energy_to_shave,
+            'TOU Required Energy (kWh)': md_peak_energy_to_shave,
             'MD Cost Impact (RM)': md_cost_impact,
             'Has MD Cost Impact': has_md_cost_impact,
             'Tariff Type': 'TOU' if is_tou_tariff else 'General'
@@ -1070,13 +1070,13 @@ def _display_peak_event_results(df, power_col, event_summaries, target_demand, t
     
     # Apply styling and formatting
     styled_df = df_events_summary.style.apply(apply_row_colors, axis=1).format({
-        'Peak Load (kW)': lambda x: fmt(x),
-        'Excess (kW)': lambda x: fmt(x),
-        'MD Peak Load (kW)': lambda x: fmt(x) if x > 0 else 'N/A',
-        'MD Excess (kW)': lambda x: fmt(x) if x > 0 else 'N/A',
+        'General Peak Load (kW)': lambda x: fmt(x),
+        'General Excess (kW)': lambda x: fmt(x),
+        'TOU Peak Load (kW)': lambda x: fmt(x) if x > 0 else 'N/A',
+        'TOU Excess (kW)': lambda x: fmt(x) if x > 0 else 'N/A',
         'Duration (min)': '{:.1f}',
-        'Energy to Shave (kWh)': lambda x: fmt(x),
-        'Energy to Shave (Peak Period Only)': lambda x: fmt(x),
+        'General Required Energy (kWh)': lambda x: fmt(x),
+        'TOU Required Energy (kWh)': lambda x: fmt(x),
         'MD Cost Impact (RM)': lambda x: f'RM {fmt(x)}' if x is not None else 'RM 0.0000'
     })
     
@@ -1086,13 +1086,13 @@ def _display_peak_event_results(df, power_col, event_summaries, target_demand, t
     if is_tou_tariff:
         explanation = """
     **Column Explanations (TOU Tariff):**
-    - **Peak Load (kW)**: Highest demand during entire event period (may include off-peak hours)
-    - **Excess (kW)**: Overall event peak minus target (for reference only)
-    - **MD Peak Load (kW)**: Highest demand during MD recording hours only (2PM-10PM, weekdays)
-    - **MD Excess (kW)**: MD peak load minus target - determines MD cost impact
-    - **MD Peak Time**: Exact time when MD peak occurred (for MD cost calculation)
-    - **Energy to Shave (kWh)**: Total energy above target for entire event duration
-    - **Energy to Shave (Peak Period Only)**: Energy above target during MD recording hours only
+    - **General Peak Load (kW)**: Highest demand during entire event period (may include off-peak hours)
+    - **General Excess (kW)**: Overall event peak minus target (for reference only)
+    - **TOU Peak Load (kW)**: Highest demand during MD recording hours only (2PM-10PM, weekdays)
+    - **TOU Excess (kW)**: MD peak load minus target - determines MD cost impact
+    - **TOU Peak Time**: Exact time when MD peak occurred (for MD cost calculation)
+    - **General Required Energy (kWh)**: Total energy above target for entire event duration
+    - **TOU Required Energy (kWh)**: Energy above target during MD recording hours only
     - **MD Cost Impact**: MD Excess (kW) × MD Rate - **ONLY for events during 2PM-10PM weekdays**
     
     **🎨 Row Colors:**
@@ -1102,13 +1102,13 @@ def _display_peak_event_results(df, power_col, event_summaries, target_demand, t
     else:
         explanation = """
     **Column Explanations (General Tariff):**
-    - **Peak Load (kW)**: Highest demand during entire event period
-    - **Excess (kW)**: Event peak minus target
-    - **MD Peak Load (kW)**: Same as Peak Load (General tariffs have 24/7 MD impact)
-    - **MD Excess (kW)**: Same as Excess (all events affect MD charges)
-    - **MD Peak Time**: Time when peak occurred
-    - **Energy to Shave (kWh)**: Total energy above target for entire event duration
-    - **Energy to Shave (Peak Period Only)**: Energy above target during MD recording hours only
+    - **General Peak Load (kW)**: Highest demand during entire event period
+    - **General Excess (kW)**: Event peak minus target
+    - **TOU Peak Load (kW)**: Same as Peak Load (General tariffs have 24/7 MD impact)
+    - **TOU Excess (kW)**: Same as Excess (all events affect MD charges)
+    - **TOU Peak Time**: Time when peak occurred
+    - **General Required Energy (kWh)**: Total energy above target for entire event duration
+    - **TOU Required Energy (kWh)**: Energy above target during MD recording hours only
     - **MD Cost Impact**: MD Excess (kW) × MD Rate - **ALL events have MD cost impact 24/7**
     
     **🎨 Row Colors:**
@@ -1237,14 +1237,14 @@ def _display_peak_event_analysis(event_summaries, total_md_rate):
         max_md_excess_during_peak = 0
         
         for date, day_events in daily_events.items():
-            daily_kwh_total = sum(e['Energy to Shave (kWh)'] for e in day_events)
-            daily_md_kwh_total = sum(e['Energy to Shave (Peak Period Only)'] for e in day_events)
+            daily_kwh_total = sum(e['General Required Energy (kWh)'] for e in day_events)
+            daily_md_kwh_total = sum(e['TOU Required Energy (kWh)'] for e in day_events)
             daily_kwh_ranges.append(daily_kwh_total)
             daily_md_kwh_ranges.append(daily_md_kwh_total)
             
             # For MD cost calculation: find highest MD excess during peak periods
             for event in day_events:
-                if event['Energy to Shave (Peak Period Only)'] > 0:
+                if event['TOU Required Energy (kWh)'] > 0:
                     event_md_excess = event['MD Cost Impact (RM)'] / total_md_rate if total_md_rate > 0 else 0
                     max_md_excess_during_peak = max(max_md_excess_during_peak, event_md_excess)
         
@@ -1454,8 +1454,8 @@ def _get_battery_parameters(event_summaries=None):
     
     if event_summaries:
         # Get maximum energy to shave (peak period only) and maximum MD excess
-        max_energy_peak_only = max(event.get('Energy to Shave (Peak Period Only)', 0) for event in event_summaries)
-        max_md_excess = max(event.get('MD Excess (kW)', 0) for event in event_summaries if event.get('MD Excess (kW)', 0) > 0)
+        max_energy_peak_only = max(event.get('TOU Required Energy (kWh)', 0) for event in event_summaries)
+        max_md_excess = max(event.get('TOU Excess (kW)', 0) for event in event_summaries if event.get('TOU Excess (kW)', 0) > 0)
         
         if max_energy_peak_only > 0:
             default_capacity = max_energy_peak_only
@@ -1731,10 +1731,10 @@ def _calculate_battery_sizing(event_summaries, target_demand, interval_hours, ba
     max_md_excess = 0
     
     for event in event_summaries:
-        # Use Energy to Shave (Peak Period Only) for capacity sizing
-        energy_kwh_peak_only = event.get('Energy to Shave (Peak Period Only)', 0)
-        # Use MD Excess (kW) for power sizing
-        md_excess_power = event.get('MD Excess (kW)', 0)
+        # Use TOU Required Energy (kWh) for capacity sizing
+        energy_kwh_peak_only = event.get('TOU Required Energy (kWh)', 0)
+        # Use TOU Excess (kW) for power sizing
+        md_excess_power = event.get('TOU Excess (kW)', 0)
         
         total_energy_to_shave += energy_kwh_peak_only
         worst_event_energy_peak_only = max(worst_event_energy_peak_only, energy_kwh_peak_only)

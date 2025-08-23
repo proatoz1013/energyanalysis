@@ -121,10 +121,10 @@ class BatteryAlgorithms:
         max_md_excess = 0
         
         for event in event_summaries:
-            # Use Energy to Shave (Peak Period Only) for capacity sizing
-            energy_kwh_peak_only = event.get('Energy to Shave (Peak Period Only)', 0)
-            # Use MD Excess (kW) for power sizing
-            md_excess_power = event.get('MD Excess (kW)', 0)
+            # Use TOU Required Energy (kWh) for capacity sizing
+            energy_kwh_peak_only = event.get('TOU Required Energy (kWh)', 0)
+            # Use TOU Excess (kW) for power sizing
+            md_excess_power = event.get('TOU Excess (kW)', 0)
             
             total_energy_to_shave += energy_kwh_peak_only
             worst_event_energy_peak_only = max(worst_event_energy_peak_only, energy_kwh_peak_only)
@@ -834,8 +834,8 @@ def get_battery_parameters_ui(event_summaries=None):
     
     if event_summaries:
         # Get maximum energy to shave (peak period only) and maximum MD excess
-        max_energy_peak_only = max(event.get('Energy to Shave (Peak Period Only)', 0) for event in event_summaries)
-        max_md_excess = max(event.get('MD Excess (kW)', 0) for event in event_summaries if event.get('MD Excess (kW)', 0) > 0)
+        max_energy_peak_only = max(event.get('TOU Required Energy (kWh)', 0) for event in event_summaries)
+        max_md_excess = max(event.get('TOU Excess (kW)', 0) for event in event_summaries if event.get('TOU Excess (kW)', 0) > 0)
         
         if max_energy_peak_only > 0:
             default_capacity = max_energy_peak_only
