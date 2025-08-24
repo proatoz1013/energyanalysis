@@ -697,74 +697,161 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
             st.plotly_chart(fig, use_container_width=True)
             
             # Monthly breakdown table
-            if monthly_targets is not None and len(monthly_targets) > 0:
-                st.markdown("#### 📋 Monthly Target Analysis")
-                
-                monthly_summary = []
-                for month_period, max_demand in monthly_max_demands.items():
-                    target_demand = monthly_targets[month_period]
-                    shaving_amount = max_demand - target_demand
-                    
-                    # Calculate actual shaving percentage for this month
-                    actual_shaving_percent = ((max_demand - target_demand) / max_demand * 100) if max_demand > 0 else 0
-                    
-                    month_events = [e for e in all_monthly_events if e['Month'] == str(month_period)]
-                    
-                    monthly_summary.append({
-                        'Month': str(month_period),
-                        'Monthly Max (kW)': max_demand,
-                        f'Target ({target_description})': target_demand,  # Dynamic header
-                        'Shaving Amount (kW)': shaving_amount,
-                        'Shaving %': actual_shaving_percent,  # Dynamic percentage
-                        'Peak Events': len(month_events),
-                        'Total Excess Energy (kWh)': sum(e.get('TOU Required Energy (kWh)', 0) for e in month_events)
-                    })
-                
-                df_monthly_summary = pd.DataFrame(monthly_summary)
-                
-                # Format and display the monthly summary table
-                if not df_monthly_summary.empty:
-                    def fmt(x):
-                        return f"{x:,.2f}" if isinstance(x, (int, float)) else str(x)
-                    
-                    formatted_summary = df_monthly_summary.style.format({
-                        'Monthly Max (kW)': lambda x: fmt(x),
-                        f'Target ({target_description})': lambda x: fmt(x),  # Dynamic column name
-                        'Shaving Amount (kW)': lambda x: fmt(x),
-                        'Shaving %': lambda x: f"{x:.1f}%",
-                        'Total Excess Energy (kWh)': lambda x: fmt(x)
-                    })
-                    
-                    st.dataframe(formatted_summary, use_container_width=True)
-        
-        # Monthly peak events summary
-        if all_monthly_events:
-            st.markdown("#### 📋 Monthly Peak Events Summary")
             
-            # Create summary metrics
+        # Detailed Peak Event Detection Results
+        if all_monthly_events:
+            st.markdown("#### ⚡ Peak Event Detection Results")
+            
+            # Determine tariff type for display enhancements
+            tariff_type = selected_tariff.get('Type', '').lower() if selected_tariff else 'general'
+            tariff_name = selected_tariff.get('Tariff', '').lower() if selected_tariff else ''
+            is_tou_tariff = tariff_type == 'tou' or 'tou' in tariff_name
+            
+            # Enhanced summary with tariff context
             total_events = len(all_monthly_events)
-            md_impact_events = len([e for e in all_monthly_events if e.get('Has MD Cost Impact', False)])
+            # Count events with actual MD cost impact (cost > 0 or TOU excess > 0)
+            md_impact_events = len([e for e in all_monthly_events 
+                                  if e.get('MD Cost Impact (RM)', 0) > 0 or e.get('TOU Excess (kW)', 0) > 0])
             total_md_cost = sum(event.get('MD Cost Impact (RM)', 0) for event in all_monthly_events)
             
+            # Calculate maximum TOU Required Energy from all events
+            max_tou_energy = max([event.get('TOU Required Energy (kWh)', 0) or 0 for event in all_monthly_events]) if all_monthly_events else 0
+            
+            if is_tou_tariff:
+                no_md_impact_events = total_events - md_impact_events
+                summary_text = f"**Showing {total_events} total events (All Events)**\n"
+                summary_text += f"📊 **TOU Tariff Summary:** {md_impact_events} events with MD cost impact, {no_md_impact_events} events without MD impact"
+            else:
+                summary_text = f"**Showing {total_events} total events (All Events)**\n"
+                summary_text += f"📊 **General Tariff:** All {total_events} events have MD cost impact (24/7 MD charges)"
+            
+            st.markdown(summary_text)
+            
+            # Prepare enhanced dataframe with all detailed columns
+            df_events_summary = pd.DataFrame(all_monthly_events)
+            
+            # Ensure all required columns exist
+            required_columns = ['Start Date', 'Start Time', 'End Date', 'End Time', 
+                              'General Peak Load (kW)', 'General Excess (kW)', 
+                              'TOU Peak Load (kW)', 'TOU Excess (kW)', 'TOU Peak Time',
+                              'Duration (min)', 'General Required Energy (kWh)',
+                              'TOU Required Energy (kWh)', 'MD Cost Impact (RM)', 
+                              'Has MD Cost Impact', 'Tariff Type']
+            
+            # Add missing columns with default values
+            for col in required_columns:
+                if col not in df_events_summary.columns:
+                    if 'General' in col and 'TOU' in [c for c in df_events_summary.columns]:
+                        # Copy TOU values to General columns if missing
+                        tou_col = col.replace('General', 'TOU')
+                        if tou_col in df_events_summary.columns:
+                            df_events_summary[col] = df_events_summary[tou_col]
+                        else:
+                            df_events_summary[col] = 0
+                    elif col == 'Duration (min)':
+                        df_events_summary[col] = 30.0  # Default duration
+                    elif col == 'TOU Peak Time':
+                        df_events_summary[col] = 'N/A'
+                    elif col == 'Has MD Cost Impact':
+                        # Set based on MD cost impact
+                        df_events_summary[col] = df_events_summary.get('MD Cost Impact (RM)', 0) > 0
+                    elif col == 'Tariff Type':
+                        # Set based on selected tariff
+                        tariff_type_name = selected_tariff.get('Type', 'TOU').upper() if selected_tariff else 'TOU'
+                        df_events_summary[col] = tariff_type_name
+                    else:
+                        df_events_summary[col] = 0
+            
+            # Create styled dataframe with color-coded rows
+            def apply_row_colors(row):
+                """Apply color coding based on MD cost impact."""
+                # Check if event has MD cost impact based on actual cost value
+                md_cost = row.get('MD Cost Impact (RM)', 0) or 0
+                has_impact = md_cost > 0
+                
+                # Alternative check: look for TOU Excess or any excess during peak hours
+                if not has_impact:
+                    tou_excess = row.get('TOU Excess (kW)', 0) or 0
+                    has_impact = tou_excess > 0
+                
+                if has_impact:
+                    return ['background-color: rgba(255, 0, 0, 0.1)'] * len(row)  # Light red for MD cost impact
+                else:
+                    return ['background-color: rgba(0, 128, 0, 0.1)'] * len(row)  # Light green for no MD cost impact
+            
+            # Select and reorder columns for display (matching original table structure)
+            display_columns = ['Start Date', 'Start Time', 'End Date', 'End Time', 
+                             'General Peak Load (kW)', 'General Excess (kW)', 
+                             'TOU Peak Load (kW)', 'TOU Excess (kW)', 'TOU Peak Time',
+                             'Duration (min)', 'General Required Energy (kWh)',
+                             'TOU Required Energy (kWh)', 'MD Cost Impact (RM)', 
+                             'Has MD Cost Impact', 'Tariff Type']
+            
+            # Filter to display columns that exist
+            available_columns = [col for col in display_columns if col in df_events_summary.columns]
+            display_df = df_events_summary[available_columns]
+            
+            # Define formatting function
+            def fmt(x):
+                return f"{x:,.2f}" if isinstance(x, (int, float)) else str(x)
+            
+            # Apply styling and formatting
+            styled_df = display_df.style.apply(apply_row_colors, axis=1).format({
+                'General Peak Load (kW)': lambda x: fmt(x),
+                'General Excess (kW)': lambda x: fmt(x),
+                'TOU Peak Load (kW)': lambda x: fmt(x) if x > 0 else 'N/A',
+                'TOU Excess (kW)': lambda x: fmt(x) if x > 0 else 'N/A',
+                'Duration (min)': '{:.1f}',
+                'General Required Energy (kWh)': lambda x: fmt(x),
+                'TOU Required Energy (kWh)': lambda x: fmt(x),
+                'MD Cost Impact (RM)': lambda x: f'RM {fmt(x)}' if x is not None else 'RM 0.0000',
+                'Has MD Cost Impact': lambda x: '✓' if x else '✗',
+                'Tariff Type': lambda x: str(x)
+            })
+            
+            st.dataframe(styled_df, use_container_width=True)
+            
+            # Enhanced explanation with tariff-specific context
+            if is_tou_tariff:
+                explanation = """
+        **Column Explanations (TOU Tariff):**
+        - **General Peak Load (kW)**: Highest demand during entire event period (may include off-peak hours)
+        - **General Excess (kW)**: Overall event peak minus target (for reference only)
+        - **TOU Peak Load (kW)**: Highest demand during MD recording hours only (2PM-10PM, weekdays)
+        - **TOU Excess (kW)**: MD peak load minus target - determines MD cost impact
+        - **TOU Peak Time**: Exact time when MD peak occurred (for MD cost calculation)
+        - **General Required Energy (kWh)**: Total energy above target for entire event duration
+        - **TOU Required Energy (kWh)**: Energy above target during MD recording hours only
+        - **MD Cost Impact**: MD Excess (kW) × MD Rate - **ONLY for events during 2PM-10PM weekdays**
+        
+        **🎨 Row Colors:**
+        - 🔴 **Red background**: Events with MD cost impact (occur during 2PM-10PM weekdays)
+        - 🟢 **Green background**: Events without MD cost impact (occur during off-peak periods)
+            """
+            else:
+                explanation = """
+        **Column Explanations (General Tariff):**
+        - **General Peak Load (kW)**: Highest demand during entire event period
+        - **General Excess (kW)**: Event peak minus target
+        - **TOU Peak Load (kW)**: Same as Peak Load (General tariffs have 24/7 MD impact)
+        - **TOU Excess (kW)**: Same as Excess (all events affect MD charges)
+        - **TOU Peak Time**: Time when peak occurred
+        - **General Required Energy (kWh)**: Total energy above target for entire event duration
+        - **TOU Required Energy (kWh)**: Energy above target during MD recording hours only
+        - **MD Cost Impact**: MD Excess (kW) × MD Rate - **ALL events have MD cost impact 24/7**
+        
+        **🎨 Row Colors:**
+        - 🔴 **Red background**: All events have MD cost impact (General tariffs charge MD 24/7)
+            """
+            
+            st.info(explanation)
+            
+            # Summary metrics
             col1, col2, col3 = st.columns(3)
             col1.metric("Total Events", total_events)
             col2.metric("MD Impact Events", md_impact_events)
-            col3.metric("Total MD Cost Impact", f"RM {fmt(total_md_cost)}")
+            col3.metric("Max TOU Required Energy", f"{fmt(max_tou_energy)} kWh")
             
-            # Show detailed events table
-            with st.expander("📊 Detailed Monthly Events Table"):
-                df_events = pd.DataFrame(all_monthly_events)
-                # Format the dataframe for display
-                display_cols = ['Month', 'Start Date', 'Start Time', 'End Time', 'TOU Peak Load (kW)', 
-                               'TOU Excess (kW)', 'TOU Required Energy (kWh)', 'MD Cost Impact (RM)']
-                if all(col in df_events.columns for col in display_cols):
-                    display_df = df_events[display_cols]
-                    st.dataframe(display_df.style.format({
-                        'TOU Peak Load (kW)': lambda x: fmt(x) if x > 0 else 'N/A',
-                        'TOU Excess (kW)': lambda x: fmt(x) if x > 0 else 'N/A',
-                        'TOU Required Energy (kWh)': lambda x: fmt(x),
-                        'MD Cost Impact (RM)': lambda x: f'RM {fmt(x)}'
-                    }), use_container_width=True)
         else:
             st.success("🎉 No peak events detected above monthly targets!")
             st.info("Current demand profile is within monthly target limits for all analyzed months")
@@ -775,11 +862,24 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
             
             # Calculate maximum power shaving required across all months
             max_shaving_power = 0
-            if 'monthly_summary' in locals() and not df_monthly_summary.empty:
-                max_shaving_power = df_monthly_summary['Shaving Amount (kW)'].max() if 'Shaving Amount (kW)' in df_monthly_summary.columns else 0
+            if monthly_targets is not None and len(monthly_targets) > 0:
+                # Calculate max shaving power directly from monthly targets and max demands
+                shaving_amounts = []
+                for month_period, target_demand in monthly_targets.items():
+                    if month_period in monthly_max_demands:
+                        max_demand = monthly_max_demands[month_period]
+                        shaving_amount = max_demand - target_demand
+                        if shaving_amount > 0:
+                            shaving_amounts.append(shaving_amount)
+                
+                max_shaving_power = max(shaving_amounts) if shaving_amounts else 0
             
-            # Recommended battery capacity matches maximum power shaving requirement
-            recommended_capacity = max_shaving_power
+            # Recommended battery capacity matches maximum TOU Required Energy from peak events
+            recommended_capacity = max_tou_energy if 'max_tou_energy' in locals() and max_tou_energy is not None and max_tou_energy > 0 else max_shaving_power
+            
+            # Ensure recommended_capacity is not None
+            if recommended_capacity is None:
+                recommended_capacity = 0
             
             # Round up to nearest whole number
             recommended_capacity_rounded = int(np.ceil(recommended_capacity)) if recommended_capacity > 0 else 0
@@ -808,9 +908,9 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                 st.success(f"""
                 **Recommended Battery Capacity: {recommended_capacity_rounded} kWh**
                 
-                This recommendation matches the maximum power shaving requirement of {max_shaving_power:.1f} kW.
+                This recommendation is based on the maximum TOU Required Energy of {max_tou_energy:.1f} kWh from the peak events analysis.
                 
-                **Rationale**: Battery capacity (kWh) is set equal to the maximum power shaving requirement (kW) to ensure the battery can provide the full power reduction needed during peak demand periods.
+                **Rationale**: Battery capacity (kWh) is set to match the maximum energy requirement during any single TOU peak event to ensure complete peak shaving capability.
                 """)
                 
                 # Load battery database to show matching options
