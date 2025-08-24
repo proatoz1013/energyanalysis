@@ -3,7 +3,7 @@ MD Shaving Solution V2 - Enhanced MD Shaving Analysis
 =====================================================
 
 This module provides next-generation Maximum Demand (MD) shaving analysis with:
-- Monthly-based target calculation (10% shaving per month)
+- Monthly-based target calculation with dynamic user settings
 - Battery database integration with vendor specifications
 - Enhanced timeline visualization with peak events
 - Interactive battery capacity selection interface
@@ -324,22 +324,100 @@ def render_md_shaving_v2():
                                 st.success(f"✅ Tariff configured: **{selected_tariff.get('Tariff', 'Unknown')}**")
                         except Exception as e:
                             st.warning(f"⚠️ Tariff configuration error: {str(e)}")
+                            selected_tariff = None
                     
-                    # Placeholder for V2 specific features
-                    st.subheader("🚀 V2 Enhanced Features")
+                    # V2 Target Setting Configuration
+                    st.subheader("🎯 Target Setting (V2)")
                     
-                    st.info("""
-                    🔄 **Coming Soon:** Advanced V2 features will be implemented here, including:
+                    # Get overall max demand for calculations
+                    overall_max_demand = df_processed[power_col].max()
                     
-                    - **Multi-Battery Analysis**: Compare different battery sizes and technologies
-                    - **Optimization Engine**: AI-powered recommendations for optimal battery sizing
-                    - **Advanced Visualizations**: Interactive 3D charts and real-time simulations
-                    - **ROI Calculator**: Detailed financial analysis with payback period calculations
-                    - **Scenario Comparison**: Side-by-side analysis of multiple configurations
-                    """)
+                    # Get default values from session state or use defaults
+                    default_shave_percent = st.session_state.get("v2_config_default_shave", 20)
+                    default_target_percent = st.session_state.get("v2_config_default_target", 80)
+                    default_manual_kw = st.session_state.get("v2_config_default_manual", overall_max_demand * 0.8)
                     
-                    # V2 Peak Events Timeline visualization
-                    _render_v2_peak_events_timeline(df_processed, power_col, selected_tariff, holidays)
+                    st.markdown(f"**Current Data Max:** {overall_max_demand:.1f} kW")
+                    
+                    # Target setting method selection
+                    target_method = st.radio(
+                        "Target Setting Method:",
+                        options=["Percentage to Shave", "Percentage of Current Max", "Manual Target (kW)"],
+                        index=0,
+                        key="v2_target_method",
+                        help="Choose how to set your monthly target maximum demand"
+                    )
+                    
+                    # Configure target based on selected method
+                    if target_method == "Percentage to Shave":
+                        shave_percent = st.slider(
+                            "Percentage to Shave (%)", 
+                            min_value=1, 
+                            max_value=50, 
+                            value=default_shave_percent, 
+                            step=1,
+                            key="v2_shave_percent",
+                            help="Percentage to reduce from monthly peak (e.g., 20% shaving reduces monthly 1000kW peak to 800kW)"
+                        )
+                        target_percent = None
+                        target_manual_kw = None
+                        target_multiplier = 1 - (shave_percent / 100)
+                        target_description = f"{shave_percent}% monthly shaving"
+                    elif target_method == "Percentage of Current Max":
+                        target_percent = st.slider(
+                            "Target MD (% of monthly max)", 
+                            min_value=50, 
+                            max_value=100, 
+                            value=default_target_percent, 
+                            step=1,
+                            key="v2_target_percent",
+                            help="Set the target maximum demand as percentage of monthly peak"
+                        )
+                        shave_percent = None
+                        target_manual_kw = None
+                        target_multiplier = target_percent / 100
+                        target_description = f"{target_percent}% of monthly max"
+                    else:
+                        target_manual_kw = st.number_input(
+                            "Target MD (kW)",
+                            min_value=0.0,
+                            max_value=overall_max_demand,
+                            value=default_manual_kw,
+                            step=10.0,
+                            key="v2_target_manual",
+                            help="Enter your desired target maximum demand in kW (applied to all months)"
+                        )
+                        target_percent = None
+                        shave_percent = None
+                        target_multiplier = None  # Will be calculated per month
+                        target_description = f"{target_manual_kw:.1f} kW manual target"
+                        effective_target_percent = None
+                        shave_percent = None
+                    
+                    # Display target information
+                    st.info(f"🎯 **V2 Target:** {target_description} (configured in sidebar)")
+                    
+                    # Validate target settings
+                    if target_method == "Manual Target (kW)":
+                        if target_manual_kw <= 0:
+                            st.error("❌ Target demand must be greater than 0 kW")
+                            return
+                        elif target_manual_kw >= overall_max_demand:
+                            st.warning(f"⚠️ Target demand ({target_manual_kw:.1f} kW) is equal to or higher than current max ({overall_max_demand:.1f} kW). No peak shaving needed.")
+                            st.info("💡 Consider setting a lower target to identify shaving opportunities.")
+                    
+                    # V2 Peak Events Timeline visualization with dynamic targets
+                    _render_v2_peak_events_timeline(
+                        df_processed, 
+                        power_col, 
+                        selected_tariff, 
+                        holidays,
+                        target_method, 
+                        shave_percent if target_method == "Percentage to Shave" else None,
+                        target_percent if target_method == "Percentage of Current Max" else None,
+                        target_manual_kw if target_method == "Manual Target (kW)" else None,
+                        target_description
+                    )
                     
                 else:
                     st.error("❌ Failed to process the uploaded data")
@@ -372,20 +450,33 @@ def render_md_shaving_v2():
             st.dataframe(sample_df, use_container_width=True)
 
 
-def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays):
-    """Render the V2 Peak Events Timeline visualization with monthly-based targets."""
+def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, target_method, shave_percent, target_percent, target_manual_kw, target_description):
+    """Render the V2 Peak Events Timeline visualization with dynamic monthly-based targets."""
     
     st.markdown("### 📊 Peak Events Timeline")
     
-    # Calculate monthly-based target demands (10% shaving per month)
+    # Calculate monthly-based target demands using dynamic user settings
     if power_col in df.columns:
         # Calculate monthly maximum demands
         df_monthly = df.copy()
         df_monthly['Month'] = df_monthly.index.to_period('M')
         monthly_max_demands = df_monthly.groupby('Month')[power_col].max()
         
-        # Calculate monthly targets (20% shaving per month for better visualization)
-        monthly_targets = monthly_max_demands * 0.8  # 20% reduction
+        # Calculate monthly targets using CORRECTED dynamic user settings
+        if target_method == "Manual Target (kW)":
+            # For manual target, use the same value for all months
+            monthly_targets = pd.Series(index=monthly_max_demands.index, data=target_manual_kw)
+            legend_label = f"Monthly Target ({target_manual_kw:.0f} kW)"
+        elif target_method == "Percentage to Shave":
+            # Calculate target as percentage reduction from each month's max
+            target_multiplier = 1 - (shave_percent / 100)
+            monthly_targets = monthly_max_demands * target_multiplier
+            legend_label = f"Monthly Target ({shave_percent}% shaving)"
+        else:  # Percentage of Current Max
+            # Calculate target as percentage of each month's max
+            target_multiplier = target_percent / 100
+            monthly_targets = monthly_max_demands * target_multiplier
+            legend_label = f"Monthly Target ({target_percent}% of max)"
         
         # Create stepped target line for visualization
         target_line_data = []
@@ -416,7 +507,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays):
                 x=target_line_timestamps,
                 y=target_line_data,
                 mode='lines',
-                name='Monthly Target (80%)',
+                name=legend_label,
                 line=dict(color='red', width=2, dash='dash'),
                 opacity=0.9
             ))
@@ -613,14 +704,18 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays):
                 for month_period, max_demand in monthly_max_demands.items():
                     target_demand = monthly_targets[month_period]
                     shaving_amount = max_demand - target_demand
+                    
+                    # Calculate actual shaving percentage for this month
+                    actual_shaving_percent = ((max_demand - target_demand) / max_demand * 100) if max_demand > 0 else 0
+                    
                     month_events = [e for e in all_monthly_events if e['Month'] == str(month_period)]
                     
                     monthly_summary.append({
                         'Month': str(month_period),
                         'Monthly Max (kW)': max_demand,
-                        'Target (10% Shaving) (kW)': target_demand,
+                        f'Target ({target_description})': target_demand,  # Dynamic header
                         'Shaving Amount (kW)': shaving_amount,
-                        'Shaving %': 10.0,  # Fixed at 10%
+                        'Shaving %': actual_shaving_percent,  # Dynamic percentage
                         'Peak Events': len(month_events),
                         'Total Excess Energy (kWh)': sum(e.get('TOU Required Energy (kWh)', 0) for e in month_events)
                     })
@@ -634,7 +729,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays):
                     
                     formatted_summary = df_monthly_summary.style.format({
                         'Monthly Max (kW)': lambda x: fmt(x),
-                        'Target (10% Shaving) (kW)': lambda x: fmt(x),
+                        f'Target ({target_description})': lambda x: fmt(x),  # Dynamic column name
                         'Shaving Amount (kW)': lambda x: fmt(x),
                         'Shaving %': lambda x: f"{x:.1f}%",
                         'Total Excess Energy (kWh)': lambda x: fmt(x)
@@ -676,9 +771,9 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays):
         
         # V2 Enhancement Preview
         st.markdown("#### 🚀 V2 Monthly-Based Enhancements")
-        st.info("""
+        st.info(f"""
         **📈 Monthly-Based Features Implemented:**
-        - **✅ Monthly Target Calculation**: Each month has its own 10% shaving target based on monthly maximum
+        - **✅ Monthly Target Calculation**: Each month uses {target_description} target
         - **✅ Stepped Target Profile**: Sawtooth target line that changes at month boundaries
         - **✅ Month-Specific Event Detection**: Peak events detected using appropriate monthly targets
         - **✅ Monthly Breakdown Table**: Detailed monthly analysis with individual targets and shaving amounts

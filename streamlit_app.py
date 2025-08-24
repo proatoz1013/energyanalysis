@@ -55,6 +55,68 @@ else:
     st.sidebar.warning("⚠️ AFA reduces electricity cost")
 
 st.sidebar.markdown("---")
+
+# MD Shaving Configuration
+with st.sidebar.expander("🎯 MD Shaving Configuration", expanded=False):
+    st.markdown("**Target Setting for MD Shaving Analysis**")
+    
+    # Initialize session state with defaults if not present
+    if "md_target_method" not in st.session_state:
+        st.session_state.md_target_method = "Percentage to Shave"
+    if "md_shave_percent" not in st.session_state:
+        st.session_state.md_shave_percent = 20
+    if "md_target_percent" not in st.session_state:
+        st.session_state.md_target_percent = 80
+    if "md_target_manual" not in st.session_state:
+        st.session_state.md_target_manual = 800.0
+    
+    # Target method selection
+    st.session_state.md_target_method = st.radio(
+        "Target Setting Method:",
+        options=["Percentage to Shave", "Percentage of Current Max", "Manual Target (kW)"],
+        index=["Percentage to Shave", "Percentage of Current Max", "Manual Target (kW)"].index(st.session_state.md_target_method),
+        help="Choose how to set your maximum demand target",
+        key="md_target_method_radio"
+    )
+    
+    # Configure target based on selected method
+    if st.session_state.md_target_method == "Percentage to Shave":
+        st.session_state.md_shave_percent = st.slider(
+            "Percentage to Shave (%)", 
+            min_value=1, 
+            max_value=50, 
+            value=st.session_state.md_shave_percent, 
+            step=1,
+            help="Percentage to reduce from peak (e.g., 20% shaving)",
+            key="md_shave_percent_slider"
+        )
+        st.info(f"🎯 **Target:** Reduce peak by {st.session_state.md_shave_percent}%")
+        
+    elif st.session_state.md_target_method == "Percentage of Current Max":
+        st.session_state.md_target_percent = st.slider(
+            "Target MD (% of max)", 
+            min_value=50, 
+            max_value=100, 
+            value=st.session_state.md_target_percent, 
+            step=1,
+            help="Set target as percentage of monthly peak",
+            key="md_target_percent_slider"
+        )
+        st.info(f"🎯 **Target:** {st.session_state.md_target_percent}% of monthly max")
+        
+    else:  # Manual Target (kW)
+        st.session_state.md_target_manual = st.number_input(
+            "Target MD (kW)",
+            min_value=0.0,
+            max_value=5000.0,
+            value=st.session_state.md_target_manual,
+            step=10.0,
+            help="Enter your desired target maximum demand in kW",
+            key="md_target_manual_input"
+        )
+        st.info(f"🎯 **Target:** {st.session_state.md_target_manual:.1f} kW manual target")
+
+st.sidebar.markdown("---")
 st.sidebar.markdown("### 📚 About")
 st.sidebar.markdown("""
 **Energy Analysis Dashboard**
