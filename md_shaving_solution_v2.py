@@ -562,91 +562,60 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
             if current_segment['type'] is not None and len(current_segment['x']) > 0:
                 segments.append(current_segment)
             
-            # Create continuous traces with overlapping points at transitions
-            continuous_segments = []
-            for i, segment in enumerate(segments):
-                new_segment = segment.copy()
-                
-                # Add overlap with previous segment (connect at start)
-                if i > 0 and len(segments[i-1]['x']) > 0:
-                    prev_segment = segments[i-1]
-                    # Add the last point of previous segment to start of current
-                    new_segment['x'] = [prev_segment['x'][-1]] + new_segment['x']
-                    new_segment['y'] = [prev_segment['y'][-1]] + new_segment['y']
-                
-                # Add overlap with next segment (connect at end)
-                if i < len(segments) - 1 and len(segments[i+1]['x']) > 0:
-                    next_segment = segments[i+1]
-                    # Add the first point of next segment to end of current
-                    new_segment['x'] = new_segment['x'] + [next_segment['x'][0]]
-                    new_segment['y'] = new_segment['y'] + [next_segment['y'][0]]
-                
-                continuous_segments.append(new_segment)
-            
-            # Plot the continuous colored segments
+            # Plot the colored segments with proper continuity (based on V1 logic)
             color_map = {
                 'below_target': {'color': 'blue', 'name': 'Below Monthly Target'},
                 'above_target_offpeak': {'color': 'green', 'name': 'Above Monthly Target - Off-Peak Period'},
                 'above_target_peak': {'color': 'red', 'name': 'Above Monthly Target - Peak Period'}
             }
             
-            # Group segments by type for plotting
-            segment_groups = {}
-            for segment in continuous_segments:
-                seg_type = segment['type']
-                if seg_type not in segment_groups:
-                    segment_groups[seg_type] = []
-                segment_groups[seg_type].append(segment)
+            # Track legend status
+            legend_added = {'below_target': False, 'above_target_offpeak': False, 'above_target_peak': False}
             
-            # Plot each group of segments with special handling for blue line continuity
-            for seg_type, seg_list in segment_groups.items():
-                color_info = color_map[seg_type]
+            # Create continuous line segments by color groups with bridge points (V1 approach)
+            i = 0
+            while i < len(segments):
+                current_segment = segments[i]
+                current_type = current_segment['type']
                 
-                if seg_type == 'below_target':
-                    # For blue line (below target), connect all segments without gaps
-                    # This ensures continuous line even through zero values
-                    combined_x = []
-                    combined_y = []
-                    
-                    for segment in seg_list:
-                        combined_x.extend(segment['x'])
-                        combined_y.extend(segment['y'])
-                        # No None separators for blue line - keep it fully connected
-                    
-                    if combined_x:
-                        fig.add_trace(go.Scatter(
-                            x=combined_x,
-                            y=combined_y,
-                            mode='lines',
-                            name=color_info['name'],
-                            line=dict(color=color_info['color'], width=1),
-                            opacity=0.8,
-                            connectgaps=True  # Connect across any potential gaps
-                        ))
-                else:
-                    # For green and red lines, use normal segmentation with None separators
-                    combined_x = []
-                    combined_y = []
-                    
-                    for i, segment in enumerate(seg_list):
-                        combined_x.extend(segment['x'])
-                        combined_y.extend(segment['y'])
-                        
-                        # Add None separator between disconnected segments (except for last segment)
-                        if i < len(seg_list) - 1:
-                            combined_x.append(None)
-                            combined_y.append(None)
-                    
-                    if combined_x:
-                        fig.add_trace(go.Scatter(
-                            x=combined_x,
-                            y=combined_y,
-                            mode='lines',
-                            name=color_info['name'],
-                            line=dict(color=color_info['color'], width=1),
-                            opacity=0.8,
-                            connectgaps=False  # Don't connect across None values
-                        ))
+                # Extract segment data
+                segment_x = list(current_segment['x'])
+                segment_y = list(current_segment['y'])
+                
+                # Add bridge points for better continuity (connect to adjacent segments)
+                if i > 0:  # Add connection point from previous segment
+                    prev_segment = segments[i-1]
+                    if len(prev_segment['x']) > 0:
+                        segment_x.insert(0, prev_segment['x'][-1])
+                        segment_y.insert(0, prev_segment['y'][-1])
+                
+                if i < len(segments) - 1:  # Add connection point to next segment
+                    next_segment = segments[i+1]
+                    if len(next_segment['x']) > 0:
+                        segment_x.append(next_segment['x'][0])
+                        segment_y.append(next_segment['y'][0])
+                
+                # Get color info
+                color_info = color_map[current_type]
+                
+                # Only show legend for the first occurrence of each type
+                show_legend = not legend_added[current_type]
+                legend_added[current_type] = True
+                
+                # Add line segment
+                fig.add_trace(go.Scatter(
+                    x=segment_x,
+                    y=segment_y,
+                    mode='lines',
+                    line=dict(color=color_info['color'], width=1),
+                    name=color_info['name'],
+                    opacity=0.8,
+                    showlegend=show_legend,
+                    legendgroup=current_type,
+                    connectgaps=True  # Connect gaps within segments
+                ))
+                
+                i += 1
             
             # Process peak events for monthly analysis
             for month_period, target_value in monthly_targets.items():
