@@ -769,6 +769,182 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
             st.success("🎉 No peak events detected above monthly targets!")
             st.info("Current demand profile is within monthly target limits for all analyzed months")
         
+        # Calculate optimal battery capacity based on shaving requirements
+        if monthly_targets is not None and len(monthly_targets) > 0:
+            st.markdown("#### 🔋 Recommended Battery Capacity")
+            
+            # Calculate maximum power shaving required across all months
+            max_shaving_power = 0
+            if 'monthly_summary' in locals() and not df_monthly_summary.empty:
+                max_shaving_power = df_monthly_summary['Shaving Amount (kW)'].max() if 'Shaving Amount (kW)' in df_monthly_summary.columns else 0
+            
+            # Recommended battery capacity matches maximum power shaving requirement
+            recommended_capacity = max_shaving_power
+            
+            # Round up to nearest whole number
+            recommended_capacity_rounded = int(np.ceil(recommended_capacity)) if recommended_capacity > 0 else 0
+            
+            # Display key metrics
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.metric(
+                    "Max Power Shaving Required", 
+                    f"{max_shaving_power:.1f} kW",
+                    help="Maximum power reduction required across all months - this determines battery capacity"
+                )
+            
+            with col2:
+                st.metric(
+                    "Recommended Battery Capacity", 
+                    f"{recommended_capacity_rounded} kWh",
+                    help="Battery capacity matching the maximum power shaving requirement"
+                )
+            
+            # Main recommendation
+            st.markdown("##### 💡 Battery Capacity Recommendation")
+            
+            if recommended_capacity_rounded > 0:
+                st.success(f"""
+                **Recommended Battery Capacity: {recommended_capacity_rounded} kWh**
+                
+                This recommendation matches the maximum power shaving requirement of {max_shaving_power:.1f} kW.
+                
+                **Rationale**: Battery capacity (kWh) is set equal to the maximum power shaving requirement (kW) to ensure the battery can provide the full power reduction needed during peak demand periods.
+                """)
+                
+                # Load battery database to show matching options
+                battery_db = load_vendor_battery_database()
+                if battery_db:
+                    matching_batteries = get_battery_options_for_capacity(battery_db, recommended_capacity_rounded, tolerance=20)
+                    
+                    if matching_batteries:
+                        st.markdown("##### 🏭 Available Battery Options")
+                        st.info(f"Found {len(matching_batteries)} battery options within ±20 kWh of recommended capacity:")
+                        
+                        for i, battery in enumerate(matching_batteries[:5]):  # Show top 5 matches
+                            spec = battery['spec']
+                            st.markdown(f"""
+                            **{spec.get('manufacturer', 'Unknown')} - {spec.get('model', battery['id'])}**
+                            - Capacity: {battery['capacity_kwh']} kWh
+                            - Power: {battery['power_kw']} kW  
+                            - C-Rate: {battery['c_rate']}C
+                            """)
+                    else:
+                        st.warning("No matching batteries found in database for the recommended capacity.")
+            else:
+                st.info("No peak events detected - battery may not be required with current target settings.")
+            
+            # Create comprehensive battery analysis table
+            if recommended_capacity_rounded > 0:
+                st.markdown("#### 💰 Battery Financial Analysis")
+                
+                # Load battery database
+                battery_db = load_vendor_battery_database()
+                if battery_db:
+                    # Calculate annual MD cost savings
+                    annual_md_savings = total_md_cost * 12 if 'total_md_cost' in locals() else 0
+                    
+                    # Create analysis table for all batteries
+                    battery_analysis = []
+                    
+                    # Estimated pricing per kWh (market average for commercial batteries)
+                    estimated_price_per_kwh = 1500  # RM per kWh
+                    
+                    for battery_id, spec in battery_db.items():
+                        battery_capacity = spec.get('energy_kWh', 0)
+                        battery_power = spec.get('power_kW', 0)
+                        
+                        if battery_capacity > 0 and battery_power > 0:
+                            # Calculate number of units needed - simple division of required capacity by unit capacity
+                            units_needed = int(np.ceil(recommended_capacity_rounded / battery_capacity))
+                            total_capacity = units_needed * battery_capacity
+                            
+                            # Ensure total capacity is always a whole number higher than required capacity
+                            if total_capacity <= recommended_capacity_rounded:
+                                units_needed += 1
+                                total_capacity = units_needed * battery_capacity
+                            
+                            # Total system cost
+                            total_cost = total_capacity * estimated_price_per_kwh
+                            
+                            # Calculate payback period
+                            payback_years = total_cost / annual_md_savings if annual_md_savings > 0 else float('inf')
+                            
+                            battery_analysis.append({
+                                'Battery Name': f"{spec.get('company', 'Unknown')} {spec.get('model', battery_id)}",
+                                'Unit Capacity (kWh)': battery_capacity,
+                                'Unit Power (kW)': battery_power,
+                                'Units Required': units_needed,
+                                'Total Capacity (kWh)': total_capacity,
+                                'Annual MD Savings (RM)': annual_md_savings,
+                                'Total Battery Cost (RM)': total_cost,
+                                'Payback Period (Years)': payback_years if payback_years != float('inf') else 'N/A'
+                            })
+                    
+                    # Sort by payback period (best first)
+                    battery_analysis.sort(key=lambda x: x['Payback Period (Years)'] if x['Payback Period (Years)'] != 'N/A' else 999)
+                    
+                    if battery_analysis:
+                        df_battery_analysis = pd.DataFrame(battery_analysis)
+                        
+                        # Format the table for display
+                        formatted_analysis = df_battery_analysis.style.format({
+                            'Unit Capacity (kWh)': lambda x: f"{x:.0f}",
+                            'Unit Power (kW)': lambda x: f"{x:.0f}",
+                            'Units Required': lambda x: f"{x:.0f}",
+                            'Total Capacity (kWh)': lambda x: f"{x:.0f}",
+                            'Annual MD Savings (RM)': lambda x: f"RM {x:,.0f}",
+                            'Total Battery Cost (RM)': lambda x: f"RM {x:,.0f}",
+                            'Payback Period (Years)': lambda x: f"{x:.1f}" if isinstance(x, (int, float)) and x != float('inf') else str(x)
+                        })
+                        
+                        st.dataframe(formatted_analysis, use_container_width=True)
+                        
+                        # Add summary insights
+                        best_option = battery_analysis[0]
+                        st.markdown("##### 🎯 Key Insights")
+                        
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            st.metric(
+                                "Best Option", 
+                                best_option['Battery Name'],
+                                help="Battery with shortest payback period"
+                            )
+                        
+                        with col2:
+                            payback_display = f"{best_option['Payback Period (Years)']:.1f} years" if isinstance(best_option['Payback Period (Years)'], (int, float)) else "N/A"
+                            st.metric(
+                                "Best Payback Period", 
+                                payback_display,
+                                help="Time to recover initial investment through MD savings"
+                            )
+                        
+                        with col3:
+                            st.metric(
+                                "Annual Savings", 
+                                f"RM {annual_md_savings:,.0f}",
+                                help="Expected annual savings from MD cost reduction"
+                            )
+                        
+                        # Add calculation notes
+                        st.markdown("##### 📝 Calculation Notes")
+                        st.info(f"""
+                        **Assumptions:**
+                        - Battery cost: RM {estimated_price_per_kwh:,}/kWh (market average for commercial systems)
+                        - Annual MD savings based on monthly peak events detected: RM {annual_md_savings:,.0f}
+                        - Units required based on higher of: energy capacity or power capability requirements
+                        - Payback period = Total battery cost ÷ Annual MD savings
+                        
+                        **Note**: This analysis excludes installation, maintenance, and operational costs.
+                        """)
+                    else:
+                        st.warning("No suitable batteries found in database for analysis.")
+                else:
+                    st.error("Battery database not available for financial analysis.")
+        
         # V2 Enhancement Preview
         st.markdown("#### 🚀 V2 Monthly-Based Enhancements")
         st.info(f"""
