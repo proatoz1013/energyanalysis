@@ -1993,7 +1993,109 @@ with tabs[4]:
     show_md_shaving_solution()
 
 with tabs[5]:
+    st.markdown("## 🔋 MD Shaving (v2)")
+    
+    # Render the MD Shaving v2 analysis content first
     render_md_shaving_v2()
+    
+    # Battery Investment Configuration at the bottom
+    st.markdown("---")
+    st.markdown("### 💰 Battery Investment Configuration")
+    with st.expander("Investment Parameters", expanded=True):
+        st.markdown("**Configure your battery investment parameters based on the analysis above**")
+        
+        # Create columns for better layout
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            # Initialize session state with defaults if not present
+            if "battery_budget" not in st.session_state:
+                st.session_state.battery_budget = 100000.0
+            if "battery_payback_period" not in st.session_state:
+                st.session_state.battery_payback_period = 5
+            if "battery_units" not in st.session_state:
+                st.session_state.battery_units = 1
+            
+            # Budget input
+            st.session_state.battery_budget = st.number_input(
+                "Budget (MYR)",
+                min_value=0.0,
+                max_value=10000000.0,
+                value=st.session_state.battery_budget,
+                step=1000.0,
+                help="Total budget available for battery investment in Malaysian Ringgit",
+                key="battery_budget_input_v2"
+            )
+        
+        with col2:
+            # Payback period input (optional)
+            enable_payback = st.checkbox(
+                "Set Payback Period Target",
+                value=st.session_state.battery_payback_period > 0,
+                help="Enable to set a target payback period for the investment",
+                key="enable_payback_checkbox_v2"
+            )
+            
+            if enable_payback:
+                # Use a safe default value if current value is 0 or less
+                payback_value = st.session_state.battery_payback_period if st.session_state.battery_payback_period > 0 else 5
+                st.session_state.battery_payback_period = st.number_input(
+                    "Target Payback Period (years)",
+                    min_value=1,
+                    max_value=25,
+                    value=payback_value,
+                    step=1,
+                    help="Desired payback period in whole years",
+                    key="battery_payback_input_v2"
+                )
+            else:
+                st.session_state.battery_payback_period = 0
+        
+        with col3:
+            # Units input (optional)
+            enable_units = st.checkbox(
+                "Specify Number of Units",
+                value=st.session_state.battery_units > 1,
+                help="Enable to specify number of battery units to consider",
+                key="enable_units_checkbox_v2"
+            )
+            
+            if enable_units:
+                st.session_state.battery_units = st.number_input(
+                    "Number of Units",
+                    min_value=1,
+                    max_value=100,
+                    value=st.session_state.battery_units,
+                    step=1,
+                    help="Number of battery units to install",
+                    key="battery_units_input_v2"
+                )
+            else:
+                st.session_state.battery_units = 1
+        
+        # Display current configuration
+        st.markdown("---")
+        st.markdown("**Current Configuration:**")
+        
+        config_col1, config_col2, config_col3 = st.columns(3)
+        
+        with config_col1:
+            st.metric("Budget", f"RM {st.session_state.battery_budget:,.0f}")
+        
+        with config_col2:
+            if st.session_state.battery_payback_period > 0:
+                st.metric("Target Payback", f"{st.session_state.battery_payback_period} years")
+            else:
+                st.metric("Payback Period", "Not specified")
+        
+        with config_col3:
+            if st.session_state.battery_units > 1:
+                st.metric("Units", f"{st.session_state.battery_units} units")
+                if st.session_state.battery_budget > 0:
+                    budget_per_unit = st.session_state.battery_budget / st.session_state.battery_units
+                    st.caption(f"Budget per unit: RM {budget_per_unit:,.0f}")
+            else:
+                st.metric("Units", "1 unit (default)")
 
 with tabs[6]:
     # 🔋 Advanced MD Shaving Tab

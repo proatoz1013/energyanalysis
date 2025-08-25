@@ -219,12 +219,14 @@ def _render_v2_battery_controls():
             st.info("📊 **Display Mode:** Specifications only")
     
     # Return the selected battery configuration
-    return {
+    battery_config = {
         'selection_method': selection_method,
         'selected_capacity': selected_capacity if 'selected_capacity' in locals() else default_cap,
         'active_battery_spec': active_battery_spec,
         'run_analysis': run_analysis
     }
+    
+    return battery_config
 
 
 def render_md_shaving_v2():
@@ -448,6 +450,206 @@ def render_md_shaving_v2():
             }
             sample_df = pd.DataFrame(sample_data)
             st.dataframe(sample_df, use_container_width=True)
+
+
+def _render_battery_impact_timeline(df, power_col, selected_tariff, holidays, target_method, shave_percent, target_percent, target_manual_kw, target_description, selected_battery_capacity):
+    """Render the Battery Impact Timeline visualization - duplicate of peak events graph with battery impact overlay."""
+    
+    st.markdown("### 📊 Battery Impact on Energy Consumption")
+    
+    # Calculate monthly-based target demands using dynamic user settings (same as original)
+    if power_col in df.columns:
+        # Calculate monthly maximum demands
+        df_monthly = df.copy()
+        df_monthly['Month'] = df_monthly.index.to_period('M')
+        monthly_max_demands = df_monthly.groupby('Month')[power_col].max()
+        
+        # Calculate monthly targets using CORRECTED dynamic user settings
+        if target_method == "Manual Target (kW)":
+            # For manual target, use the same value for all months
+            monthly_targets = pd.Series(index=monthly_max_demands.index, data=target_manual_kw)
+            legend_label = f"Monthly Target ({target_manual_kw:.0f} kW)"
+        elif target_method == "Percentage to Shave":
+            # Calculate target as percentage reduction from each month's max
+            target_multiplier = 1 - (shave_percent / 100)
+            monthly_targets = monthly_max_demands * target_multiplier
+            legend_label = f"Monthly Target ({shave_percent}% shaving)"
+        else:  # Percentage of Current Max
+            # Calculate target as percentage of each month's max
+            target_multiplier = target_percent / 100
+            monthly_targets = monthly_max_demands * target_multiplier
+            legend_label = f"Monthly Target ({target_percent}% of max)"
+        
+        # Create stepped target line for visualization
+        target_line_data = []
+        target_line_timestamps = []
+        
+        # Create a stepped line that changes at month boundaries
+        for month_period, target_value in monthly_targets.items():
+            # Get start and end of month
+            month_start = month_period.start_time
+            month_end = month_period.end_time
+            
+            # Filter data for this month
+            month_mask = (df.index >= month_start) & (df.index <= month_end)
+            month_data = df[month_mask]
+            
+            if not month_data.empty:
+                # Add target value for each timestamp in this month
+                for timestamp in month_data.index:
+                    target_line_timestamps.append(timestamp)
+                    target_line_data.append(target_value)
+        
+        # Create the battery impact timeline chart with stepped target line
+        if target_line_data and target_line_timestamps:
+            fig = go.Figure()
+            
+            # Add stepped monthly target line first
+            fig.add_trace(go.Scatter(
+                x=target_line_timestamps,
+                y=target_line_data,
+                mode='lines',
+                name=legend_label,
+                line=dict(color='red', width=2, dash='dash'),
+                opacity=0.9
+            ))
+            
+            # Identify and color-code all data points based on monthly targets and TOU periods (same as original)
+            all_monthly_events = []
+            
+            # Create continuous colored line segments
+            # Process data chronologically to create continuous segments
+            all_timestamps = sorted(df.index)
+            
+            # Create segments for continuous colored lines
+            segments = []
+            current_segment = {'type': None, 'x': [], 'y': []}
+            
+            for timestamp in all_timestamps:
+                power_value = df.loc[timestamp, power_col]
+                
+                # Get the monthly target for this timestamp
+                month_period = timestamp.to_period('M')
+                if month_period in monthly_targets:
+                    target_value = monthly_targets[month_period]
+                    
+                    # Determine the color category for this point
+                    if power_value <= target_value:
+                        segment_type = 'below_target'
+                    else:
+                        is_peak = is_peak_rp4(timestamp, holidays if holidays else set())
+                        if is_peak:
+                            segment_type = 'above_target_peak'
+                        else:
+                            segment_type = 'above_target_offpeak'
+                    
+                    # If this is the start or the segment type changed, finalize previous and start new
+                    if current_segment['type'] != segment_type:
+                        # Finalize the previous segment if it has data
+                        if current_segment['type'] is not None and len(current_segment['x']) > 0:
+                            segments.append(current_segment.copy())
+                        
+                        # Start new segment
+                        current_segment = {
+                            'type': segment_type, 
+                            'x': [timestamp], 
+                            'y': [power_value]
+                        }
+                    else:
+                        # Continue current segment
+                        current_segment['x'].append(timestamp)
+                        current_segment['y'].append(power_value)
+            
+            # Don't forget the last segment
+            if current_segment['type'] is not None and len(current_segment['x']) > 0:
+                segments.append(current_segment)
+            
+            # Plot the colored segments with proper continuity (same as original)
+            color_map = {
+                'below_target': {'color': 'blue', 'name': 'Below Monthly Target'},
+                'above_target_offpeak': {'color': 'green', 'name': 'Above Monthly Target - Off-Peak Period'},
+                'above_target_peak': {'color': 'red', 'name': 'Above Monthly Target - Peak Period'}
+            }
+            
+            # Track legend status
+            legend_added = {'below_target': False, 'above_target_offpeak': False, 'above_target_peak': False}
+            
+            # Create continuous line segments by color groups with bridge points (V1 approach)
+            i = 0
+            while i < len(segments):
+                current_segment = segments[i]
+                current_type = current_segment['type']
+                
+                # Extract segment data
+                segment_x = list(current_segment['x'])
+                segment_y = list(current_segment['y'])
+                
+                # Add bridge points for better continuity (connect to adjacent segments)
+                if i > 0:  # Add connection point from previous segment
+                    prev_segment = segments[i-1]
+                    if len(prev_segment['x']) > 0:
+                        segment_x.insert(0, prev_segment['x'][-1])
+                        segment_y.insert(0, prev_segment['y'][-1])
+                
+                if i < len(segments) - 1:  # Add connection point to next segment
+                    next_segment = segments[i+1]
+                    if len(next_segment['x']) > 0:
+                        segment_x.append(next_segment['x'][0])
+                        segment_y.append(next_segment['y'][0])
+                
+                # Get color info
+                color_info = color_map[current_type]
+                
+                # Only show legend for the first occurrence of each type
+                show_legend = not legend_added[current_type]
+                legend_added[current_type] = True
+                
+                # Add line segment
+                fig.add_trace(go.Scatter(
+                    x=segment_x,
+                    y=segment_y,
+                    mode='lines',
+                    line=dict(color=color_info['color'], width=1),
+                    name=color_info['name'],
+                    opacity=0.8,
+                    showlegend=show_legend,
+                    legendgroup=current_type,
+                    connectgaps=True  # Connect gaps within segments
+                ))
+                
+                i += 1
+            
+            # Update layout
+            fig.update_layout(
+                title=f"Battery Impact Visualization - {selected_battery_capacity} kWh Capacity",
+                xaxis_title="Time",
+                yaxis_title="Power (kW)",
+                height=600,
+                showlegend=True,
+                hovermode='x unified',
+                legend=dict(
+                    orientation="v",
+                    yanchor="top",
+                    y=1,
+                    xanchor="left",
+                    x=1.02
+                )
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Add information about what this visualization shows
+            st.info(f"""
+            **📊 Graph Information:**
+            - This graph shows your original energy consumption pattern
+            - Battery capacity selected: **{selected_battery_capacity} kWh**
+            - The colored segments indicate where battery intervention would be beneficial
+            - 🔴 Red areas: Peak period events where battery discharge would reduce MD costs
+            - 🟢 Green areas: Off-peak period events where battery can charge at lower rates
+            - 🔵 Blue areas: Consumption already below target levels
+            
+            💡 **Next steps:** Further analysis will show specific shaving amounts and cost impacts.
+            """)
 
 
 def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, target_method, shave_percent, target_percent, target_manual_kw, target_description):
@@ -906,113 +1108,144 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
             
             # Create comprehensive battery analysis table
             if recommended_capacity_rounded > 0:
-                st.markdown("#### 💰 Battery Financial Analysis")
+                # st.markdown("#### 💰 Battery Financial Analysis")
                 
-                # Load battery database
-                battery_db = load_vendor_battery_database()
-                if battery_db:
-                    # Calculate annual MD cost savings
-                    annual_md_savings = total_md_cost * 12 if 'total_md_cost' in locals() else 0
+                # # Load battery database
+                # battery_db = load_vendor_battery_database()
+                # if battery_db:
+                #     # Calculate annual MD cost savings
+                #     annual_md_savings = total_md_cost * 12 if 'total_md_cost' in locals() else 0
                     
-                    # Create analysis table for all batteries
-                    battery_analysis = []
+                #     # Create analysis table for all batteries
+                #     battery_analysis = []
                     
-                    # Estimated pricing per kWh (market average for commercial batteries)
-                    estimated_price_per_kwh = 1500  # RM per kWh
+                #     # Estimated pricing per kWh (market average for commercial batteries)
+                #     estimated_price_per_kwh = 1500  # RM per kWh
                     
-                    for battery_id, spec in battery_db.items():
-                        battery_capacity = spec.get('energy_kWh', 0)
-                        battery_power = spec.get('power_kW', 0)
+                #     for battery_id, spec in battery_db.items():
+                #         battery_capacity = spec.get('energy_kWh', 0)
+                #         battery_power = spec.get('power_kW', 0)
                         
-                        if battery_capacity > 0 and battery_power > 0:
-                            # Calculate number of units needed - simple division of required capacity by unit capacity
-                            units_needed = int(np.ceil(recommended_capacity_rounded / battery_capacity))
-                            total_capacity = units_needed * battery_capacity
+                #         if battery_capacity > 0 and battery_power > 0:
+                #             # Calculate number of units needed - simple division of required capacity by unit capacity
+                #             units_needed = int(np.ceil(recommended_capacity_rounded / battery_capacity))
+                #             total_capacity = units_needed * battery_capacity
                             
-                            # Ensure total capacity is always a whole number higher than required capacity
-                            if total_capacity <= recommended_capacity_rounded:
-                                units_needed += 1
-                                total_capacity = units_needed * battery_capacity
+                #             # Ensure total capacity is always a whole number higher than required capacity
+                #             if total_capacity <= recommended_capacity_rounded:
+                #                 units_needed += 1
+                #                 total_capacity = units_needed * battery_capacity
                             
-                            # Total system cost
-                            total_cost = total_capacity * estimated_price_per_kwh
+                #             # Total system cost
+                #             total_cost = total_capacity * estimated_price_per_kwh
                             
-                            # Calculate payback period
-                            payback_years = total_cost / annual_md_savings if annual_md_savings > 0 else float('inf')
+                #             # Calculate payback period
+                #             payback_years = total_cost / annual_md_savings if annual_md_savings > 0 else float('inf')
                             
-                            battery_analysis.append({
-                                'Battery Name': f"{spec.get('company', 'Unknown')} {spec.get('model', battery_id)}",
-                                'Unit Capacity (kWh)': battery_capacity,
-                                'Unit Power (kW)': battery_power,
-                                'Units Required': units_needed,
-                                'Total Capacity (kWh)': total_capacity,
-                                'Annual MD Savings (RM)': annual_md_savings,
-                                'Total Battery Cost (RM)': total_cost,
-                                'Payback Period (Years)': payback_years if payback_years != float('inf') else 'N/A'
-                            })
+                #             battery_analysis.append({
+                #                 'Battery Name': f"{spec.get('company', 'Unknown')} {spec.get('model', battery_id)}",
+                #                 'Unit Capacity (kWh)': battery_capacity,
+                #                 'Unit Power (kW)': battery_power,
+                #                 'Units Required': units_needed,
+                #                 'Total Capacity (kWh)': total_capacity,
+                #                 'Annual MD Savings (RM)': annual_md_savings,
+                #                 'Total Battery Cost (RM)': total_cost,
+                #                 'Payback Period (Years)': payback_years if payback_years != float('inf') else 'N/A'
+                #             })
                     
-                    # Sort by payback period (best first)
-                    battery_analysis.sort(key=lambda x: x['Payback Period (Years)'] if x['Payback Period (Years)'] != 'N/A' else 999)
+                #     # Sort by payback period (best first)
+                #     battery_analysis.sort(key=lambda x: x['Payback Period (Years)'] if x['Payback Period (Years)'] != 'N/A' else 999)
                     
-                    if battery_analysis:
-                        df_battery_analysis = pd.DataFrame(battery_analysis)
+                #     if battery_analysis:
+                #         df_battery_analysis = pd.DataFrame(battery_analysis)
                         
-                        # Format the table for display
-                        formatted_analysis = df_battery_analysis.style.format({
-                            'Unit Capacity (kWh)': lambda x: f"{x:.0f}",
-                            'Unit Power (kW)': lambda x: f"{x:.0f}",
-                            'Units Required': lambda x: f"{x:.0f}",
-                            'Total Capacity (kWh)': lambda x: f"{x:.0f}",
-                            'Annual MD Savings (RM)': lambda x: f"RM {x:,.0f}",
-                            'Total Battery Cost (RM)': lambda x: f"RM {x:,.0f}",
-                            'Payback Period (Years)': lambda x: f"{x:.1f}" if isinstance(x, (int, float)) and x != float('inf') else str(x)
-                        })
+                #         # Format the table for display
+                #         formatted_analysis = df_battery_analysis.style.format({
+                #             'Unit Capacity (kWh)': lambda x: f"{x:.0f}",
+                #             'Unit Power (kW)': lambda x: f"{x:.0f}",
+                #             'Units Required': lambda x: f"{x:.0f}",
+                #             'Total Capacity (kWh)': lambda x: f"{x:.0f}",
+                #             'Annual MD Savings (RM)': lambda x: f"RM {x:,.0f}",
+                #             'Total Battery Cost (RM)': lambda x: f"RM {x:,.0f}",
+                #             'Payback Period (Years)': lambda x: f"{x:.1f}" if isinstance(x, (int, float)) and x != float('inf') else str(x)
+                #         })
                         
-                        st.dataframe(formatted_analysis, use_container_width=True)
+                #         st.dataframe(formatted_analysis, use_container_width=True)
                         
-                        # Add summary insights
-                        best_option = battery_analysis[0]
-                        st.markdown("##### 🎯 Key Insights")
+                #         # Add summary insights
+                #         best_option = battery_analysis[0]
+                #         st.markdown("##### 🎯 Key Insights")
                         
-                        col1, col2, col3 = st.columns(3)
+                #         col1, col2, col3 = st.columns(3)
                         
-                        with col1:
-                            st.metric(
-                                "Best Option", 
-                                best_option['Battery Name'],
-                                help="Battery with shortest payback period"
-                            )
+                #         with col1:
+                #             st.metric(
+                #                 "Best Option", 
+                #                 best_option['Battery Name'],
+                #                 help="Battery with shortest payback period"
+                #             )
                         
-                        with col2:
-                            payback_display = f"{best_option['Payback Period (Years)']:.1f} years" if isinstance(best_option['Payback Period (Years)'], (int, float)) else "N/A"
-                            st.metric(
-                                "Best Payback Period", 
-                                payback_display,
-                                help="Time to recover initial investment through MD savings"
-                            )
+                #         with col2:
+                #             payback_display = f"{best_option['Payback Period (Years)']:.1f} years" if isinstance(best_option['Payback Period (Years)'], (int, float)) else "N/A"
+                #             st.metric(
+                #                 "Best Payback Period", 
+                #                 payback_display,
+                #                 help="Time to recover initial investment through MD savings"
+                #             )
                         
-                        with col3:
-                            st.metric(
-                                "Annual Savings", 
-                                f"RM {annual_md_savings:,.0f}",
-                                help="Expected annual savings from MD cost reduction"
-                            )
+                #         with col3:
+                #             st.metric(
+                #                 "Annual Savings", 
+                #                 f"RM {annual_md_savings:,.0f}",
+                #                 help="Expected annual savings from MD cost reduction"
+                #             )
                         
-                        # Add calculation notes
-                        st.markdown("##### 📝 Calculation Notes")
-                        st.info(f"""
-                        **Assumptions:**
-                        - Battery cost: RM {estimated_price_per_kwh:,}/kWh (market average for commercial systems)
-                        - Annual MD savings based on monthly peak events detected: RM {annual_md_savings:,.0f}
-                        - Units required based on higher of: energy capacity or power capability requirements
-                        - Payback period = Total battery cost ÷ Annual MD savings
+                #         # Add calculation notes
+                #         st.markdown("##### 📝 Calculation Notes")
+                #         st.info(f"""
+                #         **Assumptions:**
+                #         - Battery cost: RM {estimated_price_per_kwh:,}/kWh (market average for commercial systems)
+                #         - Annual MD savings based on monthly peak events detected: RM {annual_md_savings:,.0f}
+                #         - Units required based on higher of: energy capacity or power capability requirements
+                #         - Payback period = Total battery cost ÷ Annual MD savings
                         
-                        **Note**: This analysis excludes installation, maintenance, and operational costs.
-                        """)
-                    else:
-                        st.warning("No suitable batteries found in database for analysis.")
-                else:
-                    st.error("Battery database not available for financial analysis.")
+                #         **Note**: This analysis excludes installation, maintenance, and operational costs.
+                #         """)
+                #     else:
+                #         st.warning("No suitable batteries found in database for analysis.")
+                # else:
+                #     st.error("Battery database not available for financial analysis.")
+                pass
+        
+        # Battery Impact Analysis Section - INSERT HERE
+        st.markdown("---")  # Separator
+        st.markdown("### 🔋 Battery Impact Analysis")
+        st.info("Configure battery specifications and visualize their impact on energy consumption patterns:")
+        
+        # Get battery configuration from the widget
+        battery_config = _render_v2_battery_controls()
+        
+        # Render impact visualization if analysis is enabled and we have data context
+        if (battery_config and battery_config.get('run_analysis') and 
+            battery_config.get('selected_capacity', 0) > 0):
+            
+            st.markdown("---")  # Separator between config and visualization
+            st.markdown("#### 📈 Battery Impact Visualization")
+            st.info(f"Impact analysis for {battery_config['selected_capacity']} kWh battery:")
+            
+            # Render the actual battery impact timeline
+            _render_battery_impact_timeline(
+                df, 
+                power_col, 
+                selected_tariff, 
+                holidays,
+                target_method, 
+                shave_percent,
+                target_percent,
+                target_manual_kw,
+                target_description,
+                battery_config['selected_capacity']
+            )
         
         # V2 Enhancement Preview
         st.markdown("#### 🚀 V2 Monthly-Based Enhancements")
@@ -1029,10 +1262,6 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
         - **Monthly ROI Analysis**: Cost-benefit analysis per billing period
         - **Cross-Month Battery Optimization**: Optimize battery usage across multiple months
         """)
-        
-        # Add Battery Capacity Controls after monthly summary
-        st.markdown("---")  # Separator
-        _render_v2_battery_controls()
         
     else:
         st.warning("Power column not found for visualization")
