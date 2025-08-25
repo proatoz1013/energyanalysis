@@ -140,7 +140,13 @@ with tabs[1]:
     st.title("Energy Analysis Dashboard")
     st.subheader("Tariff Setup")
 
-    industry = st.selectbox("Select Industry Type", ["Industrial", "Commercial", "Residential"], index=0)
+    industry_options = ["Industrial", "Commercial", "Residential"]
+    industry = st.selectbox("Select Industry Type", industry_options, index=0)
+    
+    # Ensure industry is a string, not an index
+    if isinstance(industry, int):
+        industry = industry_options[industry]
+    
     tariff_options = {
         "Industrial": [
             "E1 - Medium Voltage General",
@@ -151,7 +157,7 @@ with tabs[1]:
         "Commercial": ["C1 - Low Voltage Commercial", "C2 - Medium Voltage Commercial"],
         "Residential": ["D - Domestic Tariff"]
     }
-    tariff_rate = st.selectbox("Select Tariff Rate", tariff_options[industry])
+    tariff_rate = st.selectbox("Select Tariff Rate", tariff_options.get(industry, []))
 
     charging_rates = {
         "E1 - Medium Voltage General": "Base: RM 0.337/kWh, MD: RM 29.60/kW",
