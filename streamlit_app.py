@@ -7,7 +7,7 @@ import json
 from tnb_tariff_comparison import show as show_tnb_tariff_comparison
 from advanced_energy_analysis import show as show_advanced_energy_analysis
 from md_shaving_solution import show as show_md_shaving_solution
-from md_shaving_solution_v2 import render_md_shaving_v2
+from md_shaving_solution_v2 import render_md_shaving_v2, render_battery_impact_visualization
 import sys
 import os
 
@@ -140,7 +140,7 @@ with tabs[1]:
     st.title("Energy Analysis Dashboard")
     st.subheader("Tariff Setup")
 
-    industry = st.selectbox("Select Industry Type", ["Industrial", "Commercial", "Residential"])
+    industry = st.selectbox("Select Industry Type", ["Industrial", "Commercial", "Residential"], index=0)
     tariff_options = {
         "Industrial": [
             "E1 - Medium Voltage General",
@@ -2096,6 +2096,456 @@ with tabs[5]:
                     st.caption(f"Budget per unit: RM {budget_per_unit:,.0f}")
             else:
                 st.metric("Units", "1 unit (default)")
+    
+    # Battery Recommendation & Financial Analysis Section
+    st.markdown("---")
+    st.markdown("### 🎯 Battery Recommendation & Financial Analysis")
+    
+    # Only show recommendations if we have uploaded data from MD Shaving v2
+    if (hasattr(st.session_state, 'processed_df') and 
+        st.session_state.processed_df is not None and 
+        hasattr(st.session_state, 'power_column') and 
+        st.session_state.power_column):
+        
+        # Load battery database
+        import json
+        try:
+            with open('vendor_battery_database.json', 'r') as f:
+                battery_db = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            battery_db = {}
+        
+        if battery_db:
+            # Get user configuration
+            budget = st.session_state.battery_budget
+            target_payback = st.session_state.battery_payback_period if st.session_state.battery_payback_period > 0 else None
+            units = st.session_state.battery_units
+            
+            # Fixed rate as specified
+            BATTERY_COST_PER_KWH = 1400  # RM 1.4k/kWh
+            
+            # Calculate estimated MD shaving potential from the data
+            df = st.session_state.processed_df
+            power_col = st.session_state.power_column
+            
+            # Simple MD calculation - get monthly peak and estimate 10-20% shaving potential
+            if power_col in df.columns:
+                monthly_peaks = df.groupby(df.index.to_period('M'))[power_col].max()
+                avg_monthly_peak = monthly_peaks.mean()
+                
+                # Estimate MD shaving potential (10-20% typical range)
+                md_shaving_potential_low = avg_monthly_peak * 0.10  # 10% conservative
+                md_shaving_potential_high = avg_monthly_peak * 0.20  # 20% aggressive
+                md_shaving_potential_mid = avg_monthly_peak * 0.15   # 15% balanced
+                
+                # Estimate MD cost savings (using typical commercial MD rate)
+                md_rate_rm_per_kw = 35.0  # Typical commercial MD rate RM/kW/month
+                monthly_savings_conservative = md_shaving_potential_low * md_rate_rm_per_kw
+                monthly_savings_aggressive = md_shaving_potential_high * md_rate_rm_per_kw
+                monthly_savings_balanced = md_shaving_potential_mid * md_rate_rm_per_kw
+                
+                annual_savings_conservative = monthly_savings_conservative * 12
+                annual_savings_aggressive = monthly_savings_aggressive * 12
+                annual_savings_balanced = monthly_savings_balanced * 12
+                
+                # Find suitable batteries within budget
+                suitable_batteries = []
+                
+                for battery_id, spec in battery_db.items():
+                    battery_capacity = spec.get('energy_kWh', 0)
+                    battery_power = spec.get('power_kW', 0)
+                    
+                    if battery_capacity > 0 and battery_power > 0:
+                        # Calculate units needed based on energy requirement (conservative approach)
+                        # Assume we need 2-4 hours of storage for MD shaving
+                        required_energy_conservative = md_shaving_potential_low * 2  # 2 hours
+                        required_energy_aggressive = md_shaving_potential_high * 4   # 4 hours
+                        
+                        units_needed_conservative = max(1, int(np.ceil(required_energy_conservative / battery_capacity)))
+                        units_needed_aggressive = max(1, int(np.ceil(required_energy_aggressive / battery_capacity)))
+                        
+                        # Check if within budget constraints
+                        total_capacity_conservative = units_needed_conservative * battery_capacity
+                        total_capacity_aggressive = units_needed_aggressive * battery_capacity
+                        
+                        total_cost_conservative = total_capacity_conservative * BATTERY_COST_PER_KWH
+                        total_cost_aggressive = total_capacity_aggressive * BATTERY_COST_PER_KWH
+                        
+                        # Calculate payback periods
+                        payback_conservative = total_cost_conservative / annual_savings_conservative if annual_savings_conservative > 0 else float('inf')
+                        payback_aggressive = total_cost_aggressive / annual_savings_aggressive if annual_savings_aggressive > 0 else float('inf')
+                        
+                        # Check budget constraints
+                        fits_budget_conservative = total_cost_conservative <= budget if budget > 0 else True
+                        fits_budget_aggressive = total_cost_aggressive <= budget if budget > 0 else True
+                        
+                        # Check payback constraints
+                        meets_payback_conservative = payback_conservative <= target_payback if target_payback else True
+                        meets_payback_aggressive = payback_aggressive <= target_payback if target_payback else True
+                        
+                        suitable_batteries.append({
+                            'id': battery_id,
+                            'company': spec.get('company', 'Unknown'),
+                            'model': spec.get('model', battery_id),
+                            'unit_capacity_kwh': battery_capacity,
+                            'unit_power_kw': battery_power,
+                            'units_conservative': units_needed_conservative,
+                            'units_aggressive': units_needed_aggressive,
+                            'total_capacity_conservative': total_capacity_conservative,
+                            'total_capacity_aggressive': total_capacity_aggressive,
+                            'total_cost_conservative': total_cost_conservative,
+                            'total_cost_aggressive': total_cost_aggressive,
+                            'payback_conservative': payback_conservative,
+                            'payback_aggressive': payback_aggressive,
+                            'fits_budget_conservative': fits_budget_conservative,
+                            'fits_budget_aggressive': fits_budget_aggressive,
+                            'meets_payback_conservative': meets_payback_conservative,
+                            'meets_payback_aggressive': meets_payback_aggressive,
+                            'score_conservative': (1 if fits_budget_conservative else 0) + (1 if meets_payback_conservative else 0),
+                            'score_aggressive': (1 if fits_budget_aggressive else 0) + (1 if meets_payback_aggressive else 0)
+                        })
+                
+                # Sort by best fit (highest score, then shortest payback)
+                suitable_batteries.sort(key=lambda x: (-x['score_conservative'], x['payback_conservative']))
+                
+                if suitable_batteries:
+                    # Display top recommendation
+                    best_battery = suitable_batteries[0]
+                    
+                    # Create recommendation container
+                    with st.container():
+                        st.markdown("#### 🏆 Recommended Battery Solution")
+                        
+                        # Display key metrics
+                        col1, col2, col3, col4 = st.columns(4)
+                        
+                        with col1:
+                            st.metric(
+                                "Recommended Battery", 
+                                f"{best_battery['company']} {best_battery['model']}",
+                                help="Best battery based on your budget and payback requirements"
+                            )
+                            st.caption(f"**Unit specs:** {best_battery['unit_capacity_kwh']} kWh / {best_battery['unit_power_kw']} kW")
+                        
+                        with col2:
+                            st.metric(
+                                "Total MD Shaved", 
+                                f"{md_shaving_potential_mid:.1f} kW",
+                                help="Estimated monthly maximum demand reduction (15% scenario)"
+                            )
+                            st.caption(f"**Range:** {md_shaving_potential_low:.1f} - {md_shaving_potential_high:.1f} kW")
+                        
+                        with col3:
+                            # Use conservative scenario for cost calculation
+                            st.metric(
+                                "Total Cost", 
+                                f"RM {best_battery['total_cost_conservative']:,.0f}",
+                                help=f"Cost calculation: {best_battery['total_capacity_conservative']:.0f} kWh × RM {BATTERY_COST_PER_KWH}/kWh"
+                            )
+                            st.caption(f"**Units needed:** {best_battery['units_conservative']} units")
+                        
+                        with col4:
+                            st.metric(
+                                "Payback Period", 
+                                f"{best_battery['payback_conservative']:.1f} years",
+                                help=f"Based on RM {annual_savings_conservative:,.0f} annual savings"
+                            )
+                            st.caption(f"**Monthly savings:** RM {monthly_savings_conservative:,.0f}")
+                        
+                        # Additional details
+                        st.markdown("---")
+                        st.markdown("#### 📊 Financial Analysis Details")
+                        
+                        # Create analysis table
+                        analysis_col1, analysis_col2 = st.columns(2)
+                        
+                        with analysis_col1:
+                            st.markdown("**💰 Cost Breakdown:**")
+                            st.write(f"• Battery units: {best_battery['units_conservative']} × {best_battery['unit_capacity_kwh']} kWh")
+                            st.write(f"• Total capacity: {best_battery['total_capacity_conservative']:,.0f} kWh")
+                            st.write(f"• Cost per kWh: RM {BATTERY_COST_PER_KWH:,}")
+                            st.write(f"• **Total investment: RM {best_battery['total_cost_conservative']:,.0f}**")
+                            
+                            # Budget status
+                            if budget > 0:
+                                if best_battery['fits_budget_conservative']:
+                                    remaining_budget = budget - best_battery['total_cost_conservative']
+                                    st.success(f"✅ Within budget (RM {remaining_budget:,.0f} remaining)")
+                                else:
+                                    over_budget = best_battery['total_cost_conservative'] - budget
+                                    st.error(f"❌ Over budget by RM {over_budget:,.0f}")
+                        
+                        with analysis_col2:
+                            st.markdown("**📈 Savings Projection:**")
+                            st.write(f"• MD shaving target: {md_shaving_potential_mid:.1f} kW")
+                            st.write(f"• MD rate: RM {md_rate_rm_per_kw}/kW/month")
+                            st.write(f"• Monthly savings: RM {monthly_savings_balanced:,.0f}")
+                            st.write(f"• **Annual savings: RM {annual_savings_balanced:,.0f}**")
+                            
+                            # Payback status
+                            if target_payback:
+                                if best_battery['meets_payback_conservative']:
+                                    st.success(f"✅ Meets {target_payback}-year target")
+                                else:
+                                    st.warning(f"⚠️ Exceeds {target_payback}-year target")
+                            else:
+                                st.info("💡 No payback target set")
+                        
+                        # Show alternative scenarios
+                        st.markdown("#### 🔄 Alternative Scenarios")
+                        
+                        scenario_data = {
+                            'Scenario': ['Conservative (10%)', 'Balanced (15%)', 'Aggressive (20%)'],
+                            'MD Shaved (kW)': [f"{md_shaving_potential_low:.1f}", f"{md_shaving_potential_mid:.1f}", f"{md_shaving_potential_high:.1f}"],
+                            'Annual Savings (RM)': [f"{annual_savings_conservative:,.0f}", f"{annual_savings_balanced:,.0f}", f"{annual_savings_aggressive:,.0f}"],
+                            'Payback (years)': [
+                                f"{best_battery['payback_conservative']:.1f}",
+                                f"{best_battery['total_cost_conservative'] / annual_savings_balanced:.1f}" if annual_savings_balanced > 0 else "N/A",
+                                f"{best_battery['payback_aggressive']:.1f}" if best_battery['payback_aggressive'] != float('inf') else "N/A"
+                            ]
+                        }
+                        
+                        scenario_df = pd.DataFrame(scenario_data)
+                        st.dataframe(scenario_df, use_container_width=True, hide_index=True)
+                        
+                        # Calculation assumptions
+                        with st.expander("📝 Calculation Assumptions & Notes"):
+                            st.markdown(f"""
+                            **Key Assumptions:**
+                            - Battery cost: RM {BATTERY_COST_PER_KWH:,}/kWh (fixed rate as specified)
+                            - MD rate: RM {md_rate_rm_per_kw}/kW/month (typical commercial rate)
+                            - Storage duration: 2-4 hours (typical for MD shaving)
+                            - MD shaving scenarios: 10% (conservative), 15% (balanced), 20% (aggressive)
+                            - Based on average monthly peak: {avg_monthly_peak:.1f} kW
+                            
+                            **Notes:**
+                            - Calculations exclude installation, maintenance, and operational costs
+                            - Actual performance may vary based on load patterns and operational strategy
+                            - Regular monitoring recommended for validation
+                            - Consider consulting with battery system integrators for detailed design
+                            """)
+                        
+                else:
+                    st.warning("❌ No suitable batteries found in database that meet your criteria. Consider adjusting budget or payback period requirements.")
+            else:
+                st.error("❌ Power data column not found. Please ensure data is properly uploaded in MD Shaving v2 section.")
+        else:
+            st.error("❌ Battery database not available. Please ensure vendor_battery_database.json file exists.")
+    else:
+        # Show demo calculations and battery information even without uploaded data
+        st.info("💡 **Upload data in the MD Shaving (v2) section above to see personalized recommendations based on your actual load profile.**")
+        
+        # Load battery database for demo
+        import json
+        try:
+            with open('vendor_battery_database.json', 'r') as f:
+                battery_db = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            battery_db = {}
+        
+        if battery_db:
+            # Get user configuration
+            budget = st.session_state.battery_budget
+            target_payback = st.session_state.battery_payback_period if st.session_state.battery_payback_period > 0 else None
+            units = st.session_state.battery_units
+            
+            # Fixed rate as specified
+            BATTERY_COST_PER_KWH = 1400  # RM 1.4k/kWh
+            
+            st.markdown("---")
+            st.markdown("### 📊 Sample Battery Analysis")
+            st.markdown("*Based on typical commercial load profile (100-300 kW peak demand)*")
+            
+            # Sample calculations for demo purposes
+            sample_monthly_peak = 200  # kW - typical commercial peak
+            sample_md_rate = 35.0  # RM/kW/month - typical commercial rate
+            
+            # Create tabs for different scenarios
+            scenario_tabs = st.tabs(["Conservative (10%)", "Moderate (15%)", "Aggressive (20%)"])
+            
+            scenarios = [
+                {
+                    "name": "Conservative", 
+                    "shaving_percent": 10, 
+                    "risk": "Low Risk",
+                    "ideal_capacity_kwh": 40,
+                    "ideal_power_kw": 20
+                },
+                {
+                    "name": "Moderate", 
+                    "shaving_percent": 15, 
+                    "risk": "Balanced",
+                    "ideal_capacity_kwh": 60,
+                    "ideal_power_kw": 30
+                },
+                {
+                    "name": "Aggressive", 
+                    "shaving_percent": 20, 
+                    "risk": "Higher Potential",
+                    "ideal_capacity_kwh": 80,
+                    "ideal_power_kw": 40
+                }
+            ]
+            
+            for i, scenario in enumerate(scenarios):
+                with scenario_tabs[i]:
+                    st.markdown(f"#### {scenario['name']} Scenario ({scenario['shaving_percent']}% MD Shaving)")
+                    st.caption(f"🎯 **Risk Level:** {scenario['risk']}")
+                    
+                    # Calculate sample MD shaving - use realistic values
+                    md_shaved = scenario['ideal_power_kw']  # Direct assignment for clarity
+                    monthly_savings = md_shaved * sample_md_rate
+                    annual_savings = monthly_savings * 12
+                    
+                    # Use ideal battery specs for demo
+                    ideal_capacity = scenario['ideal_capacity_kwh']
+                    ideal_cost_per_unit = ideal_capacity * BATTERY_COST_PER_KWH
+                    ideal_total_cost = ideal_cost_per_unit * units
+                    ideal_payback_years = ideal_total_cost / annual_savings if annual_savings > 0 else float('inf')
+                    
+                    # Display key metrics with ideal calculations
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    with col1:
+                        st.metric(
+                            "Monthly MD Shaved",
+                            f"{md_shaved:.1f} kW",
+                            help="Estimated maximum demand reduction per month"
+                        )
+                    
+                    with col2:
+                        st.metric(
+                            "Monthly Savings",
+                            f"RM {monthly_savings:,.0f}",
+                            help="Estimated monthly cost savings from MD reduction"
+                        )
+                    
+                    with col3:
+                        st.metric(
+                            "Annual Savings",
+                            f"RM {annual_savings:,.0f}",
+                            help="Estimated annual cost savings"
+                        )
+                    
+                    with col4:
+                        st.metric(
+                            "Payback Period",
+                            f"{ideal_payback_years:.1f} years",
+                            help="Time to recover investment through savings"
+                        )
+                    
+                    # Show ideal battery recommendation
+                    st.markdown("---")
+                    st.markdown("#### 🔋 Ideal Battery Configuration")
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.markdown(f"""
+                        **Ideal Battery Specifications**
+                        - **Capacity:** {ideal_capacity:.1f} kWh
+                        - **Power:** {scenario['ideal_power_kw']:.1f} kW
+                        - **Units:** {units} unit(s)
+                        """)
+                    
+                    with col2:
+                        st.markdown(f"""
+                        **Financial Summary**
+                        - **Cost per unit:** RM {ideal_cost_per_unit:,.0f}
+                        - **Total investment:** RM {ideal_total_cost:,.0f}
+                        - **Budget remaining:** RM {budget - ideal_total_cost:,.0f}
+                        """)
+                    
+                    # Now find actual available batteries from database
+                    suitable_batteries = []
+                    for model_id, specs in battery_db.items():
+                        capacity = specs.get('energy_kWh', 0)
+                        power = specs.get('power_kW', 0)
+                        company = specs.get('company', 'Unknown')
+                        model = specs.get('model', model_id)
+                        
+                        # More flexible matching - look for batteries that can handle the power requirement
+                        if power >= scenario['ideal_power_kw']:
+                            cost_per_unit = capacity * BATTERY_COST_PER_KWH
+                            total_cost = cost_per_unit * units
+                            if total_cost <= budget:
+                                payback_years = total_cost / annual_savings if annual_savings > 0 else float('inf')
+                                if target_payback is None or payback_years <= target_payback:
+                                    suitable_batteries.append({
+                                        'brand': company,
+                                        'model': model,
+                                        'model_id': model_id,
+                                        'capacity': capacity,
+                                        'power': power,
+                                        'cost_per_unit': cost_per_unit,
+                                        'total_cost': total_cost,
+                                        'payback_years': payback_years
+                                    })
+                    
+                    if suitable_batteries:
+                        # Sort by payback period
+                        suitable_batteries.sort(key=lambda x: x['payback_years'])
+                        
+                        st.markdown("#### 🏭 Available Commercial Batteries")
+                        st.info("⚠️ Note: Commercial batteries may be oversized for this scenario, leading to longer payback periods.")
+                        
+                        # Show top 3 available options
+                        for idx, battery in enumerate(suitable_batteries[:3]):
+                            with st.expander(f"Option {idx+1}: {battery['brand']} {battery['model']} - {battery['payback_years']:.1f} year payback"):
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.markdown(f"""
+                                    **Specifications:**
+                                    - Capacity: {battery['capacity']:.1f} kWh
+                                    - Power: {battery['power']:.1f} kW
+                                    - Oversized by: {(battery['capacity']/ideal_capacity-1)*100:.0f}%
+                                    """)
+                                with col2:
+                                    st.markdown(f"""
+                                    **Costs:**
+                                    - Total: RM {battery['total_cost']:,.0f}
+                                    - Payback: {battery['payback_years']:.1f} years
+                                    - Extra cost vs ideal: RM {battery['total_cost'] - ideal_total_cost:,.0f}
+                                    """)
+                    else:
+                        st.warning(f"❌ No commercial batteries available within budget (RM {budget:,.0f}) and payback requirements.")
+                        st.markdown(f"""
+                        **Commercial batteries are typically larger than needed for this scenario.**
+                        
+                        Consider:
+                        - Increasing budget to accommodate larger commercial units
+                        - Extending acceptable payback period
+                        - Exploring custom battery solutions
+                        """)
+            
+            # Summary section
+            st.markdown("---")
+            st.markdown("### 📈 How to Get Personalized Recommendations")
+            st.markdown("""
+            **The calculations above are based on typical commercial profiles. For accurate recommendations:**
+            
+            1. **Upload your actual load data** in the MD Shaving (v2) section above
+            2. **Configure your specific requirements** using the investment parameters
+            3. **Get personalized analysis** based on your real energy consumption patterns
+            
+            Your actual results may vary significantly from these sample calculations based on:
+            - Peak demand timing and frequency
+            - Load profile variability  
+            - Seasonal consumption patterns
+            - Operational constraints
+            """)
+        else:
+            st.error("❌ Battery database not available. Please ensure vendor_battery_database.json file exists.")
+        
+        st.markdown("""
+        **To get personalized recommendations:**
+        1. Upload your load profile data in the MD Shaving (v2) section
+        2. Configure your investment parameters above
+        3. Return here to see recommendations based on your actual data
+        """)
+    
+    # Add Battery Impact Visualization at the bottom
+    render_battery_impact_visualization()
 
 with tabs[6]:
     # 🔋 Advanced MD Shaving Tab

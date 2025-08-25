@@ -1217,7 +1217,48 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                 #     st.error("Battery database not available for financial analysis.")
                 pass
         
-        # Battery Impact Analysis Section - INSERT HERE
+        # Battery Impact Analysis Section moved to separate function
+        
+        # V2 Enhancement Preview
+        st.markdown("#### 🚀 V2 Monthly-Based Enhancements")
+        st.info(f"""
+        **📈 Monthly-Based Features Implemented:**
+        - **✅ Monthly Target Calculation**: Each month uses {target_description} target
+        - **✅ Stepped Target Profile**: Sawtooth target line that changes at month boundaries
+        - **✅ Month-Specific Event Detection**: Peak events detected using appropriate monthly targets
+        - **✅ Monthly Breakdown Table**: Detailed monthly analysis with individual targets and shaving amounts
+        
+        **🔄 Advanced Features Coming Soon:**
+        - **Interactive Monthly Thresholds**: Adjust shaving percentage per month individually
+        - **Seasonal Optimization**: Different strategies for high/low demand seasons
+        - **Monthly ROI Analysis**: Cost-benefit analysis per billing period
+        - **Cross-Month Battery Optimization**: Optimize battery usage across multiple months
+        """)
+        
+    else:
+        st.warning("Power column not found for visualization")
+
+
+def render_battery_impact_visualization():
+    """Render the Battery Impact Analysis section as a separate component."""
+    # Only render if we have the necessary data in session state
+    if (hasattr(st.session_state, 'processed_df') and 
+        st.session_state.processed_df is not None and 
+        hasattr(st.session_state, 'power_column') and 
+        st.session_state.power_column and
+        hasattr(st.session_state, 'selected_tariff')):
+        
+        # Get data from session state
+        df = st.session_state.processed_df
+        power_col = st.session_state.power_column
+        selected_tariff = st.session_state.selected_tariff
+        holidays = getattr(st.session_state, 'holidays', [])
+        target_method = getattr(st.session_state, 'target_method', 'percentage')
+        shave_percent = getattr(st.session_state, 'shave_percent', 10)
+        target_percent = getattr(st.session_state, 'target_percent', 85)
+        target_manual_kw = getattr(st.session_state, 'target_manual_kw', 100)
+        target_description = getattr(st.session_state, 'target_description', 'percentage-based')
+        
         st.markdown("---")  # Separator
         st.markdown("### 🔋 Battery Impact Analysis")
         st.info("Configure battery specifications and visualize their impact on energy consumption patterns:")
@@ -1246,25 +1287,8 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                 target_description,
                 battery_config['selected_capacity']
             )
-        
-        # V2 Enhancement Preview
-        st.markdown("#### 🚀 V2 Monthly-Based Enhancements")
-        st.info(f"""
-        **📈 Monthly-Based Features Implemented:**
-        - **✅ Monthly Target Calculation**: Each month uses {target_description} target
-        - **✅ Stepped Target Profile**: Sawtooth target line that changes at month boundaries
-        - **✅ Month-Specific Event Detection**: Peak events detected using appropriate monthly targets
-        - **✅ Monthly Breakdown Table**: Detailed monthly analysis with individual targets and shaving amounts
-        
-        **🔄 Advanced Features Coming Soon:**
-        - **Interactive Monthly Thresholds**: Adjust shaving percentage per month individually
-        - **Seasonal Optimization**: Different strategies for high/low demand seasons
-        - **Monthly ROI Analysis**: Cost-benefit analysis per billing period
-        - **Cross-Month Battery Optimization**: Optimize battery usage across multiple months
-        """)
-        
     else:
-        st.warning("Power column not found for visualization")
+        st.info("💡 **Upload data in the MD Shaving (v2) section above to see battery impact visualization.**")
 
 
 # Main function for compatibility
