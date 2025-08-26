@@ -70,6 +70,271 @@ def get_battery_capacity_range(battery_db):
         return 200, 250, 225  # Default fallback
 
 
+def _render_battery_selection_dropdown():
+    """
+    Render independent battery selection dropdown that's always visible when data is available.
+    This function should be called when a file is uploaded and data is available.
+    """
+    with st.container():
+        st.markdown("#### 📋 Tabled Analysis")
+        
+        # Battery selection dropdown
+        battery_db = load_vendor_battery_database()
+        
+        if battery_db:
+            # Create battery options for dropdown
+            battery_options = {}
+            battery_list = []
+            
+            for battery_id, spec in battery_db.items():
+                company = spec.get('company', 'Unknown')
+                model = spec.get('model', battery_id)
+                capacity = spec.get('energy_kWh', 0)
+                power = spec.get('power_kW', 0)
+                
+                label = f"{company} {model} ({capacity}kWh, {power}kW)"
+                battery_options[label] = {
+                    'id': battery_id,
+                    'spec': spec,
+                    'capacity_kwh': capacity,
+                    'power_kw': power
+                }
+                battery_list.append(label)
+            
+            # Sort battery list for better UX
+            battery_list.sort()
+            battery_list.insert(0, "-- Select a Battery --")
+            
+            # Battery selection dropdown
+            selected_battery_label = st.selectbox(
+                "🔋 Select Battery for Analysis:",
+                options=battery_list,
+                index=0,
+                key="independent_battery_selection",
+                help="Choose a battery from the vendor database to view specifications and analysis"
+            )
+            
+            # Display selected battery information
+            if selected_battery_label != "-- Select a Battery --":
+                selected_battery_data = battery_options[selected_battery_label]
+                battery_spec = selected_battery_data['spec']
+                
+                # Display battery specifications in a table format
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("**📊 Battery Specifications:**")
+                    spec_data = {
+                        'Parameter': ['Company', 'Model', 'Energy Capacity', 'Power Rating', 'C-Rate', 'Voltage', 'Lifespan', 'Cooling'],
+                        'Value': [
+                            battery_spec.get('company', 'N/A'),
+                            battery_spec.get('model', 'N/A'),
+                            f"{battery_spec.get('energy_kWh', 0)} kWh",
+                            f"{battery_spec.get('power_kW', 0)} kW",
+                            f"{battery_spec.get('c_rate', 0)}C",
+                            f"{battery_spec.get('voltage_V', 0)} V",
+                            f"{battery_spec.get('lifespan_years', 0)} years",
+                            battery_spec.get('cooling', 'N/A')
+                        ]
+                    }
+                    df_specs = pd.DataFrame(spec_data)
+                    st.dataframe(df_specs, use_container_width=True, hide_index=True)
+                
+                with col2:
+                    st.markdown("**💰 Financial Analysis:**")
+                    # Estimated costs and calculations
+                    estimated_cost_per_kwh = 1400  # RM per kWh
+                    battery_cost = battery_spec.get('energy_kWh', 0) * estimated_cost_per_kwh
+                    
+                    financial_data = {
+                        'Metric': ['Unit Cost', 'Estimated Total Cost', 'Cost per kW', 'Cost per kWh'],
+                        'Value': [
+                            f"RM {estimated_cost_per_kwh}/kWh",
+                            f"RM {battery_cost:,.0f}",
+                            f"RM {battery_cost/battery_spec.get('power_kW', 1):,.0f}/kW",
+                            f"RM {estimated_cost_per_kwh}/kWh"
+                        ]
+                    }
+                    df_financial = pd.DataFrame(financial_data)
+                    st.dataframe(df_financial, use_container_width=True, hide_index=True)
+                
+                # Store selected battery in session state for use in other parts of the analysis
+                st.session_state.tabled_analysis_selected_battery = {
+                    'id': selected_battery_data['id'],
+                    'spec': battery_spec,
+                    'capacity_kwh': selected_battery_data['capacity_kwh'],
+                    'power_kw': selected_battery_data['power_kw'],
+                    'label': selected_battery_label
+                }
+                
+                return selected_battery_data
+            else:
+                st.info("💡 Select a battery from the dropdown above to view detailed specifications and analysis.")
+                return None
+        else:
+            st.error("❌ Battery database not available")
+            return None
+
+
+def _render_battery_sizing_analysis(max_shaving_power, max_tou_energy, total_md_cost):
+    """
+    Render comprehensive battery sizing and financial analysis table.
+    
+    Args:
+        max_shaving_power: Maximum power shaving required (kW)
+        max_tou_energy: Maximum TOU required energy (kWh)  
+        total_md_cost: Total MD cost impact (RM)
+    """
+    st.markdown("#### 🔋 Battery Sizing & Financial Analysis")
+    
+    # Check if user has selected a battery from the tabled analysis dropdown
+    if hasattr(st.session_state, 'tabled_analysis_selected_battery') and st.session_state.tabled_analysis_selected_battery:
+        selected_battery = st.session_state.tabled_analysis_selected_battery
+        battery_spec = selected_battery['spec']
+        battery_name = selected_battery['label']
+        
+        st.info(f"🔋 **Analysis based on selected battery:** {battery_name}")
+        
+        # Extract battery specifications
+        battery_power_kw = battery_spec.get('power_kW', 0)
+        battery_energy_kwh = battery_spec.get('energy_kWh', 0)
+        battery_lifespan_years = battery_spec.get('lifespan_years', 15)
+        
+        if battery_power_kw > 0 and battery_energy_kwh > 0:
+            # Calculate battery quantities required
+            
+            # Column 1: Battery quantity for max power shaving
+            qty_for_power = max_shaving_power / battery_power_kw if battery_power_kw > 0 else 0
+            qty_for_power_rounded = int(np.ceil(qty_for_power))
+            
+            # Column 2: Battery quantity for max TOU event  
+            qty_for_energy = max_tou_energy / battery_energy_kwh if battery_energy_kwh > 0 else 0
+            qty_for_energy_rounded = int(np.ceil(qty_for_energy))
+            
+            # Column 3: BESS quantity (higher of the two)
+            bess_quantity = max(qty_for_power_rounded, qty_for_energy_rounded)
+            
+            # Calculate total system specifications
+            total_power_kw = bess_quantity * battery_power_kw
+            total_energy_kwh = bess_quantity * battery_energy_kwh
+            
+            # Column 4: MD shaved (actual impact with this battery configuration)
+            # Use the total power capacity from the larger battery quantity (BESS quantity)
+            md_shaved_kw = total_power_kw  # Total power from the BESS system
+            md_shaving_percentage = (md_shaved_kw / max_shaving_power * 100) if max_shaving_power > 0 else 0
+            
+            # Column 5: Cost of batteries
+            estimated_cost_per_kwh = 1400  # RM per kWh (consistent with main app)
+            total_battery_cost = total_energy_kwh * estimated_cost_per_kwh
+            
+            # Column 6: Actual cost saved (annual)
+            # Calculate MD cost savings based on actual MD shaved
+            md_rate_per_kw = 35.0  # Average MD rate (RM/kW/month) - can be refined based on tariff
+            monthly_md_savings = md_shaved_kw * md_rate_per_kw
+            annual_cost_saved = monthly_md_savings * 12
+            
+            # Column 7: Payback period
+            payback_period_years = total_battery_cost / annual_cost_saved if annual_cost_saved > 0 else float('inf')
+            
+            # Create analysis table
+            analysis_data = {
+                'Analysis Parameter': [
+                    'Units for Max Power Shaving',
+                    'Units for Max TOU Energy',
+                    'Total BESS Quantity Required',
+                    'Total System Power Capacity',
+                    'Total System Energy Capacity',
+                    'Actual MD Shaved',
+                    'MD Shaving Coverage',
+                    'Total Battery Investment',
+                    'Annual Cost Savings',
+                    'Simple Payback Period'
+                ],
+                'Value': [
+                    f"{qty_for_power_rounded} units ({qty_for_power:.2f} calculated)",
+                    f"{qty_for_energy_rounded} units ({qty_for_energy:.2f} calculated)", 
+                    f"{bess_quantity} units",
+                    f"{total_power_kw:.1f} kW",
+                    f"{total_energy_kwh:.1f} kWh",
+                    f"{md_shaved_kw:.1f} kW",
+                    f"{md_shaving_percentage:.1f}%",
+                    f"RM {total_battery_cost:,.0f}",
+                    f"RM {annual_cost_saved:,.0f}",
+                    f"{payback_period_years:.1f} years" if payback_period_years != float('inf') else "No payback"
+                ],
+                'Calculation Basis': [
+                    f"Max Power Required: {max_shaving_power:.1f} kW ÷ {battery_power_kw} kW/unit",
+                    f"Max Energy Required: {max_tou_energy:.1f} kWh ÷ {battery_energy_kwh} kWh/unit",
+                    "Higher of power or energy requirement",
+                    f"{bess_quantity} units × {battery_power_kw} kW/unit",
+                    f"{bess_quantity} units × {battery_energy_kwh} kWh/unit", 
+                    f"{bess_quantity} units × {battery_power_kw} kW/unit = {total_power_kw:.1f} kW",
+                    f"MD Shaved ÷ Max Power Required × 100%",
+                    f"{total_energy_kwh:.1f} kWh × RM {estimated_cost_per_kwh}/kWh",
+                    f"{md_shaved_kw:.1f} kW × RM {md_rate_per_kw}/kW/month × 12 months",
+                    "Total Investment ÷ Annual Savings"
+                ]
+            }
+            
+            df_analysis = pd.DataFrame(analysis_data)
+            
+            # Display the dataframe without styling for consistent formatting
+            st.dataframe(df_analysis, use_container_width=True, hide_index=True)
+            
+            # Key insights
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric(
+                    "💰 Total Investment", 
+                    f"RM {total_battery_cost:,.0f}",
+                    help="Total cost for complete BESS installation"
+                )
+            
+            with col2:
+                st.metric(
+                    "📈 Annual Savings", 
+                    f"RM {annual_cost_saved:,.0f}",
+                    help="Estimated annual MD cost savings"
+                )
+            
+            with col3:
+                if payback_period_years != float('inf'):
+                    st.metric(
+                        "⏱️ Payback Period", 
+                        f"{payback_period_years:.1f} years",
+                        help="Simple payback period (no interest/inflation)"
+                    )
+                else:
+                    st.metric("⏱️ Payback Period", "No payback", help="Insufficient savings for payback")
+            
+            # Analysis insights
+            if bess_quantity > 0:
+                st.success(f"""
+                **📊 Analysis Summary:**
+                - **Battery Selection**: {battery_name}
+                - **System Configuration**: {bess_quantity} units providing {total_power_kw:.1f} kW / {total_energy_kwh:.1f} kWh
+                - **MD Shaving Capability**: {md_shaving_percentage:.1f}% coverage of maximum demand events
+                - **Financial Viability**: {payback_period_years:.1f} year payback period
+                """)
+                
+                if md_shaving_percentage < 100:
+                    st.warning(f"""
+                    ⚠️ **Partial Coverage Notice**: 
+                    This battery configuration covers {md_shaving_percentage:.1f}% of maximum power shaving requirements.
+                    Additional {max_shaving_power - md_shaved_kw:.1f} kW capacity may be needed for complete coverage.
+                    """)
+            else:
+                st.error("❌ Invalid battery configuration - no units required")
+                
+        else:
+            st.error("❌ Selected battery has invalid power or energy specifications")
+            
+    else:
+        st.warning("⚠️ **No Battery Selected**: Please select a battery from the '📋 Tabled Analysis' dropdown above to perform sizing analysis.")
+        st.info("💡 Navigate to the top of this page and select a battery from the dropdown to see detailed sizing and financial analysis.")
+
+
 def get_battery_options_for_capacity(battery_db, target_capacity, tolerance=5):
     """Get batteries that match the target capacity within tolerance."""
     if not battery_db:
@@ -1218,6 +1483,32 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                 pass
         
         # Battery Impact Analysis Section moved to separate function
+        
+        # Render battery selection dropdown right before battery sizing analysis
+        _render_battery_selection_dropdown()
+        
+        # Call the battery sizing analysis function with the calculated values
+        if 'max_shaving_power' in locals() and 'max_tou_energy' in locals() and 'total_md_cost' in locals():
+            _render_battery_sizing_analysis(max_shaving_power, max_tou_energy, total_md_cost)
+        else:
+            # If the variables are not available, try to extract them from the events
+            if all_monthly_events:
+                max_shaving_power_calc = 0
+                if monthly_targets is not None and len(monthly_targets) > 0:
+                    # Calculate max shaving power from monthly targets and max demands
+                    shaving_amounts = []
+                    for month_period, target_demand in monthly_targets.items():
+                        if month_period in monthly_max_demands:
+                            max_demand = monthly_max_demands[month_period]
+                            shaving_amount = max_demand - target_demand
+                            if shaving_amount > 0:
+                                shaving_amounts.append(shaving_amount)
+                    max_shaving_power_calc = max(shaving_amounts) if shaving_amounts else 0
+                
+                max_tou_energy_calc = max([event.get('TOU Required Energy (kWh)', 0) or 0 for event in all_monthly_events]) if all_monthly_events else 0
+                total_md_cost_calc = sum(event.get('MD Cost Impact (RM)', 0) for event in all_monthly_events)
+                
+                _render_battery_sizing_analysis(max_shaving_power_calc, max_tou_energy_calc, total_md_cost_calc)
         
         # V2 Enhancement Preview
         st.markdown("#### 🚀 V2 Monthly-Based Enhancements")

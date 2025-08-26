@@ -50,7 +50,7 @@ def show():
     # - "Residential" # (tariff data may be added later)
     tariff_data = get_tariff_data()
     user_types = list(tariff_data.keys())
-    # Robust default: 'Business' if present, else first
+    # Robust default: 'Business' if present, else user_types[0]
     default_user_type = 'Business' if 'Business' in user_types else user_types[0]
     user_type_index = user_types.index(default_user_type)
     selected_user_type = st.selectbox(
@@ -58,6 +58,10 @@ def show():
         user_types,
         index=user_type_index
     )
+    
+    # Ensure selected_user_type is a string, not an index
+    if isinstance(selected_user_type, int):
+        selected_user_type = user_types[selected_user_type]
 
     # Step 2: Select Tariff Group (under selected User Type)
     # These are specific industry or supply categories within the User Type.
@@ -71,7 +75,7 @@ def show():
     # - "Bulk"
     # - "Thermal Energy Storage (TES)"
     # - "Backfeed"
-    tariff_groups = list(tariff_data[selected_user_type]["Tariff Groups"].keys())
+    tariff_groups = list(tariff_data.get(selected_user_type, {}).get("Tariff Groups", {}).keys())
     # Robust default: 'Non Domestic' if present, else tariff_groups[0]
     default_tariff_group = 'Non Domestic' if 'Non Domestic' in tariff_groups else tariff_groups[0]
     tariff_group_index = tariff_groups.index(default_tariff_group)
@@ -80,6 +84,10 @@ def show():
         tariff_groups,
         index=tariff_group_index
     )
+    
+    # Ensure selected_tariff_group is a string, not an index
+    if isinstance(selected_tariff_group, int):
+        selected_tariff_group = tariff_groups[selected_tariff_group]
 
     # Step 3: Select Voltage and Tariff Type
     # These are full tariff definitions under the selected Tariff Group.
@@ -92,7 +100,7 @@ def show():
     # - "High Voltage General"
     # - "High Voltage TOU"
     # These dropdowns map to: tariff_data[user_type]["Tariff Groups"][group]["Tariffs"]
-    tariffs = tariff_data[selected_user_type]["Tariff Groups"][selected_tariff_group]["Tariffs"]
+    tariffs = tariff_data.get(selected_user_type, {}).get("Tariff Groups", {}).get(selected_tariff_group, {}).get("Tariffs", [])
     tariff_types = [t["Tariff"] for t in tariffs]
     # Robust default: 'Medium Voltage TOU' if present, else first
     default_tariff_type = 'Medium Voltage TOU' if 'Medium Voltage TOU' in tariff_types else tariff_types[0]
