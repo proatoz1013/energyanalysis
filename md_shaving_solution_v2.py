@@ -29,7 +29,8 @@ from md_shaving_solution import (
     _configure_tariff_selection,
     create_conditional_demand_line_with_peak_logic,
     _detect_peak_events,
-    _display_battery_simulation_chart
+    _display_battery_simulation_chart,
+    _simulate_battery_operation
 )
 from tariffs.peak_logic import is_peak_rp4
 
