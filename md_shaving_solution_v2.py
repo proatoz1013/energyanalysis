@@ -28,7 +28,8 @@ from md_shaving_solution import (
     _process_dataframe,
     _configure_tariff_selection,
     create_conditional_demand_line_with_peak_logic,
-    _detect_peak_events
+    _detect_peak_events,
+    _display_battery_simulation_chart
 )
 from tariffs.peak_logic import is_peak_rp4
 
@@ -227,15 +228,6 @@ def _render_battery_sizing_analysis(max_shaving_power, max_tou_energy, total_md_
             estimated_cost_per_kwh = 1400  # RM per kWh (consistent with main app)
             total_battery_cost = total_energy_kwh * estimated_cost_per_kwh
             
-            # Column 6: Actual cost saved (annual)
-            # Calculate MD cost savings based on actual MD shaved
-            md_rate_per_kw = 35.0  # Average MD rate (RM/kW/month) - can be refined based on tariff
-            monthly_md_savings = md_shaved_kw * md_rate_per_kw
-            annual_cost_saved = monthly_md_savings * 12
-            
-            # Column 7: Payback period
-            payback_period_years = total_battery_cost / annual_cost_saved if annual_cost_saved > 0 else float('inf')
-            
             # Create analysis table
             analysis_data = {
                 'Analysis Parameter': [
@@ -246,9 +238,7 @@ def _render_battery_sizing_analysis(max_shaving_power, max_tou_energy, total_md_
                     'Total System Energy Capacity',
                     'Actual MD Shaved',
                     'MD Shaving Coverage',
-                    'Total Battery Investment',
-                    'Annual Cost Savings',
-                    'Simple Payback Period'
+                    'Total Battery Investment'
                 ],
                 'Value': [
                     f"{qty_for_power_rounded} units ({qty_for_power:.2f} calculated)",
@@ -258,9 +248,7 @@ def _render_battery_sizing_analysis(max_shaving_power, max_tou_energy, total_md_
                     f"{total_energy_kwh:.1f} kWh",
                     f"{md_shaved_kw:.1f} kW",
                     f"{md_shaving_percentage:.1f}%",
-                    f"RM {total_battery_cost:,.0f}",
-                    f"RM {annual_cost_saved:,.0f}",
-                    f"{payback_period_years:.1f} years" if payback_period_years != float('inf') else "No payback"
+                    f"RM {total_battery_cost:,.0f}"
                 ],
                 'Calculation Basis': [
                     f"Max Power Required: {max_shaving_power:.1f} kW ÷ {battery_power_kw} kW/unit",
@@ -270,9 +258,7 @@ def _render_battery_sizing_analysis(max_shaving_power, max_tou_energy, total_md_
                     f"{bess_quantity} units × {battery_energy_kwh} kWh/unit", 
                     f"{bess_quantity} units × {battery_power_kw} kW/unit = {total_power_kw:.1f} kW",
                     f"MD Shaved ÷ Max Power Required × 100%",
-                    f"{total_energy_kwh:.1f} kWh × RM {estimated_cost_per_kwh}/kWh",
-                    f"{md_shaved_kw:.1f} kW × RM {md_rate_per_kw}/kW/month × 12 months",
-                    "Total Investment ÷ Annual Savings"
+                    f"{total_energy_kwh:.1f} kWh × RM {estimated_cost_per_kwh}/kWh"
                 ]
             }
             
@@ -281,32 +267,15 @@ def _render_battery_sizing_analysis(max_shaving_power, max_tou_energy, total_md_
             # Display the dataframe without styling for consistent formatting
             st.dataframe(df_analysis, use_container_width=True, hide_index=True)
             
-            # Key insights
+            # Key insights - only showing total investment
             col1, col2, col3 = st.columns(3)
             
-            with col1:
+            with col2:  # Center the single metric
                 st.metric(
                     "💰 Total Investment", 
                     f"RM {total_battery_cost:,.0f}",
                     help="Total cost for complete BESS installation"
                 )
-            
-            with col2:
-                st.metric(
-                    "📈 Annual Savings", 
-                    f"RM {annual_cost_saved:,.0f}",
-                    help="Estimated annual MD cost savings"
-                )
-            
-            with col3:
-                if payback_period_years != float('inf'):
-                    st.metric(
-                        "⏱️ Payback Period", 
-                        f"{payback_period_years:.1f} years",
-                        help="Simple payback period (no interest/inflation)"
-                    )
-                else:
-                    st.metric("⏱️ Payback Period", "No payback", help="Insufficient savings for payback")
             
             # Analysis insights
             if bess_quantity > 0:
@@ -315,7 +284,7 @@ def _render_battery_sizing_analysis(max_shaving_power, max_tou_energy, total_md_
                 - **Battery Selection**: {battery_name}
                 - **System Configuration**: {bess_quantity} units providing {total_power_kw:.1f} kW / {total_energy_kwh:.1f} kWh
                 - **MD Shaving Capability**: {md_shaving_percentage:.1f}% coverage of maximum demand events
-                - **Financial Viability**: {payback_period_years:.1f} year payback period
+                - **Investment Required**: RM {total_battery_cost:,.0f} for complete BESS installation
                 """)
                 
                 if md_shaving_percentage < 100:
@@ -1487,28 +1456,185 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
         # Render battery selection dropdown right before battery sizing analysis
         _render_battery_selection_dropdown()
         
+        # Calculate shared analysis variables for both battery sizing and simulation
+        # These need to be available in broader scope for battery simulation section
+        max_shaving_power = 0
+        max_tou_energy = 0
+        total_md_cost = 0
+        
+        if all_monthly_events:
+            # Calculate max shaving power from monthly targets and max demands
+            if monthly_targets is not None and len(monthly_targets) > 0:
+                shaving_amounts = []
+                for month_period, target_demand in monthly_targets.items():
+                    if month_period in monthly_max_demands:
+                        max_demand = monthly_max_demands[month_period]
+                        shaving_amount = max_demand - target_demand
+                        if shaving_amount > 0:
+                            shaving_amounts.append(shaving_amount)
+                max_shaving_power = max(shaving_amounts) if shaving_amounts else 0
+            
+            # Calculate max TOU energy and total MD cost from events
+            max_tou_energy = max([event.get('TOU Required Energy (kWh)', 0) or 0 for event in all_monthly_events]) if all_monthly_events else 0
+            total_md_cost = sum(event.get('MD Cost Impact (RM)', 0) for event in all_monthly_events)
+        
         # Call the battery sizing analysis function with the calculated values
-        if 'max_shaving_power' in locals() and 'max_tou_energy' in locals() and 'total_md_cost' in locals():
-            _render_battery_sizing_analysis(max_shaving_power, max_tou_energy, total_md_cost)
+        _render_battery_sizing_analysis(max_shaving_power, max_tou_energy, total_md_cost)
+        
+        # Battery Simulation Analysis Section
+        st.markdown("#### 🔋 Battery Simulation Analysis")
+        
+        # Display battery simulation chart using selected battery specifications
+        if (hasattr(st.session_state, 'tabled_analysis_selected_battery') and 
+            st.session_state.tabled_analysis_selected_battery):
+            
+            # Get selected battery specifications
+            selected_battery = st.session_state.tabled_analysis_selected_battery
+            battery_spec = selected_battery['spec']
+            
+            # Extract battery parameters from selected battery specifications
+            battery_capacity_kwh = battery_spec.get('energy_kWh', 0)
+            battery_power_kw = battery_spec.get('power_kW', 0)
+            
+            # Check if we have the required analysis data with enhanced validation
+            prerequisites_met = True
+            error_messages = []
+            
+            # Validate peak analysis data
+            if max_shaving_power <= 0:
+                prerequisites_met = False
+                error_messages.append("Max shaving power not calculated or invalid")
+            
+            if max_tou_energy <= 0:
+                prerequisites_met = False
+                error_messages.append("Max TOU energy not calculated or invalid")
+            
+            # Validate battery specifications
+            if battery_power_kw <= 0:
+                prerequisites_met = False
+                error_messages.append(f"Invalid battery power: {battery_power_kw} kW")
+            
+            if battery_capacity_kwh <= 0:
+                prerequisites_met = False
+                error_messages.append(f"Invalid battery capacity: {battery_capacity_kwh} kWh")
+            
+            # Validate data structure
+            if not hasattr(df, 'columns') or power_col not in df.columns:
+                prerequisites_met = False
+                error_messages.append(f"Power column '{power_col}' not found in dataframe")
+            
+            if prerequisites_met:
+                
+                # Calculate optimal number of units based on the analysis
+                units_for_power = int(np.ceil(max_shaving_power / battery_power_kw)) if battery_power_kw > 0 else 1
+                units_for_energy = int(np.ceil(max_tou_energy / battery_capacity_kwh)) if battery_capacity_kwh > 0 else 1
+                optimal_units = max(units_for_power, units_for_energy, 1)
+                
+                # Calculate total system specifications
+                total_battery_capacity = optimal_units * battery_capacity_kwh
+                total_battery_power = optimal_units * battery_power_kw
+                
+                st.info(f"""
+                **🔋 Battery Simulation Parameters:**
+                - **Selected Battery**: {selected_battery['label']}
+                - **Battery Model**: {battery_spec.get('model', 'Unknown')}
+                - **Unit Specifications**: {battery_capacity_kwh:.1f} kWh, {battery_power_kw:.1f} kW per unit
+                - **System Configuration**: {optimal_units} units
+                - **Total System Capacity**: {total_battery_capacity:.1f} kWh
+                - **Total System Power**: {total_battery_power:.1f} kW
+                - **Based on**: Max Power Shaving ({max_shaving_power:.1f} kW) & Max TOU Energy ({max_tou_energy:.1f} kWh)
+                """)
+                
+                # Call the imported battery simulation chart function
+                try:
+                    # === STEP 1: Prepare V1-compatible dataframe ===
+                    df_for_v1 = df.copy()
+                    
+                    # Add required columns that V1 expects
+                    if 'Original_Demand' not in df_for_v1.columns:
+                        df_for_v1['Original_Demand'] = df_for_v1[power_col]
+                    
+                    # Initialize battery simulation columns (V1 will recalculate these)
+                    df_for_v1['Battery_Power_kW'] = 0.0
+                    df_for_v1['Battery_SOC_Percent'] = 80.0  # Starting SOC
+                    df_for_v1['Net_Demand_kW'] = df_for_v1[power_col]  # Will be modified by V1
+                    
+                    # === STEP 2: Prepare V1-compatible sizing parameter ===
+                    sizing_dict = {
+                        'capacity_kwh': total_battery_capacity,
+                        'power_rating_kw': total_battery_power,
+                        'units': optimal_units,
+                        'c_rate': battery_spec.get('c_rate', 1.0),
+                        'efficiency': 0.95  # Default efficiency
+                    }
+                    
+                    # === STEP 3: Calculate proper target demand ===
+                    if 'monthly_targets' in locals() and len(monthly_targets) > 0:
+                        target_demand_for_sim = float(monthly_targets.iloc[0])
+                    else:
+                        target_demand_for_sim = float(df[power_col].quantile(0.8))
+                    
+                    # === STEP 3.5: Ensure session state compatibility with V1 ===
+                    if not hasattr(st.session_state, 'battery_capacity'):
+                        st.session_state.battery_capacity = total_battery_capacity
+                    if not hasattr(st.session_state, 'battery_power'):
+                        st.session_state.battery_power = total_battery_power
+                    if not hasattr(st.session_state, 'target_demand'):
+                        st.session_state.target_demand = target_demand_for_sim
+                    
+                    # === STEP 4: Call V1 function with prepared data ===
+                    _display_battery_simulation_chart(
+                        df_for_v1,              # V1-compatible dataframe
+                        target_demand_for_sim,  # Target demand (scalar)
+                        sizing_dict,            # Battery sizing dictionary
+                        selected_tariff,        # Tariff configuration
+                        holidays if 'holidays' in locals() else set()  # Holidays set
+                    )
+                    
+                except Exception as e:
+                    st.error(f"❌ Error displaying battery simulation chart: {str(e)}")
+                    st.info("💡 Debug information:")
+                    with st.expander("Debug Details"):
+                        st.write(f"**V2 → V1 Data Preparation Status:**")
+                        st.write(f"- Original dataframe shape: {df.shape}")
+                        st.write(f"- Power column: '{power_col}' (exists: {power_col in df.columns})")
+                        st.write(f"- Battery capacity: {battery_capacity_kwh} kWh per unit")
+                        st.write(f"- Battery power: {battery_power_kw} kW per unit")
+                        st.write(f"- System configuration: {optimal_units} units")
+                        st.write(f"- Total system specs: {total_battery_capacity} kWh, {total_battery_power} kW")
+                        st.write(f"- Target demand: {target_demand_for_sim if 'target_demand_for_sim' in locals() else 'Not calculated'}")
+                        st.write(f"- Error details: {str(e)}")
+                        
+                        if 'df_for_v1' in locals():
+                            st.write(f"- Prepared dataframe columns: {df_for_v1.columns.tolist()}")
+                        if 'sizing_dict' in locals():
+                            st.write(f"- Sizing parameters: {sizing_dict}")
+            else:
+                st.warning("⚠️ Prerequisites not met for battery simulation:")
+                for msg in error_messages:
+                    st.write(f"- {msg}")
+                
+                st.info("💡 **To enable battery simulation:**")
+                st.write("1. Ensure peak events analysis has completed successfully")
+                st.write("2. Verify a battery is selected with valid specifications")
+                st.write("3. Check that power and energy requirements are calculated")
+                
+                # Show current status for debugging
+                with st.expander("Current Status Debug"):
+                    st.write(f"- max_shaving_power: {max_shaving_power}")
+                    st.write(f"- max_tou_energy: {max_tou_energy}")
+                    st.write(f"- Battery power: {battery_power_kw} kW")
+                    st.write(f"- Battery capacity: {battery_capacity_kwh} kWh")
+                    st.write(f"- Power column exists: {power_col in df.columns if hasattr(df, 'columns') else 'DataFrame invalid'}")
+                    st.write(f"- Selected battery label: {selected_battery.get('label', 'Unknown') if 'selected_battery' in locals() else 'No battery'}")
         else:
-            # If the variables are not available, try to extract them from the events
-            if all_monthly_events:
-                max_shaving_power_calc = 0
-                if monthly_targets is not None and len(monthly_targets) > 0:
-                    # Calculate max shaving power from monthly targets and max demands
-                    shaving_amounts = []
-                    for month_period, target_demand in monthly_targets.items():
-                        if month_period in monthly_max_demands:
-                            max_demand = monthly_max_demands[month_period]
-                            shaving_amount = max_demand - target_demand
-                            if shaving_amount > 0:
-                                shaving_amounts.append(shaving_amount)
-                    max_shaving_power_calc = max(shaving_amounts) if shaving_amounts else 0
-                
-                max_tou_energy_calc = max([event.get('TOU Required Energy (kWh)', 0) or 0 for event in all_monthly_events]) if all_monthly_events else 0
-                total_md_cost_calc = sum(event.get('MD Cost Impact (RM)', 0) for event in all_monthly_events)
-                
-                _render_battery_sizing_analysis(max_shaving_power_calc, max_tou_energy_calc, total_md_cost_calc)
+            st.info("💡 **Select a battery from the '📋 Tabled Analysis' section above to see simulation analysis.**")
+            if not hasattr(st.session_state, 'tabled_analysis_selected_battery'):
+                st.write("- No battery selected in session state")
+            elif not st.session_state.tabled_analysis_selected_battery:
+                st.write("- Battery selection is empty")
+            else:
+                st.write("- Peak event analysis may not be complete")
         
         # V2 Enhancement Preview
         st.markdown("#### 🚀 V2 Monthly-Based Enhancements")
