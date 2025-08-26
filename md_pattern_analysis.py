@@ -9,10 +9,25 @@ This module provides comprehensive Maximum Demand (MD) pattern analysis with:
 - Peak demand timing analysis
 - Monthly and seasonal pattern detection
 - Statistical analysis of demand patterns
+- Comprehensive RP4 General and TOU tariff integration
+- Malaysia holiday compliance with auto-detection
+- Enhanced tariff selection interface with Medium Voltage TOU default
+- Integrated MD shaving difficulty scoring with RP4 peak logic
+
+Features:
+- ✅ RP4 Peak Period Detection (2PM-10PM weekdays)
+- ✅ Malaysia Public Holiday Integration
+- ✅ TOU vs General Tariff Differentiation
+- ✅ Comprehensive Tariff Selection Interface
+- ✅ Holiday vs Non-Holiday Demand Analysis
+- ✅ Peak/Off-Peak Ratio Calculations
+- ✅ RP4-Aware MD Difficulty Scoring
+- ✅ Cost Analysis with Current RP4 Rates
+- ✅ Pattern Visualizations with RP4 Overlay
 
 Author: Energy Analysis Team
-Version: 1.0
-Date: August 2025
+Version: 1.2 (Complete RP4 Integration with Enhanced Tariff Selection)
+Date: January 2025
 """
 
 import streamlit as st
@@ -33,12 +48,23 @@ except Exception:
     render_md_shaving_v2 = None
 
 try:
-    from tariffs.peak_logic import is_peak_rp4, get_period_classification
-    from tariffs.rp4_tariffs import get_tariff_data
+    from tariffs.peak_logic import (
+        is_peak_rp4, 
+        get_period_classification, 
+        get_malaysia_holidays,
+        detect_holidays_from_data,
+        classify_peak_period,
+        is_public_holiday
+    )
+    from tariffs.rp4_tariffs import TARIFF_DATA
 except Exception:
     is_peak_rp4 = None
     get_period_classification = None
-    get_tariff_data = None
+    get_malaysia_holidays = None
+    detect_holidays_from_data = None
+    classify_peak_period = None
+    is_public_holiday = None
+    TARIFF_DATA = None
 
 try:
     from battery_algorithms import get_battery_parameters_ui, perform_comprehensive_battery_analysis
@@ -242,6 +268,139 @@ def prepare_timeseries_reliably(df: pd.DataFrame, timestamp_col: str, power_col:
     except Exception as e:
         st.error(f"Error preparing timeseries data: {str(e)}")
         return pd.DataFrame()
+
+
+def compute_monthly_baseline_features_with_rp4(df: pd.DataFrame, power_col: str, 
+                                            selected_tariff: Optional[Dict] = None) -> Dict:
+    """
+    Enhanced monthly baseline features computation with comprehensive RP4 integration.
+    
+    Args:
+        df: Processed DataFrame with datetime index
+        power_col: Power column name  
+        selected_tariff: Selected tariff information (General vs TOU)
+    
+    Returns:
+        Dictionary containing monthly statistics and RP4-aware features
+    """
+    if df.empty:
+        return {}
+    
+    # Auto-detect holidays from data years
+    holidays = set()
+    if detect_holidays_from_data is not None:
+        temp_df = df.reset_index()
+        holidays = detect_holidays_from_data(temp_df, temp_df.columns[0])
+    
+    # Group by month
+    df_monthly = df.groupby(df.index.to_period('M'))
+    
+    monthly_features = {}
+    
+    for month_period, month_data in df_monthly:
+        month_str = str(month_period)
+        
+        # Basic statistics
+        power_values = month_data[power_col]
+        
+        features = {
+            'month_period': month_period,
+            'data_points': len(power_values),
+            'mean_demand': power_values.mean(),
+            'max_demand': power_values.max(),
+            'min_demand': power_values.min(),
+            'std_demand': power_values.std(),
+            'p95_demand': power_values.quantile(0.95),
+            'p90_demand': power_values.quantile(0.90),
+            'p75_demand': power_values.quantile(0.75),
+            'load_factor': power_values.mean() / power_values.max() if power_values.max() > 0 else 0,
+        }
+        
+        # Enhanced RP4 peak period analysis
+        if is_peak_rp4 is not None and holidays is not None:
+            try:
+                # Classify each timestamp using proper holidays
+                peak_mask = month_data.index.map(lambda x: is_peak_rp4(x, holidays))
+                peak_data = month_data[peak_mask]
+                off_peak_data = month_data[~peak_mask]
+                
+                # RP4-specific features
+                features.update({
+                    'rp4_peak_max': peak_data[power_col].max() if not peak_data.empty else 0,
+                    'rp4_peak_mean': peak_data[power_col].mean() if not peak_data.empty else 0,
+                    'rp4_peak_std': peak_data[power_col].std() if not peak_data.empty else 0,
+                    'rp4_off_peak_max': off_peak_data[power_col].max() if not off_peak_data.empty else 0,
+                    'rp4_off_peak_mean': off_peak_data[power_col].mean() if not off_peak_data.empty else 0,
+                    'rp4_peak_to_offpeak_ratio': (peak_data[power_col].max() / off_peak_data[power_col].max()) if not off_peak_data.empty and off_peak_data[power_col].max() > 0 else 1,
+                    'rp4_peak_hours_count': len(peak_data),
+                    'rp4_off_peak_hours_count': len(off_peak_data),
+                    'rp4_peak_load_factor': peak_data[power_col].mean() / peak_data[power_col].max() if not peak_data.empty and peak_data[power_col].max() > 0 else 0,
+                })
+                
+                # Tariff-specific analysis
+                if selected_tariff:
+                    tariff_type = selected_tariff.get('Type', 'General')
+                    
+                    if tariff_type == 'TOU':
+                        # TOU-specific features
+                        features.update({
+                            'tou_peak_energy': peak_data[power_col].sum() if not peak_data.empty else 0,
+                            'tou_off_peak_energy': off_peak_data[power_col].sum() if not off_peak_data.empty else 0,
+                            'tou_energy_ratio': (peak_data[power_col].sum() / off_peak_data[power_col].sum()) if not off_peak_data.empty and off_peak_data[power_col].sum() > 0 else 1,
+                        })
+                    
+                    # MD charge considerations
+                    if 'Rates' in selected_tariff:
+                        rates = selected_tariff['Rates']
+                        if 'Capacity Rate' in rates:
+                            features['md_charge_rate'] = rates['Capacity Rate']
+                            features['monthly_md_cost'] = features['max_demand'] * rates['Capacity Rate']
+                            
+                            if 'rp4_peak_max' in features:
+                                features['peak_period_md_cost'] = features['rp4_peak_max'] * rates['Capacity Rate']
+                
+            except Exception as e:
+                st.warning(f"RP4 analysis failed for {month_str}: {str(e)}")
+                # Fallback to simple time-based analysis
+                business_hours = month_data.between_time('08:00', '18:00')
+                features.update({
+                    'peak_period_max': business_hours[power_col].max() if not business_hours.empty else 0,
+                    'peak_period_mean': business_hours[power_col].mean() if not business_hours.empty else 0,
+                })
+        else:
+            # Fallback when RP4 logic not available
+            business_hours = month_data.between_time('08:00', '18:00')
+            features.update({
+                'peak_period_max': business_hours[power_col].max() if not business_hours.empty else 0,
+                'peak_period_mean': business_hours[power_col].mean() if not business_hours.empty else 0,
+            })
+        
+        # Enhanced variability metrics with RP4 context
+        features['coefficient_of_variation'] = features['std_demand'] / features['mean_demand'] if features['mean_demand'] > 0 else 0
+        features['peak_diversity'] = 1 - (features['mean_demand'] / features['max_demand']) if features['max_demand'] > 0 else 0
+        
+        # Time-based patterns
+        hourly_max = month_data.groupby(month_data.index.hour)[power_col].max()
+        features['peak_hour_concentration'] = (hourly_max.max() - hourly_max.median()) / hourly_max.max() if hourly_max.max() > 0 else 0
+        
+        # Holiday vs non-holiday analysis
+        if holidays:
+            try:
+                holiday_mask = month_data.index.map(lambda x: is_public_holiday(x, holidays) if is_public_holiday else False)
+                non_holiday_data = month_data[~holiday_mask]
+                holiday_data = month_data[holiday_mask]
+                
+                features.update({
+                    'non_holiday_max': non_holiday_data[power_col].max() if not non_holiday_data.empty else 0,
+                    'holiday_max': holiday_data[power_col].max() if not holiday_data.empty else 0,
+                    'holiday_impact': (non_holiday_data[power_col].max() / holiday_data[power_col].max()) if not holiday_data.empty and holiday_data[power_col].max() > 0 else 1,
+                })
+            except Exception:
+                pass  # Skip if holiday analysis fails
+        
+        monthly_features[month_str] = features
+    
+    return monthly_features
 
 
 def compute_monthly_baseline_features(df: pd.DataFrame, power_col: str) -> Dict:
@@ -483,6 +642,206 @@ def detect_contiguous_peak_events_vs_monthly_targets(df: pd.DataFrame, power_col
     return monthly_events
 
 
+def compute_md_shaving_difficulty_score_with_rp4(monthly_features: Dict, monthly_events: Dict, 
+                                               pattern_tags: Dict, selected_tariff: Optional[Dict] = None) -> Dict:
+    """
+    Enhanced MD-shaving difficulty score computation with RP4 tariff considerations.
+    
+    Returns:
+        Dictionary with difficulty scores, grades, and RP4-specific insights
+    """
+    difficulty_analysis = {}
+    
+    for month_str in monthly_features.keys():
+        features = monthly_features[month_str]
+        events = monthly_events.get(month_str, {})
+        tags = pattern_tags.get(month_str, [])
+        
+        # Initialize base score
+        difficulty_score = 0
+        score_components = {}
+        rp4_insights = {}
+        
+        # Component 1: Load Factor (0-25 points)
+        # Use RP4 peak load factor if available, otherwise general load factor
+        load_factor = features.get('rp4_peak_load_factor', features.get('load_factor', 0))
+        load_factor_score = max(0, 25 * (1 - load_factor))
+        difficulty_score += load_factor_score
+        score_components['load_factor'] = load_factor_score
+        
+        # Component 2: Peak Concentration (0-20 points) - Enhanced with RP4
+        peak_concentration = features.get('peak_hour_concentration', 0)
+        
+        # Bonus difficulty for high RP4 peak-to-off-peak ratios
+        rp4_ratio = features.get('rp4_peak_to_offpeak_ratio', 1)
+        if rp4_ratio > 1.5:
+            concentration_bonus = 5  # Extra difficulty for high TOU differentiation
+        else:
+            concentration_bonus = 0
+        
+        concentration_score = min(20, 20 * peak_concentration + concentration_bonus)
+        difficulty_score += concentration_score
+        score_components['peak_concentration'] = concentration_score
+        
+        # Component 3: Variability (0-20 points)
+        cv = features.get('coefficient_of_variation', 0)
+        variability_score = min(20, 20 * cv / 0.5)
+        difficulty_score += variability_score
+        score_components['variability'] = variability_score
+        
+        # Component 4: Peak Events Frequency (0-15 points)
+        total_events = events.get('total_events', 0)
+        data_days = features.get('data_points', 0) / 96
+        event_frequency = total_events / max(1, data_days) * 30
+        frequency_score = min(15, event_frequency * 2)
+        difficulty_score += frequency_score
+        score_components['event_frequency'] = frequency_score
+        
+        # Component 5: Peak Severity (0-10 points) - Enhanced with RP4
+        max_excess = events.get('max_excess_kw', 0)
+        monthly_max = features.get('max_demand', 1)
+        
+        # Use RP4 peak max if available for more accurate assessment
+        rp4_peak_max = features.get('rp4_peak_max', monthly_max)
+        peak_reference = max(rp4_peak_max, monthly_max)
+        
+        excess_ratio = max_excess / peak_reference if peak_reference > 0 else 0
+        severity_score = min(10, 10 * excess_ratio / 0.3)
+        difficulty_score += severity_score
+        score_components['peak_severity'] = severity_score
+        
+        # Component 6: Pattern Complexity (0-10 points) - Enhanced with RP4
+        complexity_score = 0
+        if 'SPIKY_PROFILE' in tags:
+            complexity_score += 4
+        if 'HIGH_VARIABILITY' in tags:
+            complexity_score += 3
+        if 'CONCENTRATED_PEAKS' in tags:
+            complexity_score += 3
+        
+        # RP4-specific complexity considerations
+        if rp4_ratio > 2.0:  # Very high peak/off-peak differential
+            complexity_score += 2
+        
+        difficulty_score += complexity_score
+        score_components['pattern_complexity'] = complexity_score
+        
+        # Normalize to 0-100 scale
+        difficulty_score = min(100, difficulty_score)
+        
+        # Assign letter grade
+        if difficulty_score >= 85:
+            grade = 'F'
+            grade_description = 'Extremely Difficult'
+        elif difficulty_score >= 75:
+            grade = 'D'
+            grade_description = 'Very Difficult'
+        elif difficulty_score >= 65:
+            grade = 'C'
+            grade_description = 'Difficult'
+        elif difficulty_score >= 55:
+            grade = 'C+'
+            grade_description = 'Moderately Difficult'
+        elif difficulty_score >= 45:
+            grade = 'B'
+            grade_description = 'Moderate'
+        elif difficulty_score >= 35:
+            grade = 'B+'
+            grade_description = 'Manageable'
+        elif difficulty_score >= 25:
+            grade = 'A'
+            grade_description = 'Easy'
+        else:
+            grade = 'A+'
+            grade_description = 'Very Easy'
+        
+        # RP4-specific insights
+        if 'rp4_peak_max' in features:
+            rp4_insights = {
+                'rp4_compliance': True,
+                'rp4_peak_max': features['rp4_peak_max'],
+                'rp4_off_peak_max': features.get('rp4_off_peak_max', 0),
+                'peak_to_offpeak_ratio': rp4_ratio,
+                'peak_hours_percentage': (features.get('rp4_peak_hours_count', 0) / features.get('data_points', 1)) * 100,
+                'tariff_type': selected_tariff.get('Type', 'General') if selected_tariff else 'Unknown',
+            }
+            
+            # Holiday impact analysis
+            if 'holiday_impact' in features:
+                rp4_insights['holiday_impact_ratio'] = features['holiday_impact']
+        
+        difficulty_analysis[month_str] = {
+            'difficulty_score': round(difficulty_score, 1),
+            'grade': grade,
+            'grade_description': grade_description,
+            'score_components': score_components,
+            'rp4_insights': rp4_insights,
+            'recommendations': _generate_rp4_difficulty_recommendations(
+                difficulty_score, tags, score_components, rp4_insights, selected_tariff
+            )
+        }
+    
+    return difficulty_analysis
+
+
+def _generate_rp4_difficulty_recommendations(score: float, tags: List[str], components: Dict, 
+                                           rp4_insights: Dict, selected_tariff: Optional[Dict] = None) -> List[str]:
+    """Generate RP4-aware recommendations based on difficulty analysis."""
+    recommendations = []
+    
+    # Base recommendations by difficulty score
+    if score >= 75:
+        recommendations.append("🔋 Consider advanced battery energy storage systems with 4+ hour duration")
+        recommendations.append("⚡ Implement demand response programs with automated load shedding")
+        recommendations.append("🔄 Evaluate comprehensive load shifting to off-peak hours")
+        if rp4_insights.get('rp4_compliance'):
+            recommendations.append("📊 Critical: RP4 peak periods show very high demand - urgent intervention needed")
+    elif score >= 50:
+        recommendations.append("🔋 Standard battery systems (2-3 hour duration) should be effective")
+        recommendations.append("📈 Implement peak demand monitoring and alerts")
+        recommendations.append("💰 Consider time-of-use tariff optimization")
+        if rp4_insights.get('rp4_compliance'):
+            recommendations.append("⏰ Focus MD shaving during RP4 peak hours (2PM-10PM, weekdays)")
+    else:
+        recommendations.append("🎯 Simple demand management strategies may be sufficient")
+        recommendations.append("⚙️ Focus on operational efficiency improvements")
+        recommendations.append("📊 Monitor for seasonal pattern changes")
+    
+    # RP4-specific recommendations
+    if rp4_insights.get('rp4_compliance'):
+        tariff_type = rp4_insights.get('tariff_type', 'General')
+        peak_ratio = rp4_insights.get('peak_to_offpeak_ratio', 1)
+        
+        if tariff_type == 'TOU' and peak_ratio > 1.5:
+            recommendations.append("💡 Strong TOU pattern detected - excellent candidate for RP4 TOU tariff")
+            recommendations.append("🔄 Prioritize load shifting from peak (2PM-10PM) to off-peak periods")
+            recommendations.append("🏭 Consider automated systems to avoid peak period operations")
+        elif tariff_type == 'General':
+            recommendations.append("📋 Currently on RP4 General - evaluate TOU tariff for potential savings")
+            recommendations.append("⏰ MD occurs during RP4 peak hours - focus on 2PM-10PM demand reduction")
+        
+        # Holiday impact recommendations
+        holiday_impact = rp4_insights.get('holiday_impact_ratio', 1)
+        if holiday_impact > 1.3:
+            recommendations.append("🎉 Lower demand on holidays - potential for holiday-specific strategies")
+    
+    # Pattern-specific recommendations
+    if 'SPIKY_PROFILE' in tags:
+        recommendations.append("🎯 Spiky profile detected - focus on peak clipping rather than load shifting")
+    if 'BASE_LOAD' in tags:
+        recommendations.append("⚖️ Base load operation - limited MD shaving potential, focus on efficiency")
+    if 'STRONG_TOU_PATTERN' in tags:
+        recommendations.append("🌟 Excellent candidate for RP4 TOU optimization")
+    
+    # Cost-based recommendations
+    if selected_tariff and 'Rates' in selected_tariff:
+        capacity_rate = selected_tariff['Rates'].get('Capacity Rate', 0)
+        if capacity_rate > 0.08:  # High capacity charge
+            recommendations.append(f"💰 High capacity rate (RM {capacity_rate:.4f}/kWh) - MD reduction highly beneficial")
+    
+    return recommendations
+
+
 def compute_md_shaving_difficulty_score(monthly_features: Dict, monthly_events: Dict, 
                                       pattern_tags: Dict) -> Dict:
     """
@@ -618,12 +977,12 @@ def _generate_difficulty_recommendations(score: float, tags: List[str], componen
     return recommendations
 
 
-def create_pattern_visualizations(patterns: Dict, power_col: str) -> Dict[str, go.Figure]:
-    """Create comprehensive pattern visualization charts."""
+def create_pattern_visualizations(patterns: Dict, power_col: str, df_clean: Optional[pd.DataFrame] = None) -> Dict[str, go.Figure]:
+    """Create comprehensive pattern visualization charts with RP4 overlay."""
     
     figures = {}
     
-    # 1. Hourly Pattern Chart
+    # 1. Hourly Pattern Chart with RP4 Peak Period Overlay
     hourly_data = patterns['hourly_patterns']
     fig_hourly = go.Figure()
     
@@ -653,8 +1012,45 @@ def create_pattern_visualizations(patterns: Dict, power_col: str) -> Dict[str, g
         opacity=0.7
     ))
     
+    # Add RP4 peak period overlay (2PM-10PM, weekdays)
+    if is_peak_rp4 is not None and df_clean is not None:
+        try:
+            # Highlight RP4 peak hours (14-22)
+            peak_hours = list(range(14, 22))
+            peak_y_values = [hourly_data.loc[h, 'max'] if h in hourly_data.index else 0 for h in peak_hours]
+            
+            fig_hourly.add_trace(go.Scatter(
+                x=peak_hours,
+                y=peak_y_values,
+                fill=None,
+                mode='none',
+                showlegend=False
+            ))
+            
+            # Add shaded region for RP4 peak hours
+            fig_hourly.add_shape(
+                type="rect",
+                x0=14, x1=22,
+                y0=0, y1=max(hourly_data['max']) * 1.1,
+                fillcolor="rgba(255, 0, 0, 0.1)",
+                line=dict(width=0),
+                layer="below"
+            )
+            
+            fig_hourly.add_annotation(
+                x=18, y=max(hourly_data['max']) * 0.95,
+                text="RP4 Peak Period<br>(2PM-10PM)",
+                showarrow=False,
+                font=dict(size=10, color="red"),
+                bgcolor="rgba(255, 255, 255, 0.8)",
+                bordercolor="red",
+                borderwidth=1
+            )
+        except Exception:
+            pass  # Skip RP4 overlay if it fails
+    
     fig_hourly.update_layout(
-        title='Daily Demand Pattern (24-Hour Profile)',
+        title='Daily Demand Pattern (24-Hour Profile) with RP4 Peak Periods',
         xaxis_title='Hour of Day',
         yaxis_title=f'Power Demand (kW)',
         hovermode='x unified',
@@ -1031,10 +1427,219 @@ def show_md_pattern_analysis():
         else:
             st.error(f"❌ Poor data quality - {consistency:.1f}% consistent intervals")
         
+        # **NEW: Enhanced RP4 Tariff Selection Interface with Medium Voltage TOU Default**
+        st.subheader("🏛️ RP4 Tariff Configuration")
+        
+        # Helper function to find default tariff (Medium Voltage TOU)
+        def _find_medium_voltage_tou_default():
+            """Find Medium Voltage TOU tariff as default selection."""
+            if TARIFF_DATA is None:
+                return None, None, None, None
+                
+            for user_type, user_data in TARIFF_DATA.items():
+                if "Business" in user_type:  # Prefer Business users
+                    for group_name, group_data in user_data.get("Tariff Groups", {}).items():
+                        for tariff in group_data.get("Tariffs", []):
+                            tariff_name = tariff.get("Tariff", "")
+                            if ("Medium Voltage" in tariff_name and 
+                                "TOU" in tariff_name and 
+                                tariff.get("Type") == "TOU"):
+                                return user_type, group_name, tariff_name, tariff
+            
+            # Fallback: find any TOU tariff
+            for user_type, user_data in TARIFF_DATA.items():
+                for group_name, group_data in user_data.get("Tariff Groups", {}).items():
+                    for tariff in group_data.get("Tariffs", []):
+                        if tariff.get("Type") == "TOU":
+                            return user_type, group_name, tariff.get("Tariff"), tariff
+            
+            return None, None, None, None
+        
+        # Initialize default tariff if no selection exists
+        if (not hasattr(st.session_state, 'selected_tariff') or 
+            st.session_state.selected_tariff is None):
+            if TARIFF_DATA is not None:
+                default_user, default_group, default_tariff_name, default_tariff = _find_medium_voltage_tou_default()
+                if default_tariff:
+                    st.session_state.selected_tariff = default_tariff
+                    st.session_state.default_tariff_user = default_user
+                    st.session_state.default_tariff_group = default_group
+                    st.session_state.default_tariff_name = default_tariff_name
+        
+        # Show current tariff selection with comprehensive interface
+        if TARIFF_DATA is not None:
+            # Get current selections (either from session state or defaults)
+            current_tariff = getattr(st.session_state, 'selected_tariff', None)
+            
+            # Always show the tariff selection interface (no confirmation button needed)
+            st.markdown("**RP4 Tariff Selection - Automatically Applied:**")
+            
+            # User Type Selection
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                user_types = list(TARIFF_DATA.keys())
+                default_user_idx = 0
+                if hasattr(st.session_state, 'default_tariff_user'):
+                    try:
+                        default_user_idx = user_types.index(st.session_state.default_tariff_user)
+                    except ValueError:
+                        default_user_idx = 1 if len(user_types) > 1 else 0
+                
+                selected_user_type = st.selectbox(
+                    "User Type",
+                    options=user_types,
+                    index=default_user_idx,
+                    key="rp4_user_type",
+                    help="Select your electricity user category"
+                )
+            
+            # Tariff Group Selection
+            with col2:
+                if selected_user_type and selected_user_type in TARIFF_DATA:
+                    tariff_groups = list(TARIFF_DATA[selected_user_type]["Tariff Groups"].keys())
+                    default_group_idx = 0
+                    if hasattr(st.session_state, 'default_tariff_group'):
+                        try:
+                            default_group_idx = tariff_groups.index(st.session_state.default_tariff_group)
+                        except ValueError:
+                            default_group_idx = 0
+                    
+                    selected_group = st.selectbox(
+                        "Tariff Group",
+                        options=tariff_groups,
+                        index=default_group_idx,
+                        key="rp4_tariff_group",
+                        help="Select your voltage/demand category"
+                    )
+                else:
+                    selected_group = None
+                    st.selectbox("Tariff Group", options=[], key="rp4_tariff_group_empty", disabled=True)
+            
+            # Specific Tariff Selection
+            with col3:
+                if selected_group and selected_user_type in TARIFF_DATA:
+                    available_tariffs = TARIFF_DATA[selected_user_type]["Tariff Groups"][selected_group]["Tariffs"]
+                    tariff_options = [t["Tariff"] for t in available_tariffs]
+                    
+                    default_tariff_idx = 0
+                    if hasattr(st.session_state, 'default_tariff_name'):
+                        try:
+                            default_tariff_idx = tariff_options.index(st.session_state.default_tariff_name)
+                        except ValueError:
+                            # If default not found, prefer TOU tariffs
+                            for i, tariff in enumerate(available_tariffs):
+                                if tariff.get("Type") == "TOU":
+                                    default_tariff_idx = i
+                                    break
+                    
+                    selected_tariff_name = st.selectbox(
+                        "Specific Tariff",
+                        options=tariff_options,
+                        index=default_tariff_idx,
+                        key="rp4_specific_tariff",
+                        help="Select your exact tariff rate"
+                    )
+                    
+                    # Find the selected tariff data and auto-update session state
+                    selected_tariff = None
+                    for tariff in available_tariffs:
+                        if tariff["Tariff"] == selected_tariff_name:
+                            selected_tariff = tariff.copy()
+                            break
+                    
+                    # Automatically update session state (no confirmation button)
+                    if selected_tariff:
+                        st.session_state.selected_tariff = selected_tariff
+                else:
+                    selected_tariff = None
+                    st.selectbox("Specific Tariff", options=[], key="rp4_specific_tariff_empty", disabled=True)
+            
+            # Display comprehensive tariff information
+            if selected_tariff:
+                with st.expander("📋 Selected Tariff Details & Analysis Configuration", expanded=True):
+                    # Header with tariff path
+                    st.markdown(f"**🎯 Active Selection:** {selected_user_type} → {selected_group} → {selected_tariff['Tariff']}")
+                    
+                    # Main tariff info in columns
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        st.markdown("**⚡ Tariff Configuration:**")
+                        voltage = selected_tariff.get('Voltage', 'N/A')
+                        tariff_type = selected_tariff.get('Type', 'N/A')
+                        st.info(f"**Voltage Level:** {voltage}")
+                        st.info(f"**Rate Type:** {tariff_type}")
+                        
+                        # TOU indicator with enhanced messaging
+                        if tariff_type == 'TOU':
+                            st.success("🎯 **TOU (Time-of-Use) Tariff Active**")
+                            st.caption("⏰ Peak periods: Mon-Fri 2PM-10PM")
+                        else:
+                            st.info("📊 **General Tariff Active**")
+                            st.caption("📈 Standard peak period analysis")
+                    
+                    with col2:
+                        st.markdown("**💰 Rate Information:**")
+                        if "Rates" in selected_tariff:
+                            rates = selected_tariff["Rates"]
+                            capacity_rate = rates.get("Capacity Rate", 0)
+                            peak_rate = rates.get("Peak Rate", rates.get("Energy Rate", 0))
+                            
+                            st.metric("Capacity Rate", f"RM {capacity_rate:.4f}")
+                            if tariff_type == 'TOU' and "Peak Rate" in rates:
+                                st.metric("Peak Rate", f"RM {peak_rate:.4f}")
+                                off_peak_rate = rates.get("Off Peak Rate", 0)
+                                st.metric("Off-Peak Rate", f"RM {off_peak_rate:.4f}")
+                            else:
+                                st.metric("Energy Rate", f"RM {peak_rate:.4f}")
+                    
+                    with col3:
+                        st.markdown("**🔍 Analysis Features:**")
+                        features = []
+                        if tariff_type == 'TOU':
+                            features.extend([
+                                "✅ RP4 Peak Period Detection",
+                                "✅ TOU Energy Cost Analysis", 
+                                "✅ Peak vs Off-Peak Ratios",
+                                "✅ Holiday Impact Analysis"
+                            ])
+                        else:
+                            features.extend([
+                                "✅ General MD Analysis",
+                                "✅ Standard Peak Detection",
+                                "✅ Load Pattern Recognition",
+                                "✅ Basic Cost Estimation"
+                            ])
+                        
+                        for feature in features:
+                            st.write(feature)
+                    
+                    # Quick change option
+                    if st.button("🔄 Reset to Medium Voltage TOU Default", key="reset_to_default_btn"):
+                        default_user, default_group, default_tariff_name, default_tariff = _find_medium_voltage_tou_default()
+                        if default_tariff:
+                            st.session_state.selected_tariff = default_tariff
+                            st.session_state.default_tariff_user = default_user
+                            st.session_state.default_tariff_group = default_group
+                            st.session_state.default_tariff_name = default_tariff_name
+                            st.success("✅ Reset to Medium Voltage TOU default tariff")
+                            st.rerun()
+        else:
+            st.warning("⚠️ RP4 tariff data not available. Analysis will use simplified peak period detection.")
+            selected_tariff = None
+        
+        # Set final selected tariff for analysis
+        selected_tariff = getattr(st.session_state, 'selected_tariff', None)
+        
+        # Display active tariff status
+        if selected_tariff:
+            st.success(f"🎯 **Active Tariff:** {selected_tariff.get('Tariff', 'Unknown')} | **Type:** {selected_tariff.get('Type', 'Unknown')} | **Auto-Applied ✅**")
+        
         # **NEW: MD Shaving Difficulty Analysis**
         st.subheader("🎯 MD Shaving Difficulty Analysis")
         
-        # Configuration for MD shaving analysis
+        # Configuration for MD shaving analysis with enhanced context
         col1, col2 = st.columns(2)
         with col1:
             shaving_percentage = st.slider(
@@ -1048,17 +1653,34 @@ def show_md_pattern_analysis():
             )
         
         with col2:
-            # Check for existing tariff selection
-            selected_tariff = None
-            if hasattr(st.session_state, 'selected_tariff') and st.session_state.selected_tariff:
-                selected_tariff = st.session_state.selected_tariff
-                st.info(f"Using existing tariff: {selected_tariff.get('Tariff', 'Unknown')}")
+            # Display selected tariff information if available
+            if selected_tariff:
+                tariff_type = selected_tariff.get('Type', 'General')
+                voltage = selected_tariff.get('Voltage', 'Unknown')
+                st.info(f"**Analysis Mode:** {tariff_type} Tariff")
+                st.info(f"**Voltage:** {voltage}")
+                
+                if tariff_type == 'TOU':
+                    st.success("🎯 Enhanced RP4 peak period analysis enabled")
+                    st.caption("Peak periods: Mon-Fri 2PM-10PM")
+                else:
+                    st.info("📊 Standard peak period analysis")
             else:
-                st.info("No tariff selected. Using simplified analysis.")
+                st.warning("No tariff selected. Using simplified analysis.")
         
-        # Compute monthly baseline features
-        with st.spinner("Computing monthly baseline features..."):
-            monthly_features = compute_monthly_baseline_features(df_clean, power_col)
+        # Compute monthly baseline features with RP4 integration
+        with st.spinner("Computing monthly baseline features with RP4 analysis..."):
+            if selected_tariff and is_peak_rp4 is not None:
+                # Use enhanced RP4-aware analysis
+                monthly_features = compute_monthly_baseline_features_with_rp4(
+                    df_clean, power_col, selected_tariff
+                )
+                st.success("✅ Using RP4-compliant peak period analysis with Malaysia holidays")
+            else:
+                # Fallback to standard analysis
+                monthly_features = compute_monthly_baseline_features(df_clean, power_col)
+                if is_peak_rp4 is None:
+                    st.info("ℹ️ RP4 peak logic not available - using simplified analysis")
         
         if not monthly_features:
             st.warning("⚠️ Unable to compute monthly features. Need at least 1 month of data.")
@@ -1071,10 +1693,15 @@ def show_md_pattern_analysis():
                 df_clean, power_col, monthly_features, shaving_percentage
             )
             
-            # Compute difficulty scores
-            difficulty_analysis = compute_md_shaving_difficulty_score(
-                monthly_features, monthly_events, pattern_tags
-            )
+            # Compute difficulty scores with RP4 integration
+            if selected_tariff and is_peak_rp4 is not None:
+                difficulty_analysis = compute_md_shaving_difficulty_score_with_rp4(
+                    monthly_features, monthly_events, pattern_tags, selected_tariff
+                )
+            else:
+                difficulty_analysis = compute_md_shaving_difficulty_score(
+                    monthly_features, monthly_events, pattern_tags
+                )
             
             # Display MD Difficulty Results
             st.markdown("#### 🏆 Monthly MD Shaving Difficulty Scores")
@@ -1094,9 +1721,10 @@ def show_md_pattern_analysis():
                 with col3:
                     st.metric("Easiest Month", f"{min_score:.1f}/100")
                 
-                # Monthly difficulty table
-                difficulty_df = pd.DataFrame([
-                    {
+                # Monthly difficulty table with RP4 insights
+                table_data = []
+                for month, data in difficulty_analysis.items():
+                    row = {
                         'Month': month,
                         'Difficulty Score': data['difficulty_score'],
                         'Grade': data['grade'],
@@ -1104,9 +1732,54 @@ def show_md_pattern_analysis():
                         'Peak Events': monthly_events.get(month, {}).get('total_events', 0),
                         'Max Excess (kW)': monthly_events.get(month, {}).get('max_excess_kw', 0)
                     }
-                    for month, data in difficulty_analysis.items()
-                ])
+                    
+                    # Add RP4-specific columns if available
+                    if 'rp4_insights' in data and data['rp4_insights'].get('rp4_compliance'):
+                        rp4_data = data['rp4_insights']
+                        row.update({
+                            'RP4 Peak Max (kW)': round(rp4_data.get('rp4_peak_max', 0), 1),
+                            'Peak/Off-Peak Ratio': round(rp4_data.get('peak_to_offpeak_ratio', 1), 2),
+                            'Tariff Type': rp4_data.get('tariff_type', 'Unknown')
+                        })
+                    
+                    table_data.append(row)
                 
+                difficulty_df = pd.DataFrame(table_data)
+                st.dataframe(difficulty_df, use_container_width=True)
+                
+                # RP4 Compliance Summary
+                rp4_compliant_months = [m for m, d in difficulty_analysis.items() 
+                                      if d.get('rp4_insights', {}).get('rp4_compliance', False)]
+                
+                if rp4_compliant_months:
+                    with st.expander("🏛️ RP4 Tariff Analysis Summary", expanded=False):
+                        st.markdown("#### RP4 Peak Period Compliance Analysis")
+                        
+                        # Calculate RP4 statistics
+                        avg_peak_ratio = np.mean([
+                            difficulty_analysis[m]['rp4_insights']['peak_to_offpeak_ratio'] 
+                            for m in rp4_compliant_months
+                        ])
+                        
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("RP4 Compliant Months", len(rp4_compliant_months))
+                        with col2:
+                            st.metric("Avg Peak/Off-Peak Ratio", f"{avg_peak_ratio:.2f}")
+                        with col3:
+                            tariff_type = difficulty_analysis[rp4_compliant_months[0]]['rp4_insights'].get('tariff_type', 'Unknown')
+                            st.metric("Current Tariff Type", tariff_type)
+                        
+                        # RP4 recommendations
+                        st.markdown("**RP4-Specific Insights:**")
+                        if avg_peak_ratio > 1.5:
+                            st.success("✅ Strong peak/off-peak differentiation - excellent for TOU optimization")
+                        elif avg_peak_ratio > 1.2:
+                            st.warning("⚠️ Moderate peak/off-peak differentiation - some TOU potential")
+                        else:
+                            st.info("ℹ️ Low peak/off-peak differentiation - focus on general MD reduction")
+                
+                # Display enhanced monthly difficulty table
                 st.dataframe(difficulty_df, use_container_width=True)
                 
                 # MD Difficulty Visualizations
@@ -1165,7 +1838,7 @@ def show_md_pattern_analysis():
         # Pattern Visualizations
         st.subheader("📈 Pattern Visualizations")
         
-        figures = create_pattern_visualizations(patterns, power_col)
+        figures = create_pattern_visualizations(patterns, power_col, df_clean)
         
         # Display charts in tabs
         chart_tabs = st.tabs(["Daily Pattern", "Weekly Pattern", "Monthly Pattern", "Demand Heatmap"])
