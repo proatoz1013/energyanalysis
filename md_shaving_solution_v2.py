@@ -1647,6 +1647,168 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                             holidays if 'holidays' in locals() else set()  # Holidays set
                         )
                         
+                        # === STEP 7: Enhanced Peak Event Detection with Battery Impact ===
+                        st.markdown("---")
+                        st.markdown("#### 🔋 Enhanced Peak Event Analysis with Battery Impact")
+                        st.markdown("**Updated peak event results showing battery charge/discharge effects**")
+                        
+                        if all_monthly_events and 'df_simulation' in simulation_results:
+                            # Get the simulated dataframe with battery data
+                            df_sim = simulation_results['df_simulation']
+                            
+                            # Create enhanced peak events analysis
+                            enhanced_events = []
+                            
+                            for event in all_monthly_events:
+                                # Extract event timeframe
+                                start_date = pd.to_datetime(f"{event['Start Date']} {event['Start Time']}")
+                                end_date = pd.to_datetime(f"{event['End Date']} {event['End Time']}")
+                                
+                                # Filter simulation data for this event period
+                                event_mask = (df_sim.index >= start_date) & (df_sim.index <= end_date)
+                                event_sim_data = df_sim[event_mask]
+                                
+                                if len(event_sim_data) > 0:
+                                    # Calculate original vs battery-assisted metrics
+                                    original_peak = event_sim_data['Original_Demand'].max()
+                                    battery_assisted_peak = event_sim_data['Net_Demand_kW'].max()
+                                    peak_reduction = original_peak - battery_assisted_peak
+                                    
+                                    # Calculate battery performance during event
+                                    max_discharge = event_sim_data['Battery_Power_kW'].max()
+                                    avg_discharge = event_sim_data[event_sim_data['Battery_Power_kW'] > 0]['Battery_Power_kW'].mean()
+                                    total_energy_discharged = (event_sim_data['Battery_Power_kW'].clip(lower=0) * 0.25).sum()  # 15-min intervals
+                                    
+                                    # Battery SOC range during event
+                                    min_soc = event_sim_data['Battery_SOC_Percent'].min()
+                                    max_soc = event_sim_data['Battery_SOC_Percent'].max()
+                                    soc_range = max_soc - min_soc
+                                    
+                                    # Determine if peak was successfully managed
+                                    peak_managed = battery_assisted_peak <= target_demand_for_sim * 1.05  # 5% tolerance
+                                    
+                                    # Calculate remaining excess after battery
+                                    remaining_excess = max(0, battery_assisted_peak - target_demand_for_sim)
+                                    
+                                    # Create enhanced event record
+                                    enhanced_event = {
+                                        'Event Period': f"{event['Start Date']} {event['Start Time']} - {event['End Date']} {event['End Time']}",
+                                        'Original Peak (kW)': round(original_peak, 1),
+                                        'Battery-Assisted Peak (kW)': round(battery_assisted_peak, 1),
+                                        'Peak Reduction (kW)': round(peak_reduction, 1),
+                                        'Target Demand (kW)': round(target_demand_for_sim, 1),
+                                        'Remaining Excess (kW)': round(remaining_excess, 1),
+                                        'Peak Managed': '✅ Success' if peak_managed else '❌ Failed',
+                                        'Max Discharge (kW)': round(max_discharge, 1) if max_discharge > 0 else 0,
+                                        'Avg Discharge (kW)': round(avg_discharge, 1) if not pd.isna(avg_discharge) else 0,
+                                        'Energy Discharged (kWh)': round(total_energy_discharged, 2),
+                                        'SOC Range (%)': f"{min_soc:.1f} - {max_soc:.1f}",
+                                        'SOC Used (%)': round(soc_range, 1),
+                                        'Duration (min)': event.get('Duration (min)', 0),
+                                        'Original Required Energy (kWh)': event.get('General Required Energy (kWh)', 0),
+                                        'Battery Efficiency (%)': round((peak_reduction / event.get('General Excess (kW)', 1)) * 100, 1) if event.get('General Excess (kW)', 0) > 0 else 0
+                                    }
+                                    enhanced_events.append(enhanced_event)
+                            
+                            if enhanced_events:
+                                # Create DataFrame for display
+                                df_enhanced = pd.DataFrame(enhanced_events)
+                                
+                                # Calculate summary statistics
+                                total_events = len(enhanced_events)
+                                successful_events = len([e for e in enhanced_events if 'Success' in e['Peak Managed']])
+                                success_rate = (successful_events / total_events * 100) if total_events > 0 else 0
+                                
+                                avg_peak_reduction = df_enhanced['Peak Reduction (kW)'].mean()
+                                total_energy_discharged = df_enhanced['Energy Discharged (kWh)'].sum()
+                                avg_efficiency = df_enhanced['Battery Efficiency (%)'].mean()
+                                
+                                # Display summary metrics
+                                col1, col2, col3, col4 = st.columns(4)
+                                col1.metric("Events Analyzed", total_events)
+                                col2.metric("Success Rate", f"{success_rate:.1f}%", 
+                                           delta=f"{successful_events}/{total_events}")
+                                col3.metric("Avg Peak Reduction", f"{avg_peak_reduction:.1f} kW")
+                                col4.metric("Total Energy Used", f"{total_energy_discharged:.1f} kWh")
+                                
+                                # Color coding function for the table
+                                def highlight_performance(row):
+                                    colors = []
+                                    for col in row.index:
+                                        if col == 'Peak Managed':
+                                            if 'Success' in str(row[col]):
+                                                colors.append('background-color: rgba(0, 255, 0, 0.2)')  # Light green
+                                            else:
+                                                colors.append('background-color: rgba(255, 0, 0, 0.2)')  # Light red
+                                        elif col == 'Battery Efficiency (%)':
+                                            if isinstance(row[col], (int, float)):
+                                                if row[col] >= 80:
+                                                    colors.append('background-color: rgba(0, 255, 0, 0.1)')
+                                                elif row[col] >= 60:
+                                                    colors.append('background-color: rgba(255, 255, 0, 0.1)')
+                                                else:
+                                                    colors.append('background-color: rgba(255, 0, 0, 0.1)')
+                                            else:
+                                                colors.append('')
+                                        else:
+                                            colors.append('')
+                                    return colors
+                                
+                                # Apply styling and display table
+                                styled_df = df_enhanced.style.apply(highlight_performance, axis=1).format({
+                                    'Original Peak (kW)': '{:.1f}',
+                                    'Battery-Assisted Peak (kW)': '{:.1f}',
+                                    'Peak Reduction (kW)': '{:.1f}',
+                                    'Target Demand (kW)': '{:.1f}',
+                                    'Remaining Excess (kW)': '{:.1f}',
+                                    'Max Discharge (kW)': '{:.1f}',
+                                    'Avg Discharge (kW)': '{:.1f}',
+                                    'Energy Discharged (kWh)': '{:.2f}',
+                                    'SOC Used (%)': '{:.1f}',
+                                    'Duration (min)': '{:.1f}',
+                                    'Original Required Energy (kWh)': '{:.2f}',
+                                    'Battery Efficiency (%)': '{:.1f}'
+                                })
+                                
+                                st.dataframe(styled_df, use_container_width=True)
+                                
+                                # Enhanced explanations
+                                st.info("""
+                                **📊 Enhanced Column Explanations:**
+                                - **Original Peak (kW)**: Peak demand without battery assistance
+                                - **Battery-Assisted Peak (kW)**: Peak demand with battery discharge/charge
+                                - **Peak Reduction (kW)**: Demand reduction achieved by battery
+                                - **Remaining Excess (kW)**: Excess demand still above target after battery assistance
+                                - **Peak Managed**: Whether target was achieved (✅ Success / ❌ Failed)
+                                - **Energy Discharged (kWh)**: Total battery energy used during event
+                                - **SOC Range/Used**: Battery state of charge impact during event
+                                - **Battery Efficiency (%)**: Peak reduction vs original excess (higher = better)
+                                
+                                **🎨 Color Coding:**
+                                - 🟢 **Green**: Successful peak management or high efficiency (≥80%)
+                                - 🟡 **Yellow**: Moderate efficiency (60-79%)  
+                                - 🔴 **Red**: Failed peak management or low efficiency (<60%)
+                                """)
+                                
+                                # Additional insights
+                                if success_rate < 100:
+                                    failed_events = [e for e in enhanced_events if 'Failed' in e['Peak Managed']]
+                                    max_remaining_excess = max([e['Remaining Excess (kW)'] for e in failed_events])
+                                    
+                                    st.warning(f"""
+                                    **⚠️ Performance Analysis:**
+                                    - {len(failed_events)} events still exceeded target after battery assistance
+                                    - Maximum remaining excess: {max_remaining_excess:.1f} kW
+                                    - Consider increasing battery power rating by {max_remaining_excess * 1.1:.1f} kW for 100% success rate
+                                    """)
+                                else:
+                                    st.success("🎉 **Excellent Performance!** All peak events successfully managed with current battery configuration.")
+                            
+                            else:
+                                st.warning("No enhanced event data available for analysis.")
+                        else:
+                            st.info("Enhanced peak event analysis requires both peak events and battery simulation data.")
+                        
                     else:
                         st.error("❌ Battery simulation failed - no results returned")
                         st.info("This usually indicates an issue with the simulation parameters or data format.")
