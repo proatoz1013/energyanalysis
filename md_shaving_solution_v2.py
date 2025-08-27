@@ -1546,7 +1546,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                 - **Based on**: Max Power Shaving ({max_shaving_power:.1f} kW) & Max TOU Energy ({max_tou_energy:.1f} kWh)
                 """)
                 
-                # Call the imported battery simulation chart function
+                # Call the battery simulation workflow (simulation + chart display)
                 try:
                     # === STEP 1: Prepare V1-compatible dataframe ===
                     df_for_v1 = df.copy()
@@ -1554,11 +1554,6 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                     # Add required columns that V1 expects
                     if 'Original_Demand' not in df_for_v1.columns:
                         df_for_v1['Original_Demand'] = df_for_v1[power_col]
-                    
-                    # Initialize battery simulation columns (V1 will recalculate these)
-                    df_for_v1['Battery_Power_kW'] = 0.0
-                    df_for_v1['Battery_SOC_Percent'] = 80.0  # Starting SOC
-                    df_for_v1['Net_Demand_kW'] = df_for_v1[power_col]  # Will be modified by V1
                     
                     # === STEP 2: Prepare V1-compatible sizing parameter ===
                     sizing_dict = {
@@ -1575,28 +1570,92 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                     else:
                         target_demand_for_sim = float(df[power_col].quantile(0.8))
                     
-                    # === STEP 3.5: Ensure session state compatibility with V1 ===
-                    if not hasattr(st.session_state, 'battery_capacity'):
-                        st.session_state.battery_capacity = total_battery_capacity
-                    if not hasattr(st.session_state, 'battery_power'):
-                        st.session_state.battery_power = total_battery_power
-                    if not hasattr(st.session_state, 'target_demand'):
-                        st.session_state.target_demand = target_demand_for_sim
+                    # === STEP 4: CRITICAL - Run battery simulation first ===
+                    st.info("⚡ Running battery simulation...")
                     
-                    # === STEP 4: Call V1 function with prepared data ===
-                    _display_battery_simulation_chart(
-                        df_for_v1,              # V1-compatible dataframe
-                        target_demand_for_sim,  # Target demand (scalar)
-                        sizing_dict,            # Battery sizing dictionary
-                        selected_tariff,        # Tariff configuration
+                    # Prepare all required parameters for V1 simulation function
+                    battery_sizing = {
+                        'capacity_kwh': total_battery_capacity,
+                        'power_rating_kw': total_battery_power,
+                        'units': optimal_units
+                    }
+                    
+                    battery_params = {
+                        'efficiency': 0.95,
+                        'round_trip_efficiency': 95.0,  # Percentage
+                        'c_rate': battery_spec.get('c_rate', 1.0),
+                        'min_soc': 20.0,
+                        'max_soc': 100.0,
+                        'depth_of_discharge': 80.0  # Max usable % of capacity
+                    }
+                    
+                    interval_hours = 0.25  # 15-minute intervals
+                    
+                    simulation_results = _simulate_battery_operation(
+                        df_for_v1,                     # DataFrame with demand data
+                        power_col,                     # Column name containing power demand
+                        target_demand_for_sim,         # Target demand value
+                        battery_sizing,                # Battery sizing dictionary
+                        battery_params,                # Battery parameters dictionary  
+                        interval_hours,                # Interval length in hours
+                        selected_tariff,               # Tariff configuration
                         holidays if 'holidays' in locals() else set()  # Holidays set
                     )
                     
+                    # === STEP 5: Display results and metrics ===
+                    if simulation_results and 'df_simulation' in simulation_results:
+                        st.success("✅ Battery simulation completed successfully!")
+                        
+                        # Show key simulation metrics
+                        col1, col2, col3, col4 = st.columns(4)
+                        
+                        with col1:
+                            st.metric(
+                                "Peak Reduction", 
+                                f"{simulation_results.get('peak_reduction_kw', 0):.1f} kW",
+                                help="Maximum demand reduction achieved"
+                            )
+                        
+                        with col2:
+                            st.metric(
+                                "Success Rate",
+                                f"{simulation_results.get('success_rate_percent', 0):.1f}%",
+                                help="Percentage of peak events successfully managed"
+                            )
+                        
+                        with col3:
+                            st.metric(
+                                "Energy Discharged",
+                                f"{simulation_results.get('total_energy_discharged', 0):.1f} kWh",
+                                help="Total energy discharged during peak periods"
+                            )
+                        
+                        with col4:
+                            st.metric(
+                                "Average SOC",
+                                f"{simulation_results.get('average_soc', 0):.1f}%",
+                                help="Average state of charge throughout simulation"
+                            )
+                        
+                        # === STEP 6: Display the battery simulation chart ===
+                        st.subheader("📊 Battery Operation Simulation")
+                        _display_battery_simulation_chart(
+                            simulation_results['df_simulation'],  # Simulated dataframe
+                            target_demand_for_sim,              # Target demand (scalar)
+                            sizing_dict,                        # Battery sizing dictionary
+                            selected_tariff,                    # Tariff configuration
+                            holidays if 'holidays' in locals() else set()  # Holidays set
+                        )
+                        
+                    else:
+                        st.error("❌ Battery simulation failed - no results returned")
+                        st.info("This usually indicates an issue with the simulation parameters or data format.")
+                    
                 except Exception as e:
-                    st.error(f"❌ Error displaying battery simulation chart: {str(e)}")
+                    st.error(f"❌ Error in battery simulation workflow: {str(e)}")
                     st.info("💡 Debug information:")
                     with st.expander("Debug Details"):
-                        st.write(f"**V2 → V1 Data Preparation Status:**")
+                        st.write(f"**V2 → V1 Battery Simulation Status:**")
                         st.write(f"- Original dataframe shape: {df.shape}")
                         st.write(f"- Power column: '{power_col}' (exists: {power_col in df.columns})")
                         st.write(f"- Battery capacity: {battery_capacity_kwh} kWh per unit")
@@ -1610,6 +1669,17 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                             st.write(f"- Prepared dataframe columns: {df_for_v1.columns.tolist()}")
                         if 'sizing_dict' in locals():
                             st.write(f"- Sizing parameters: {sizing_dict}")
+                        if 'simulation_results' in locals():
+                            st.write(f"- Simulation results keys: {list(simulation_results.keys()) if simulation_results else 'None'}")
+                    
+                    # Fallback: Show basic configuration info at least
+                    st.warning("⚠️ Falling back to basic battery configuration display...")
+                    st.write(f"**Configured Battery System:**")
+                    st.write(f"- Battery: {selected_battery['label']}")
+                    st.write(f"- Units: {optimal_units}")
+                    st.write(f"- Total Capacity: {total_battery_capacity:.1f} kWh")
+                    st.write(f"- Total Power: {total_battery_power:.1f} kW")
+                    st.write(f"- Target Demand: {target_demand_for_sim if 'target_demand_for_sim' in locals() else 'Unknown'}")
             else:
                 st.warning("⚠️ Prerequisites not met for battery simulation:")
                 for msg in error_messages:
