@@ -48,10 +48,12 @@ def cluster_peak_events(events_df, battery_params, md_hours, working_days, tou_c
         grid_charge_limit: optional float, site/grid charge power limit (kW).
 
     Returns:
-        clusters_df: DataFrame with one row per cluster, columns:
+        tuple: (clusters_df, events_with_clusters_df) where:
+        - clusters_df: DataFrame with one row per cluster, columns:
             ['cluster_id', 'cluster_start', 'cluster_end', 'cluster_duration_hr',
              'num_events_in_cluster', 'peak_abs_kw_in_cluster', 'peak_abs_kw_sum_in_cluster', 'total_energy_above_threshold_kwh',
              'min_inter_event_gap_hr', 'max_inter_event_gap_hr', 'md_window_label']
+        - events_with_clusters_df: Original events DataFrame with added 'cluster_id' column
     """
     # Compute recharge time (hours)
     E_max = battery_params['unit_energy_kwh']
@@ -83,12 +85,17 @@ def cluster_peak_events(events_df, battery_params, md_hours, working_days, tou_c
     filtered_events = filtered_events.sort_values('start').reset_index(drop=True)
 
     clusters = []
+    # Add cluster_id column to track event assignments
+    events_with_clusters = filtered_events.copy()
+    events_with_clusters['cluster_id'] = 0  # Initialize with 0
+    
     cluster_id = 1
     i = 0
     n = len(filtered_events)
     while i < n:
         # Start new cluster
         cluster_events = [filtered_events.iloc[i]]
+        cluster_event_indices = [i]  # Track indices for cluster assignment
         cluster_start = filtered_events.iloc[i]['start']
         cluster_end = filtered_events.iloc[i]['end']
         inter_event_gaps = []
@@ -112,11 +119,17 @@ def cluster_peak_events(events_df, battery_params, md_hours, working_days, tou_c
             same_day_or_close = time_diff <= 24  # Allow events within 24 hours
             if gap_hr <= effective_recharge_time and same_day_or_close:
                 cluster_events.append(next_event)
+                cluster_event_indices.append(i + 1)
                 inter_event_gaps.append(gap_hr)
                 cluster_end = next_event['end']
                 i += 1
             else:
                 break
+        
+        # Assign cluster_id to all events in this cluster
+        for idx in cluster_event_indices:
+            events_with_clusters.loc[idx, 'cluster_id'] = cluster_id
+            
         # Aggregate cluster metrics
         peak_abs_kw_max = max(e['peak_abs_kw'] for e in cluster_events)  # Maximum peak within cluster
         peak_abs_kw_sum = sum(e['peak_abs_kw'] for e in cluster_events)  # Sum of all event peaks
@@ -141,7 +154,7 @@ def cluster_peak_events(events_df, battery_params, md_hours, working_days, tou_c
         i += 1
 
     clusters_df = pd.DataFrame(clusters)
-    return clusters_df
+    return clusters_df, events_with_clusters
 
 
 def build_daily_simulator_structure(df, threshold_kw, clusters_df, selected_tariff=None):
@@ -1624,7 +1637,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                     events_for_clustering['energy_above_threshold_kwh'] = events_for_clustering['General Required Energy (kWh)']
                 
                 # Perform clustering
-                clusters_df = cluster_peak_events(
+                clusters_df, events_for_clustering = cluster_peak_events(
                     events_for_clustering, battery_params_cluster, md_hours, working_days
                 )
                 
@@ -1708,7 +1721,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                             max_cluster_tou_excess = 0
                             for cluster_id in clusters_df[clusters_df['cluster_duration_hr'] > 0]['cluster_id']:
                                 # Get events in this cluster and sum their TOU Excess values
-                                cluster_events = events_for_clustering[events_for_clustering['cluster_id'] == cluster_id] if 'cluster_id' in events_for_clustering.columns else events_for_clustering
+                                cluster_events = events_for_clustering[events_for_clustering['cluster_id'] == cluster_id]
                                 cluster_tou_excess_sum = cluster_events['TOU Excess (kW)'].sum() if 'TOU Excess (kW)' in cluster_events.columns else 0
                                 max_cluster_tou_excess = max(max_cluster_tou_excess, cluster_tou_excess_sum)
                         else:
