@@ -1863,37 +1863,30 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
         if monthly_targets is not None and len(monthly_targets) > 0:
             st.markdown("#### 🔋 Recommended Battery Capacity")
             
-            # Calculate maximum power shaving required using clustering analysis if available
-            max_shaving_power = 0
-            max_tou_excess = 0
+            # Initialize values for battery capacity calculation
+            recommended_energy_capacity = 0
+            max_power_shaving_required = 0
             
             # Check if clustering analysis was performed and has results
             if ('clusters_df' in locals() and not clusters_df.empty and 
-                'peak_abs_kw_sum_in_cluster' in clusters_df.columns):
+                'max_cluster_energy' in locals() and 'max_single_energy' in locals() and
+                'max_cluster_tou_excess' in locals() and 'max_single_tou_excess' in locals()):
                 
-                # Use clustering analysis results for more accurate requirements
-                # Get max total peak power from multi-event clusters
-                if len(clusters_df[clusters_df['cluster_duration_hr'] > 0]) > 0:
-                    max_cluster_sum_power = clusters_df[clusters_df['cluster_duration_hr'] > 0]['peak_abs_kw_sum_in_cluster'].max()
-                else:
-                    max_cluster_sum_power = 0
+                # Use clustering analysis results for battery capacity recommendation
+                # Battery capacity (kWh) = max of cluster energy vs single event energy
+                recommended_energy_capacity = max(max_cluster_energy, max_single_energy)
                 
-                # Get max power from single events
-                if len(clusters_df[clusters_df['cluster_duration_hr'] == 0]) > 0:
-                    max_single_power = clusters_df[clusters_df['cluster_duration_hr'] == 0]['peak_abs_kw_in_cluster'].max()
-                else:
-                    max_single_power = 0
-                
-                # Use the larger value between clusters and single events for power requirement
-                max_shaving_power = max(max_cluster_sum_power, max_single_power)
-                max_tou_excess = max_shaving_power  # TOU Excess is the power requirement
+                # Power shaving requirement (kW) = max of cluster TOU excess vs single event TOU excess  
+                max_power_shaving_required = max(max_cluster_tou_excess, max_single_tou_excess)
                 
                 st.info(f"""
                 **🔋 Battery Capacity Calculation (Enhanced with Clustering Analysis):**
-                - **Max Cluster Power (Sum)**: {max_cluster_sum_power:.1f} kW
-                - **Max Single Event Power**: {max_single_power:.1f} kW
-                - **Selected Max Power**: {max_shaving_power:.1f} kW
-                - **TOU Excess Requirement**: {max_tou_excess:.1f} kW
+                - **Max Cluster Energy**: {max_cluster_energy:.1f} kWh
+                - **Max Single Event Energy**: {max_single_energy:.1f} kWh
+                - **Recommended Energy Capacity**: {recommended_energy_capacity:.1f} kWh
+                - **Max Cluster TOU Excess**: {max_cluster_tou_excess:.1f} kW
+                - **Max Single Event TOU Excess**: {max_single_tou_excess:.1f} kW
+                - **Max Power Shaving Required**: {max_power_shaving_required:.1f} kW
                 """)
                 
             else:
@@ -1910,20 +1903,17 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                             if shaving_amount > 0:
                                 shaving_amounts.append(shaving_amount)
                     
-                    max_shaving_power = max(shaving_amounts) if shaving_amounts else 0
+                    max_power_shaving_required = max(shaving_amounts) if shaving_amounts else 0
                 
                 # Calculate max TOU excess from individual events (power-based, not energy)
-                max_tou_excess = max([event.get('TOU Excess (kW)', 0) or 0 for event in all_monthly_events]) if 'all_monthly_events' in locals() and all_monthly_events else 0
+                max_tou_excess_fallback = max([event.get('TOU Excess (kW)', 0) or 0 for event in all_monthly_events]) if 'all_monthly_events' in locals() and all_monthly_events else 0
+                max_power_shaving_required = max(max_power_shaving_required, max_tou_excess_fallback)
+                
+                # For fallback, use power shaving as energy capacity estimate
+                recommended_energy_capacity = max_power_shaving_required
             
-            # Recommended battery capacity uses the TOU excess (power requirement)
-            recommended_capacity = max_tou_excess if max_tou_excess is not None and max_tou_excess > 0 else max_shaving_power
-            
-            # Ensure recommended_capacity is not None
-            if recommended_capacity is None:
-                recommended_capacity = 0
-            
-            # Round up to nearest whole number
-            recommended_capacity_rounded = int(np.ceil(recommended_capacity)) if recommended_capacity > 0 else 0
+            # Round up to nearest whole number for recommended capacity
+            recommended_capacity_rounded = int(np.ceil(recommended_energy_capacity)) if recommended_energy_capacity > 0 else 0
             
             # Display key metrics
             col1, col2 = st.columns(2)
@@ -1931,15 +1921,15 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
             with col1:
                 st.metric(
                     "Max Power Shaving Required", 
-                    f"{max_shaving_power:.1f} kW",
-                    help="Maximum power reduction required - enhanced with clustering analysis"
+                    f"{max_power_shaving_required:.1f} kW",
+                    help="Maximum power reduction required based on TOU excess from clustering analysis"
                 )
             
             with col2:
                 st.metric(
                     "Recommended Battery Capacity", 
                     f"{recommended_capacity_rounded} kWh",
-                    help="Battery capacity based on enhanced clustering analysis of peak events"
+                    help="Battery energy capacity based on maximum energy requirement from clustering analysis"
                 )
             
             # Main recommendation
@@ -1948,12 +1938,25 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
             if recommended_capacity_rounded > 0:
                 # Check which method was used for the recommendation
                 if ('clusters_df' in locals() and not clusters_df.empty and 
-                    'peak_abs_kw_sum_in_cluster' in clusters_df.columns):
+                    'max_cluster_energy' in locals() and 'max_single_energy' in locals()):
                     analysis_method = "enhanced clustering analysis"
-                    rationale = "Battery capacity (kWh) is set to match the maximum TOU excess power requirement from either single events or clustered multi-event scenarios to ensure complete peak shaving capability."
+                    
+                    # Determine which source drove the energy capacity
+                    if recommended_energy_capacity == max_cluster_energy and max_cluster_energy > max_single_energy:
+                        energy_source = "multi-event cluster"
+                    else:
+                        energy_source = "single event"
+                    
+                    # Determine which source drove the power requirement
+                    if max_power_shaving_required == max_cluster_tou_excess and max_cluster_tou_excess > max_single_tou_excess:
+                        power_source = "multi-event cluster"
+                    else:
+                        power_source = "single event"
+                    
+                    rationale = f"Battery capacity (kWh) is based on the maximum energy requirement from {energy_source} analysis ({recommended_energy_capacity:.1f} kWh). Power shaving requirement is {max_power_shaving_required:.1f} kW from {power_source} analysis."
                 else:
                     analysis_method = "standard peak events analysis"
-                    rationale = "Battery capacity (kWh) is set to match the maximum TOU excess power requirement during any single TOU peak event to ensure complete peak shaving capability."
+                    rationale = "Battery capacity (kWh) is set to match the maximum power requirement to ensure complete peak shaving capability."
                 
                 st.success(f"""
                 **Recommended Battery Capacity: {recommended_capacity_rounded} kWh**
