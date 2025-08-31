@@ -1988,9 +1988,65 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
             else:
                 st.info("No peak events detected - battery may not be required with current target settings.")
             
-            # Create comprehensive battery analysis table
+            # Create comprehensive battery unit calculation
             if recommended_capacity_rounded > 0:
-                pass
+                st.markdown("##### 🔋 Battery Unit Requirements")
+                
+                # Load battery database for unit calculations
+                battery_db = load_vendor_battery_database()
+                if battery_db and matching_batteries:
+                    st.markdown("**Battery Units Required for Each Option:**")
+                    
+                    # Create calculation table for each battery option
+                    unit_calculations = []
+                    
+                    for i, battery in enumerate(matching_batteries[:5]):  # Show top 5 matches
+                        spec = battery['spec']
+                        battery_capacity_kwh = battery['capacity_kwh']
+                        battery_power_kw = battery['power_kw']
+                        
+                        # Calculate units required based on energy capacity
+                        units_for_energy = int(np.ceil(recommended_capacity_rounded / battery_capacity_kwh)) if battery_capacity_kwh > 0 else 0
+                        
+                        # Calculate units required based on power requirement
+                        units_for_power = int(np.ceil(max_power_shaving_required / battery_power_kw)) if battery_power_kw > 0 else 0
+                        
+                        # Total units required (higher of the two)
+                        total_units_required = max(units_for_energy, units_for_power)
+                        
+                        # Calculate total system specifications
+                        total_system_capacity = total_units_required * battery_capacity_kwh
+                        total_system_power = total_units_required * battery_power_kw
+                        
+                        # Determine limiting factor
+                        limiting_factor = "Energy" if units_for_energy >= units_for_power else "Power"
+                        
+                        unit_calculations.append({
+                            'Battery Model': f"{spec.get('manufacturer', 'Unknown')} - {spec.get('model', battery['id'])}",
+                            'Unit Specs': f"{battery_capacity_kwh} kWh / {battery_power_kw} kW",
+                            'Units for Energy': f"{units_for_energy} units",
+                            'Units for Power': f"{units_for_power} units", 
+                            'Total Units Required': f"{total_units_required} units",
+                            'Limiting Factor': limiting_factor,
+                            'Total System Capacity': f"{total_system_capacity:.1f} kWh",
+                            'Total System Power': f"{total_system_power:.1f} kW"
+                        })
+                    
+                    # Display the unit calculations table
+                    df_units = pd.DataFrame(unit_calculations)
+                    st.dataframe(df_units, use_container_width=True, hide_index=True)
+                    
+                    # Explanation of calculations
+                    st.info(f"""
+                    **Unit Calculation Methodology:**
+                    - **Energy-based units**: {recommended_capacity_rounded} kWh ÷ Battery Capacity (kWh/unit)
+                    - **Power-based units**: {max_power_shaving_required:.1f} kW ÷ Battery Power (kW/unit)
+                    - **Total units**: Higher of energy-based or power-based requirement
+                    - **Limiting factor**: Whether energy capacity or power capability drives the unit count
+                    """)
+                    
+                else:
+                    st.warning("⚠️ Battery database not available or no matching batteries found for unit calculations")
         
         # Battery Impact Analysis Section moved to separate function
         
