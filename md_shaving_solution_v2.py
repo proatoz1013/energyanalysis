@@ -521,13 +521,13 @@ def _render_battery_selection_dropdown():
             return None
 
 
-def _render_battery_sizing_analysis(max_power_shaving_required, max_tou_excess, total_md_cost):
+def _render_battery_sizing_analysis(max_power_shaving_required, recommended_energy_capacity, total_md_cost):
     """
     Render comprehensive battery sizing and financial analysis table.
     
     Args:
-        max_shaving_power: Maximum power shaving required (kW)
-        max_tou_excess: Maximum TOU excess power requirement (kW)  
+        max_power_shaving_required: Maximum power shaving required (kW)
+        recommended_energy_capacity: Maximum TOU excess power requirement (kW)  
         total_md_cost: Total MD cost impact (RM)
     """
     st.markdown("#### 🔋 Battery Sizing & Financial Analysis")
@@ -551,9 +551,10 @@ def _render_battery_sizing_analysis(max_power_shaving_required, max_tou_excess, 
             # Column 1: Battery quantity for max power shaving
             qty_for_power = max_power_shaving_required / battery_power_kw if battery_power_kw > 0 else 0
             qty_for_power_rounded = int(np.ceil(qty_for_power))
+            print(max_power_shaving_required, qty_for_power)
 
             # Column 2: Battery quantity for max TOU excess power requirement
-            qty_for_excess = max_tou_excess / battery_power_kw if battery_power_kw > 0 else 0
+            qty_for_excess = recommended_energy_capacity / battery_power_kw if battery_power_kw > 0 else 0
             qty_for_excess_rounded = int(np.ceil(qty_for_excess))
             
             # Column 3: BESS quantity (higher of the two)
@@ -586,7 +587,7 @@ def _render_battery_sizing_analysis(max_power_shaving_required, max_tou_excess, 
                 ],
                 'Value': [
                     f"{qty_for_power_rounded} units (for {max_power_shaving_required:.1f} kW)",
-                    f"{qty_for_excess_rounded} units (for {max_tou_excess:.1f} kW)", 
+                    f"{qty_for_excess_rounded} units (for {recommended_energy_capacity:.1f} kW)", 
                     f"{bess_quantity} units",
                     f"{total_power_kw:.1f} kW",
                     f"{total_energy_kwh:.1f} kWh",
@@ -596,7 +597,7 @@ def _render_battery_sizing_analysis(max_power_shaving_required, max_tou_excess, 
                 ],
                 'Calculation Basis': [
                     f"Max Power Required: {max_power_shaving_required:.1f} kW ÷ {battery_power_kw} kW/unit",
-                    f"Max TOU Excess: {max_tou_excess:.1f} kW ÷ {battery_power_kw} kW/unit",
+                    f"Max TOU Excess: {recommended_energy_capacity:.1f} kW ÷ {battery_power_kw} kW/unit",
                     "Higher of power or TOU excess requirement",
                     f"{bess_quantity} units × {battery_power_kw} kW/unit",
                     f"{bess_quantity} units × {battery_energy_kwh} kWh/unit", 
@@ -1961,7 +1962,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                 st.success(f"""
                 **Recommended Battery Capacity: {recommended_capacity_rounded} kWh**
                 
-                This recommendation is based on the maximum TOU Excess of {max_tou_excess:.1f} kW from the {analysis_method}.
+                This recommendation is based on the maximum TOU Excess of {recommended_energy_capacity:.1f} kW from the {analysis_method}.
                 
                 **Rationale**: {rationale}
                 """)
@@ -2055,8 +2056,8 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
         
         # Calculate shared analysis variables for both battery sizing and simulation
         # These need to be available in broader scope for battery simulation section
-        max_shaving_power = 0
-        max_tou_excess = 0
+        max_power_shaving_required = 0
+        recommended_energy_capacity = 0
         total_md_cost = 0
         
         # Console logging for debugging - check conditions first
@@ -2088,13 +2089,13 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                     max_single_power = 0
                 
                 # Use the larger value between clusters and single events for power requirement
-                max_shaving_power = max(max_cluster_sum_power, max_single_power)
-                max_tou_excess = max_shaving_power  # TOU Excess is the power requirement
+                max_power_shaving_required = max(max_cluster_sum_power, max_single_power)
+                recommended_energy_capacity = max_power_shaving_required  # TOU Excess is the power requirement
                 
                 # Console logging for debugging - CLUSTERING ANALYSIS RESULTS
                 print(f"🔋 DEBUG - Battery Sizing Values (CLUSTERING ANALYSIS):")
-                print(f"   max_shaving_power = {max_shaving_power:.1f} kW")
-                print(f"   max_tou_excess = {max_tou_excess:.1f} kW")
+                print(f"   max_power_shaving_required = {max_power_shaving_required:.1f} kW")
+                print(f"   recommended_energy_capacity = {recommended_energy_capacity:.1f} kW")
                 print(f"   max_cluster_sum_power = {max_cluster_sum_power:.1f} kW")
                 print(f"   max_single_power = {max_single_power:.1f} kW")
                 
@@ -2102,8 +2103,8 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                 **🔋 Enhanced Battery Sizing (from Clustering Analysis):**
                 - **Max Cluster Power (Sum)**: {max_cluster_sum_power:.1f} kW
                 - **Max Single Event Power**: {max_single_power:.1f} kW
-                - **Selected Max Power**: {max_shaving_power:.1f} kW
-                - **Selected TOU Excess (Power Requirement)**: {max_tou_excess:.1f} kW
+                - **Selected Max Power**: {max_power_shaving_required:.1f} kW
+                - **Selected TOU Excess (Power Requirement)**: {recommended_energy_capacity:.1f} kW
                 """)
                 
             else:
@@ -2119,15 +2120,15 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                             shaving_amount = max_demand - target_demand
                             if shaving_amount > 0:
                                 shaving_amounts.append(shaving_amount)
-                    max_shaving_power = max(shaving_amounts) if shaving_amounts else 0
+                    max_power_shaving_required = max(shaving_amounts) if shaving_amounts else 0
                 
                 # Calculate max TOU excess from individual events (power-based, not energy)
-                max_tou_excess = max([event.get('TOU Excess (kW)', 0) or 0 for event in all_monthly_events]) if all_monthly_events else 0
+                recommended_energy_capacity = max([event.get('TOU Excess (kW)', 0) or 0 for event in all_monthly_events]) if all_monthly_events else 0
                 
                 # Console logging for debugging - FALLBACK CALCULATION
                 print(f"🔋 DEBUG - Battery Sizing Values (FALLBACK METHOD):")
-                print(f"   max_shaving_power = {max_shaving_power:.1f} kW")
-                print(f"   max_tou_excess = {max_tou_excess:.1f} kW")
+                print(f"   max_power_shaving_required = {max_power_shaving_required:.1f} kW")
+                print(f"   recommended_energy_capacity = {recommended_energy_capacity:.1f} kW")
                 print(f"   monthly_targets available: {monthly_targets is not None and len(monthly_targets) > 0}")
                 print(f"   number of all_monthly_events: {len(all_monthly_events) if all_monthly_events else 0}")
             
@@ -2136,12 +2137,12 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
         
         # Console logging for debugging - FINAL RESULTS (always executes)
         print(f"🔋 DEBUG - Final Battery Sizing Results:")
-        print(f"   FINAL max_shaving_power = {max_shaving_power:.1f} kW")
-        print(f"   FINAL max_tou_excess = {max_tou_excess:.1f} kW") 
+        print(f"   FINAL max_power_shaving_required = {max_power_shaving_required:.1f} kW")
+        print(f"   FINAL recommended_energy_capacity = {recommended_energy_capacity:.1f} kW") 
         print(f"   FINAL total_md_cost = RM {total_md_cost:.2f}")
         
         # Call the battery sizing analysis function with the calculated values
-        _render_battery_sizing_analysis(max_shaving_power, max_tou_excess, total_md_cost)
+        _render_battery_sizing_analysis(max_power_shaving_required, recommended_energy_capacity, total_md_cost)
         
         # Battery Simulation Analysis Section
         st.markdown("#### 🔋 Battery Simulation Analysis")
@@ -2163,11 +2164,11 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
             error_messages = []
             
             # Validate peak analysis data
-            if max_shaving_power <= 0:
+            if max_power_shaving_required <= 0:
                 prerequisites_met = False
                 error_messages.append("Max shaving power not calculated or invalid")
             
-            if max_tou_excess <= 0:
+            if recommended_energy_capacity <= 0:
                 prerequisites_met = False
                 error_messages.append("Max TOU excess not calculated or invalid")
             
@@ -2188,8 +2189,8 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
             if prerequisites_met:
                 
                 # Calculate optimal number of units based on the analysis
-                units_for_power = int(np.ceil(max_shaving_power / battery_power_kw)) if battery_power_kw > 0 else 1
-                units_for_excess = int(np.ceil(max_tou_excess / battery_power_kw)) if battery_power_kw > 0 else 1
+                units_for_power = int(np.ceil(max_power_shaving_required / battery_power_kw)) if battery_power_kw > 0 else 1
+                units_for_excess = int(np.ceil(recommended_energy_capacity / battery_power_kw)) if battery_power_kw > 0 else 1
                 optimal_units = max(units_for_power, units_for_excess, 1)
                 
                 # Calculate total system specifications
@@ -2204,7 +2205,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                 - **System Configuration**: {optimal_units} units
                 - **Total System Capacity**: {total_battery_capacity:.1f} kWh
                 - **Total System Power**: {total_battery_power:.1f} kW
-                - **Based on**: Max Power Shaving ({max_shaving_power:.1f} kW) & Max TOU Excess ({max_tou_excess:.1f} kW)
+                - **Based on**: Max Power Shaving ({max_power_shaving_required:.1f} kW) & Max TOU Excess ({recommended_energy_capacity:.1f} kW)
                 """)
                 
                 # Call the battery simulation workflow (simulation + chart display)
