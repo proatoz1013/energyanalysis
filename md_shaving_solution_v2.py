@@ -521,7 +521,7 @@ def _render_battery_selection_dropdown():
             return None
 
 
-def _render_battery_sizing_analysis(max_shaving_power, max_tou_excess, total_md_cost):
+def _render_battery_sizing_analysis(max_power_shaving_required, max_tou_excess, total_md_cost):
     """
     Render comprehensive battery sizing and financial analysis table.
     
@@ -549,7 +549,7 @@ def _render_battery_sizing_analysis(max_shaving_power, max_tou_excess, total_md_
             # Calculate battery quantities required
             
             # Column 1: Battery quantity for max power shaving
-            qty_for_power = max_shaving_power / battery_power_kw if battery_power_kw > 0 else 0
+            qty_for_power = max_power_shaving_required / battery_power_kw if battery_power_kw > 0 else 0
             qty_for_power_rounded = int(np.ceil(qty_for_power))
 
             # Column 2: Battery quantity for max TOU excess power requirement
@@ -566,7 +566,7 @@ def _render_battery_sizing_analysis(max_shaving_power, max_tou_excess, total_md_
             # Column 4: MD shaved (actual impact with this battery configuration)
             # Use the total power capacity from the larger battery quantity (BESS quantity)
             md_shaved_kw = total_power_kw  # Total power from the BESS system
-            md_shaving_percentage = (md_shaved_kw / max_shaving_power * 100) if max_shaving_power > 0 else 0
+            md_shaving_percentage = (md_shaved_kw / max_power_shaving_required * 100) if max_power_shaving_required > 0 else 0
 
             # Column 5: Cost of batteries
             estimated_cost_per_kwh = 1400  # RM per kWh (consistent with main app)
@@ -585,7 +585,7 @@ def _render_battery_sizing_analysis(max_shaving_power, max_tou_excess, total_md_
                     'Total Battery Investment'
                 ],
                 'Value': [
-                    f"{qty_for_power_rounded} units (for {max_shaving_power:.1f} kW)",
+                    f"{qty_for_power_rounded} units (for {max_power_shaving_required:.1f} kW)",
                     f"{qty_for_excess_rounded} units (for {max_tou_excess:.1f} kW)", 
                     f"{bess_quantity} units",
                     f"{total_power_kw:.1f} kW",
@@ -595,7 +595,7 @@ def _render_battery_sizing_analysis(max_shaving_power, max_tou_excess, total_md_
                     f"RM {total_battery_cost:,.0f}"
                 ],
                 'Calculation Basis': [
-                    f"Max Power Required: {max_shaving_power:.1f} kW ÷ {battery_power_kw} kW/unit",
+                    f"Max Power Required: {max_power_shaving_required:.1f} kW ÷ {battery_power_kw} kW/unit",
                     f"Max TOU Excess: {max_tou_excess:.1f} kW ÷ {battery_power_kw} kW/unit",
                     "Higher of power or TOU excess requirement",
                     f"{bess_quantity} units × {battery_power_kw} kW/unit",
@@ -635,7 +635,7 @@ def _render_battery_sizing_analysis(max_shaving_power, max_tou_excess, total_md_
                     st.warning(f"""
                     ⚠️ **Partial Coverage Notice**: 
                     This battery configuration covers {md_shaving_percentage:.1f}% of maximum power shaving requirements.
-                    Additional {max_shaving_power - md_shaved_kw:.1f} kW capacity may be needed for complete coverage.
+                    Additional {max_power_shaving_required - md_shaved_kw:.1f} kW capacity may be needed for complete coverage.
                     """)
             else:
                 st.error("❌ Invalid battery configuration - no units required")
