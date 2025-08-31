@@ -548,13 +548,13 @@ def _render_battery_sizing_analysis(max_power_shaving_required, recommended_ener
         if battery_power_kw > 0 and battery_energy_kwh > 0:
             # Calculate battery quantities required
             
-            # Column 1: Battery quantity for max power shaving
+            # Column 1: Battery quantity for selected power requirement
             qty_for_power = max_power_shaving_required / battery_power_kw if battery_power_kw > 0 else 0
             qty_for_power_rounded = int(np.ceil(qty_for_power))
             print(max_power_shaving_required, qty_for_power)
 
-            # Column 2: Battery quantity for max TOU excess power requirement
-            qty_for_excess = recommended_energy_capacity / battery_power_kw if battery_power_kw > 0 else 0
+            # Column 2: Battery quantity for selected energy capacity requirement
+            qty_for_excess = recommended_energy_capacity / battery_energy_kwh if battery_energy_kwh > 0 else 0
             qty_for_excess_rounded = int(np.ceil(qty_for_excess))
             
             # Column 3: BESS quantity (higher of the two)
@@ -576,8 +576,8 @@ def _render_battery_sizing_analysis(max_power_shaving_required, recommended_ener
             # Create analysis table
             analysis_data = {
                 'Analysis Parameter': [
-                    'Units for Max Power Shaving',
-                    'Units for Max TOU Excess Power',
+                    'Units for Selected Power Requirement',
+                    'Units for Selected Energy Capacity',
                     'Total BESS Quantity Required',
                     'Total System Power Capacity',
                     'Total System Energy Capacity',
@@ -587,7 +587,7 @@ def _render_battery_sizing_analysis(max_power_shaving_required, recommended_ener
                 ],
                 'Value': [
                     f"{qty_for_power_rounded} units (for {max_power_shaving_required:.1f} kW)",
-                    f"{qty_for_excess_rounded} units (for {recommended_energy_capacity:.1f} kW)", 
+                    f"{qty_for_excess_rounded} units (for {recommended_energy_capacity:.1f} kWh)", 
                     f"{bess_quantity} units",
                     f"{total_power_kw:.1f} kW",
                     f"{total_energy_kwh:.1f} kWh",
@@ -596,13 +596,13 @@ def _render_battery_sizing_analysis(max_power_shaving_required, recommended_ener
                     f"RM {total_battery_cost:,.0f}"
                 ],
                 'Calculation Basis': [
-                    f"Max Power Required: {max_power_shaving_required:.1f} kW ÷ {battery_power_kw} kW/unit",
-                    f"Max TOU Excess: {recommended_energy_capacity:.1f} kW ÷ {battery_power_kw} kW/unit",
-                    "Higher of power or TOU excess requirement",
+                    f"Selected Power Requirement: {max_power_shaving_required:.1f} kW ÷ {battery_power_kw} kW/unit",
+                    f"Selected Energy Capacity: {recommended_energy_capacity:.1f} kWh ÷ {battery_energy_kwh} kWh/unit",
+                    "Higher of power or energy requirement",
                     f"{bess_quantity} units × {battery_power_kw} kW/unit",
                     f"{bess_quantity} units × {battery_energy_kwh} kWh/unit", 
                     f"{bess_quantity} units × {battery_power_kw} kW/unit = {total_power_kw:.1f} kW",
-                    f"MD Shaved ÷ Max Power Required × 100%",
+                    f"MD Shaved ÷ Selected Power Requirement × 100%",
                     f"{total_energy_kwh:.1f} kWh × RM {estimated_cost_per_kwh}/kWh"
                 ]
             }
@@ -2237,7 +2237,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                 - **System Configuration**: {optimal_units} units
                 - **Total System Capacity**: {total_battery_capacity:.1f} kWh
                 - **Total System Power**: {total_battery_power:.1f} kW
-                - **Based on**: Max Power Shaving ({max_power_shaving_required:.1f} kW) & Max TOU Excess ({recommended_energy_capacity:.1f} kW)
+                - **Based on**: Selected Power Requirement ({max_power_shaving_required:.1f} kW) & Selected Energy Capacity ({recommended_energy_capacity:.1f} kWh)
                 """)
                 
                 # Call the battery simulation workflow (simulation + chart display)
