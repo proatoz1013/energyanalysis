@@ -585,8 +585,8 @@ def _render_battery_sizing_analysis(max_shaving_power, max_tou_excess, total_md_
                     'Total Battery Investment'
                 ],
                 'Value': [
-                    f"{qty_for_power_rounded} units ({qty_for_power:.2f} calculated)",
-                    f"{qty_for_excess_rounded} units ({qty_for_excess:.2f} calculated)", 
+                    f"{qty_for_power_rounded} units (for {max_shaving_power:.1f} kW)",
+                    f"{qty_for_excess_rounded} units (for {max_tou_excess:.1f} kW)", 
                     f"{bess_quantity} units",
                     f"{total_power_kw:.1f} kW",
                     f"{total_energy_kwh:.1f} kWh",
