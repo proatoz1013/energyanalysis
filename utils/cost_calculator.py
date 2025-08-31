@@ -36,11 +36,16 @@ def calculate_cost(df, tariff, power_col, holidays=None, afa_kwh=0, afa_rate=0):
     # Each power reading represents the average power for that interval
     interval_kwh = df[power_col] * interval_hours
     total_kwh = interval_kwh.sum()
-    # Calculate max demand (should be max of all, not just peak period)
-    max_demand_kw = df[power_col].max()
-    # For TOU tariffs, also calculate peak period max demand
+    
+    # --- Calculate 30-min rolling average demand for accurate billing ---
+    intervals_per_30min = int(round(0.5 / interval_hours))
+    rolling_30min_avg = df[power_col].rolling(window=intervals_per_30min, min_periods=1).mean()
+    max_demand_kw = rolling_30min_avg.max()
+    
+    # For TOU tariffs, also calculate peak period max demand using 30-min rolling average
     is_peak = df["Parsed Timestamp"].apply(lambda ts: is_peak_rp4(ts, holidays or set()))
-    peak_demand_kw = df.loc[is_peak, power_col].max() if is_peak.any() else 0
+    peak_rolling_30min_avg = df[power_col].where(is_peak).rolling(window=intervals_per_30min, min_periods=1).mean()
+    peak_demand_kw = peak_rolling_30min_avg.max() if is_peak.any() else 0
     
     rules = tariff.get("Rules", {})
     rates = tariff.get("Rates", {})
