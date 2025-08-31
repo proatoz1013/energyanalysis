@@ -2079,32 +2079,64 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                 # Get max total peak power from multi-event clusters
                 if len(clusters_df[clusters_df['cluster_duration_hr'] > 0]) > 0:
                     max_cluster_sum_power = clusters_df[clusters_df['cluster_duration_hr'] > 0]['peak_abs_kw_sum_in_cluster'].max()
+                    max_cluster_energy = clusters_df[clusters_df['cluster_duration_hr'] > 0]['total_energy_above_threshold_kwh'].max()
                 else:
                     max_cluster_sum_power = 0
+                    max_cluster_energy = 0
                 
                 # Get max power from single events
                 if len(clusters_df[clusters_df['cluster_duration_hr'] == 0]) > 0:
                     max_single_power = clusters_df[clusters_df['cluster_duration_hr'] == 0]['peak_abs_kw_in_cluster'].max()
+                    
+                    # Get max energy from single events
+                    single_event_ids = clusters_df[clusters_df['cluster_duration_hr'] == 0]['cluster_id']
+                    single_event_energies = []
+                    for cluster_id in single_event_ids:
+                        cluster_events = events_for_clustering[events_for_clustering['cluster_id'] == cluster_id]
+                        if not cluster_events.empty:
+                            single_event_energies.append(cluster_events['General Required Energy (kWh)'].max())
+                    max_single_energy = max(single_event_energies) if single_event_energies else 0
                 else:
                     max_single_power = 0
+                    max_single_energy = 0
+                
+                # Calculate TOU Excess for clusters and single events (same logic as first section)
+                # For multi-event clusters, get max TOU Excess sum
+                if len(clusters_df[clusters_df['cluster_duration_hr'] > 0]) > 0:
+                    max_cluster_tou_excess = 0
+                    for cluster_id in clusters_df[clusters_df['cluster_duration_hr'] > 0]['cluster_id']:
+                        cluster_events = events_for_clustering[events_for_clustering['cluster_id'] == cluster_id]
+                        cluster_tou_excess_sum = cluster_events['TOU Excess (kW)'].sum() if 'TOU Excess (kW)' in cluster_events.columns else 0
+                        max_cluster_tou_excess = max(max_cluster_tou_excess, cluster_tou_excess_sum)
+                else:
+                    max_cluster_tou_excess = 0
+                
+                # For single events, get max individual TOU Excess
+                if len(clusters_df[clusters_df['cluster_duration_hr'] == 0]) > 0:
+                    single_event_ids = clusters_df[clusters_df['cluster_duration_hr'] == 0]['cluster_id']
+                    max_single_tou_excess = events_for_clustering[events_for_clustering['cluster_id'].isin(single_event_ids)]['TOU Excess (kW)'].max() if 'TOU Excess (kW)' in events_for_clustering.columns else 0
+                else:
+                    max_single_tou_excess = 0
                 
                 # Use the larger value between clusters and single events for power requirement
-                max_power_shaving_required = max(max_cluster_sum_power, max_single_power)
-                recommended_energy_capacity = max_power_shaving_required  # TOU Excess is the power requirement
+                max_power_shaving_required = max(max_cluster_tou_excess, max_single_tou_excess)
+                recommended_energy_capacity = max(max_cluster_energy, max_single_energy)  # Energy capacity from clustering analysis
                 
                 # Console logging for debugging - CLUSTERING ANALYSIS RESULTS
                 print(f"🔋 DEBUG - Battery Sizing Values (CLUSTERING ANALYSIS):")
                 print(f"   max_power_shaving_required = {max_power_shaving_required:.1f} kW")
-                print(f"   recommended_energy_capacity = {recommended_energy_capacity:.1f} kW")
+                print(f"   recommended_energy_capacity = {recommended_energy_capacity:.1f} kWh")
                 print(f"   max_cluster_sum_power = {max_cluster_sum_power:.1f} kW")
                 print(f"   max_single_power = {max_single_power:.1f} kW")
                 
                 st.info(f"""
                 **🔋 Enhanced Battery Sizing (from Clustering Analysis):**
-                - **Max Cluster Power (Sum)**: {max_cluster_sum_power:.1f} kW
-                - **Max Single Event Power**: {max_single_power:.1f} kW
-                - **Selected Max Power**: {max_power_shaving_required:.1f} kW
-                - **Selected TOU Excess (Power Requirement)**: {recommended_energy_capacity:.1f} kW
+                - **Max Cluster Energy**: {max_cluster_energy:.1f} kWh
+                - **Max Single Event Energy**: {max_single_energy:.1f} kWh
+                - **Max Cluster TOU Excess**: {max_cluster_tou_excess:.1f} kW
+                - **Max Single Event TOU Excess**: {max_single_tou_excess:.1f} kW
+                - **Selected Energy Capacity**: {recommended_energy_capacity:.1f} kWh
+                - **Selected Power Requirement**: {max_power_shaving_required:.1f} kW
                 """)
                 
             else:
