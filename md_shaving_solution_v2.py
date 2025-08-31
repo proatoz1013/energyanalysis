@@ -551,8 +551,8 @@ def _render_battery_sizing_analysis(max_shaving_power, max_tou_excess, total_md_
             # Column 1: Battery quantity for max power shaving
             qty_for_power = max_shaving_power / battery_power_kw if battery_power_kw > 0 else 0
             qty_for_power_rounded = int(np.ceil(qty_for_power))
-            
-            # Column 2: Battery quantity for max TOU excess power requirement  
+
+            # Column 2: Battery quantity for max TOU excess power requirement
             qty_for_excess = max_tou_excess / battery_power_kw if battery_power_kw > 0 else 0
             qty_for_excess_rounded = int(np.ceil(qty_for_excess))
             
@@ -567,7 +567,7 @@ def _render_battery_sizing_analysis(max_shaving_power, max_tou_excess, total_md_
             # Use the total power capacity from the larger battery quantity (BESS quantity)
             md_shaved_kw = total_power_kw  # Total power from the BESS system
             md_shaving_percentage = (md_shaved_kw / max_shaving_power * 100) if max_shaving_power > 0 else 0
-            
+
             # Column 5: Cost of batteries
             estimated_cost_per_kwh = 1400  # RM per kWh (consistent with main app)
             total_battery_cost = total_energy_kwh * estimated_cost_per_kwh
