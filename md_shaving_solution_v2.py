@@ -1697,24 +1697,31 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                     st.markdown("### ⚡ Peak Power & Energy Analysis")
                     st.markdown("**Comparison between multi-event clusters and single events**")
                     
-                    # Calculate total peak power (sum of individual peaks) for clusters
+                    # Calculate total energy (kWh) and power (kW) for clusters vs single events
                     if 'peak_abs_kw_sum_in_cluster' in clusters_df.columns:
                         
-                        # Get max total peak power from multi-event clusters
+                        # Get max total energy from multi-event clusters (kWh)
                         if not multi_event_clusters.empty:
-                            # For multi-event clusters, use sum of individual peaks
-                            max_cluster_sum_power = clusters_df[clusters_df['cluster_duration_hr'] > 0]['peak_abs_kw_sum_in_cluster'].max()
+                            # For multi-event clusters, use total energy above threshold
+                            max_cluster_energy = clusters_df[clusters_df['cluster_duration_hr'] > 0]['total_energy_above_threshold_kwh'].max()
                         else:
-                            max_cluster_sum_power = 0
+                            max_cluster_energy = 0
                         
-                        # Get max power from single events
+                        # Get max energy from single events (kWh)
                         if not single_events.empty:
-                            # For single events, individual peak is the total
-                            max_single_power = clusters_df[clusters_df['cluster_duration_hr'] == 0]['peak_abs_kw_in_cluster'].max()
+                            # For single events, get max General Required Energy
+                            single_event_ids = clusters_df[clusters_df['cluster_duration_hr'] == 0]['cluster_id']
+                            single_event_energies = []
+                            for cluster_id in single_event_ids:
+                                single_events_in_cluster = events_for_clustering[events_for_clustering['cluster_id'] == cluster_id]
+                                if 'General Required Energy (kWh)' in single_events_in_cluster.columns:
+                                    max_energy_in_cluster = single_events_in_cluster['General Required Energy (kWh)'].max()
+                                    single_event_energies.append(max_energy_in_cluster)
+                            max_single_energy = max(single_event_energies) if single_event_energies else 0
                         else:
-                            max_single_power = 0
+                            max_single_energy = 0
                         
-                        # Calculate TOU Excess for clusters and single events
+                        # Calculate TOU Excess for clusters and single events (kW)
                         # For multi-event clusters, get max TOU Excess sum
                         if not multi_event_clusters.empty:
                             # Calculate TOU Excess for each cluster by summing individual event TOU Excess values
@@ -1740,16 +1747,16 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                         
                         with col1:
                             st.metric(
-                                "Max Cluster Power (Sum)", 
-                                f"{max_cluster_sum_power:.1f} kW",
-                                help="Sum of individual event peaks within the highest-demand cluster"
+                                "Max Cluster Energy (Sum)", 
+                                f"{max_cluster_energy:.1f} kWh",
+                                help="Total energy above threshold within the highest-demand cluster"
                             )
                         
                         with col2:
                             st.metric(
-                                "Max Single Event Power", 
-                                f"{max_single_power:.1f} kW",
-                                help="Highest individual event peak power"
+                                "Max Single Event Energy", 
+                                f"{max_single_energy:.1f} kWh",
+                                help="Highest individual event energy requirement"
                             )
                         
                         with col3:
@@ -1767,18 +1774,18 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                             )
                         
                         # Determine overall maximums
-                        overall_max_power = max(max_cluster_sum_power, max_single_power)
+                        overall_max_energy = max(max_cluster_energy, max_single_energy)
                         overall_max_tou_excess = max(max_cluster_tou_excess, max_single_tou_excess)
                         
                         # Recommendations
                         st.markdown("**💡 Battery Sizing Recommendations:**")
                         
-                        if overall_max_power == max_cluster_sum_power and max_cluster_sum_power > max_single_power:
-                            power_source = "multi-event cluster"
-                            power_advantage = ((max_cluster_sum_power - max_single_power) / max_single_power * 100) if max_single_power > 0 else 0
+                        if overall_max_energy == max_cluster_energy and max_cluster_energy > max_single_energy:
+                            energy_source = "multi-event cluster"
+                            energy_advantage = ((max_cluster_energy - max_single_energy) / max_single_energy * 100) if max_single_energy > 0 else 0
                         else:
-                            power_source = "single event"
-                            power_advantage = 0
+                            energy_source = "single event"
+                            energy_advantage = 0
                         
                         if overall_max_tou_excess == max_cluster_tou_excess and max_cluster_tou_excess > max_single_tou_excess:
                             tou_excess_source = "multi-event cluster"
@@ -1788,16 +1795,16 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                             tou_excess_advantage = 0
                         
                         st.info(f"""
-                        **Peak Shaving Power**: {overall_max_power:.1f} kW (driven by {power_source})
+                        **Peak Shaving Energy**: {overall_max_energy:.1f} kWh (driven by {energy_source})
                         **TOU Excess Capacity**: {overall_max_tou_excess:.1f} kW (driven by {tou_excess_source})
                         
-                        {'📈 Multi-event clusters require ' + f'{power_advantage:.1f}% more power capacity' if power_advantage > 0 else '📊 Single events determine power requirements'}
+                        {'📈 Multi-event clusters require ' + f'{energy_advantage:.1f}% more energy capacity' if energy_advantage > 0 else '📊 Single events determine energy requirements'}
                         {'📈 Multi-event clusters require ' + f'{tou_excess_advantage:.1f}% more TOU excess capacity' if tou_excess_advantage > 0 else '📊 Single events determine TOU excess requirements'}
                         """)
                         
                         # Detailed cluster breakdown for multi-event clusters
                         if not multi_event_clusters.empty and 'peak_abs_kw_sum_in_cluster' in cluster_display.columns:
-                            st.markdown("**📋 Multi-Event Cluster Power Breakdown:**")
+                            st.markdown("**📋 Multi-Event Cluster Energy & Power Breakdown:**")
                             cluster_analysis = multi_event_clusters.copy()
                             if 'peak_abs_kw_sum_in_cluster' in clusters_df.columns:
                                 # Add the sum power column to display
