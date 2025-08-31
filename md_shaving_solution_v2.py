@@ -143,22 +143,24 @@ def _render_battery_selection_dropdown():
                     st.dataframe(df_specs, use_container_width=True, hide_index=True)
                 
                 with col2:
-                    st.markdown("**💰 Financial Analysis:**")
-                    # Estimated costs and calculations
-                    estimated_cost_per_kwh = 1400  # RM per kWh
-                    battery_cost = battery_spec.get('energy_kWh', 0) * estimated_cost_per_kwh
-                    
-                    financial_data = {
-                        'Metric': ['Unit Cost', 'Estimated Total Cost', 'Cost per kW', 'Cost per kWh'],
-                        'Value': [
-                            f"RM {estimated_cost_per_kwh}/kWh",
-                            f"RM {battery_cost:,.0f}",
-                            f"RM {battery_cost/battery_spec.get('power_kW', 1):,.0f}/kW",
-                            f"RM {estimated_cost_per_kwh}/kWh"
-                        ]
-                    }
-                    df_financial = pd.DataFrame(financial_data)
-                    st.dataframe(df_financial, use_container_width=True, hide_index=True)
+                        st.markdown("**💰 Financial Analysis:**")
+                        st.markdown("**Edit Unit Cost Only:**")
+                        unit_cost = st.number_input("Unit Cost (RM/kWh)", min_value=0, value=1400, step=10, key="fa_unit_cost")
+                        # Calculate estimated cost based on unit cost and number of batteries required
+                        num_batteries = battery_spec.get('quantity', 1) if 'quantity' in battery_spec else 1
+                        battery_cost = int(unit_cost * num_batteries)
+                        cost_per_kw = int(battery_cost / max(battery_spec.get('power_kW', 1), 1))
+                        cost_per_kwh = unit_cost
+                        financial_data = {
+                            'Metric': ['Unit Cost', 'Estimated Total Cost', 'Cost per kW'],
+                            'Value': [
+                                f"RM {unit_cost}/kWh",
+                                f"RM {battery_cost:,}",
+                                f"RM {cost_per_kw}/kW",
+                            ]
+                        }
+                        df_financial = pd.DataFrame(financial_data)
+                        st.dataframe(df_financial, use_container_width=True, hide_index=True)
                 
                 # Store selected battery in session state for use in other parts of the analysis
                 st.session_state.tabled_analysis_selected_battery = {
@@ -570,8 +572,8 @@ def render_md_shaving_v2():
                     overall_max_demand = df_processed[power_col].max()
                     
                     # Get default values from session state or use defaults
-                    default_shave_percent = st.session_state.get("v2_config_default_shave", 20)
-                    default_target_percent = st.session_state.get("v2_config_default_target", 80)
+                    default_shave_percent = st.session_state.get("v2_config_default_shave", 10)
+                    default_target_percent = st.session_state.get("v2_config_default_target", 90)
                     default_manual_kw = st.session_state.get("v2_config_default_manual", overall_max_demand * 0.8)
                     
                     st.markdown(f"**Current Data Max:** {overall_max_demand:.1f} kW")
