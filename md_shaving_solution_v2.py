@@ -35,6 +35,28 @@ from md_shaving_solution import (
 from tariffs.peak_logic import is_peak_rp4
 
 
+def _infer_interval_hours(datetime_index, fallback=0.25):
+    """
+    Infer sampling interval from datetime index using mode of timestamp differences.
+    
+    Args:
+        datetime_index: pandas DatetimeIndex
+        fallback: fallback interval in hours (default: 0.25 = 15 minutes)
+        
+    Returns:
+        float: Interval in hours
+    """
+    try:
+        if len(datetime_index) > 1:
+            diffs = datetime_index.to_series().diff().dropna()
+            if len(diffs) > 0 and not diffs.mode().empty:
+                interval_hours = diffs.mode()[0].total_seconds() / 3600
+                return interval_hours
+    except Exception:
+        pass
+    return fallback
+
+
 def _calculate_tariff_specific_monthly_peaks(df, power_col, selected_tariff, holidays):
     """
     Calculate monthly peak demands based on tariff type:
@@ -493,7 +515,7 @@ def load_vendor_battery_database():
         st.error(f"❌ Error loading battery database: {str(e)}")
         return None
 
-    return events_df.reset_index(drop=True)
+
 def get_battery_capacity_range(battery_db):
     """Get the capacity range from battery database."""
     if not battery_db:
@@ -1231,6 +1253,14 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
     
     st.markdown("### 📊 Peak Events Timeline")
     
+    # Detect and show sampling interval from uploaded data
+    try:
+        detected_interval_hours = _infer_interval_hours(df.index)
+        st.session_state['data_interval_hours'] = detected_interval_hours
+        st.caption(f"📊 Detected sampling interval: {int(round(detected_interval_hours * 60))} minutes")
+    except Exception:
+        pass
+    
     # Calculate tariff-specific monthly targets using new V2 functions
     if power_col in df.columns:
         # Use new tariff-specific target calculation
@@ -1456,7 +1486,14 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                 
                 if not month_data.empty:
                     # Find peak events for this month using V1's detection logic
-                    interval_hours = 0.25  # 15 minutes = 0.25 hours
+                    # Auto-detect sampling interval from this month's data
+                    interval_hours = _infer_interval_hours(month_data.index, fallback=0.25)
+                    
+                    # Save detected interval to session state for transparency
+                    try:
+                        st.session_state['data_interval_hours'] = interval_hours
+                    except Exception:
+                        pass
                     
                     # Get MD rate from selected tariff (simplified)
                     total_md_rate = 0
@@ -2334,7 +2371,14 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                         'depth_of_discharge': 80.0  # Max usable % of capacity
                     }
                     
-                    interval_hours = 0.25  # 15-minute intervals
+                    # Auto-detect global sampling interval (fallback to 15 minutes)
+                    interval_hours = _infer_interval_hours(df_for_v1.index, fallback=0.25)
+                    try:
+                        st.session_state['data_interval_hours'] = interval_hours
+                    except Exception:
+                        pass
+                    
+                    st.info(f"🔧 Using {interval_hours*60:.0f}-minute intervals for battery simulation")
                     
                     simulation_results = _simulate_battery_operation(
                         df_for_v1,                     # DataFrame with demand data
