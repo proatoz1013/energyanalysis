@@ -35,6 +35,107 @@ from md_shaving_solution import (
 from tariffs.peak_logic import is_peak_rp4
 
 
+def _calculate_tariff_specific_monthly_peaks(df, power_col, selected_tariff, holidays):
+    """
+    Calculate monthly peak demands based on tariff type:
+    - General Tariff: Uses 24/7 peak demand (highest demand anytime)
+    - TOU Tariff: Uses peak period demand only (2PM-10PM weekdays)
+    
+    Args:
+        df: DataFrame with power data
+        power_col: Column name containing power values
+        selected_tariff: Selected tariff configuration
+        holidays: Set of holiday dates
+    
+    Returns:
+        tuple: (monthly_general_peaks, monthly_tou_peaks, tariff_type)
+    """
+    # Determine tariff type
+    tariff_type = 'General'  # Default
+    if selected_tariff:
+        tariff_name = selected_tariff.get('Tariff', '').lower()
+        tariff_type_field = selected_tariff.get('Type', '').lower()
+        
+        # Check if it's a TOU tariff
+        if 'tou' in tariff_name or 'tou' in tariff_type_field or tariff_type_field == 'tou':
+            tariff_type = 'TOU'
+    
+    # Calculate monthly peaks
+    df_monthly = df.copy()
+    df_monthly['Month'] = df_monthly.index.to_period('M')
+    
+    # General peaks (24/7 maximum demand)
+    monthly_general_peaks = df_monthly.groupby('Month')[power_col].max()
+    
+    # TOU peaks (peak period maximum demand only - 2PM-10PM weekdays)
+    monthly_tou_peaks = {}
+    
+    for month_period in monthly_general_peaks.index:
+        month_start = month_period.start_time
+        month_end = month_period.end_time
+        month_mask = (df.index >= month_start) & (df.index <= month_end)
+        month_data = df[month_mask]
+        
+        if not month_data.empty:
+            # Filter for TOU peak periods only (2PM-10PM weekdays)
+            tou_peak_data = []
+            
+            for timestamp in month_data.index:
+                if is_peak_rp4(timestamp, holidays if holidays else set()):
+                    tou_peak_data.append(month_data.loc[timestamp, power_col])
+            
+            if tou_peak_data:
+                monthly_tou_peaks[month_period] = max(tou_peak_data)
+            else:
+                # If no peak period data, use general peak as fallback
+                monthly_tou_peaks[month_period] = monthly_general_peaks[month_period]
+        else:
+            monthly_tou_peaks[month_period] = 0
+    
+    monthly_tou_peaks = pd.Series(monthly_tou_peaks)
+    
+    return monthly_general_peaks, monthly_tou_peaks, tariff_type
+
+
+def _calculate_monthly_targets_v2(df, power_col, selected_tariff, holidays, target_method, shave_percent, target_percent, target_manual_kw):
+    """
+    Calculate monthly targets based on tariff-specific peak demands.
+    
+    Returns:
+        tuple: (monthly_targets, reference_peaks, tariff_type, target_description)
+    """
+    # Get tariff-specific monthly peaks
+    monthly_general_peaks, monthly_tou_peaks, tariff_type = _calculate_tariff_specific_monthly_peaks(
+        df, power_col, selected_tariff, holidays
+    )
+    
+    # Select appropriate reference peaks based on tariff type
+    if tariff_type == 'TOU':
+        reference_peaks = monthly_tou_peaks
+        peak_description = "TOU Peak Period (2PM-10PM weekdays)"
+    else:
+        reference_peaks = monthly_general_peaks
+        peak_description = "General (24/7)"
+    
+    # Calculate targets based on reference peaks
+    if target_method == "Manual Target (kW)":
+        # For manual target, use the same value for all months
+        monthly_targets = pd.Series(index=reference_peaks.index, data=target_manual_kw)
+        target_description = f"{target_manual_kw:.0f} kW manual target ({peak_description})"
+    elif target_method == "Percentage to Shave":
+        # Calculate target as percentage reduction from each month's reference peak
+        target_multiplier = 1 - (shave_percent / 100)
+        monthly_targets = reference_peaks * target_multiplier
+        target_description = f"{shave_percent}% shaving from {peak_description}"
+    else:  # Percentage of Current Max
+        # Calculate target as percentage of each month's reference peak
+        target_multiplier = target_percent / 100
+        monthly_targets = reference_peaks * target_multiplier
+        target_description = f"{target_percent}% of {peak_description}"
+    
+    return monthly_targets, reference_peaks, tariff_type, target_description
+
+
 def cluster_peak_events(events_df, battery_params, md_hours, working_days, tou_charge_windows=None, grid_charge_limit=None):
     """
     Group peak events into operational clusters for dispatch simulation.
@@ -1036,199 +1137,93 @@ def _render_battery_impact_timeline(df, power_col, selected_tariff, holidays, ta
     
     st.markdown("### 📊 Battery Impact on Energy Consumption")
     
-    # Calculate monthly-based target demands using dynamic user settings (same as original)
+    # This function is under development
+    st.info(f"""
+    **🔧 Battery Impact Analysis (Under Development)**
+    
+    This section will show how a {selected_battery_capacity} kWh battery system would impact your energy consumption patterns.
+    
+    **Planned Features:**
+    - Battery charge/discharge timeline overlay
+    - Peak shaving effectiveness visualization  
+    - Cost impact analysis with battery intervention
+    - Energy storage utilization patterns
+    
+    **Current Status:** Function implementation in progress
+    """)
+    
+    # Placeholder chart showing original consumption
+    st.markdown("#### 📈 Original Energy Consumption Pattern")
+    
     if power_col in df.columns:
-        # Calculate monthly maximum demands
-        df_monthly = df.copy()
-        df_monthly['Month'] = df_monthly.index.to_period('M')
-        monthly_max_demands = df_monthly.groupby('Month')[power_col].max()
+        fig = go.Figure()
         
-        # Calculate monthly targets using CORRECTED dynamic user settings
-        if target_method == "Manual Target (kW)":
-            # For manual target, use the same value for all months
-            monthly_targets = pd.Series(index=monthly_max_demands.index, data=target_manual_kw)
-            legend_label = f"Monthly Target ({target_manual_kw:.0f} kW)"
-        elif target_method == "Percentage to Shave":
-            # Calculate target as percentage reduction from each month's max
-            target_multiplier = 1 - (shave_percent / 100)
-            monthly_targets = monthly_max_demands * target_multiplier
-            legend_label = f"Monthly Target ({shave_percent}% shaving)"
-        else:  # Percentage of Current Max
-            # Calculate target as percentage of each month's max
-            target_multiplier = target_percent / 100
-            monthly_targets = monthly_max_demands * target_multiplier
-            legend_label = f"Monthly Target ({target_percent}% of max)"
+        # Add original consumption line
+        fig.add_trace(go.Scatter(
+            x=df.index,
+            y=df[power_col],
+            mode='lines',
+            name='Original Consumption',
+            line=dict(color='blue', width=1),
+            opacity=0.7
+        ))
         
-        # Create stepped target line for visualization
-        target_line_data = []
-        target_line_timestamps = []
-        
-        # Create a stepped line that changes at month boundaries
-        for month_period, target_value in monthly_targets.items():
-            # Get start and end of month
-            month_start = month_period.start_time
-            month_end = month_period.end_time
-            
-            # Filter data for this month
-            month_mask = (df.index >= month_start) & (df.index <= month_end)
-            month_data = df[month_mask]
-            
-            if not month_data.empty:
-                # Add target value for each timestamp in this month
-                for timestamp in month_data.index:
-                    target_line_timestamps.append(timestamp)
-                    target_line_data.append(target_value)
-        
-        # Create the battery impact timeline chart with stepped target line
-        if target_line_data and target_line_timestamps:
-            fig = go.Figure()
-            
-            # Add stepped monthly target line first
-            fig.add_trace(go.Scatter(
-                x=target_line_timestamps,
-                y=target_line_data,
-                mode='lines',
-                name=legend_label,
-                line=dict(color='red', width=2, dash='dash'),
-                opacity=0.9
-            ))
-            
-            # Identify and color-code all data points based on monthly targets and TOU periods (same as original)
-            all_monthly_events = []
-            
-            # Create continuous colored line segments
-            # Process data chronologically to create continuous segments
-            all_timestamps = sorted(df.index)
-            
-            # Create segments for continuous colored lines
-            segments = []
-            current_segment = {'type': None, 'x': [], 'y': []}
-            
-            for timestamp in all_timestamps:
-                power_value = df.loc[timestamp, power_col]
-                
-                # Get the monthly target for this timestamp
-                month_period = timestamp.to_period('M')
-                if month_period in monthly_targets:
-                    target_value = monthly_targets[month_period]
-                    
-                    # Determine the color category for this point
-                    if power_value <= target_value:
-                        segment_type = 'below_target'
-                    else:
-                        is_peak = is_peak_rp4(timestamp, holidays if holidays else set())
-                        if is_peak:
-                            segment_type = 'above_target_peak'
-                        else:
-                            segment_type = 'above_target_offpeak'
-                    
-                    # If this is the start or the segment type changed, finalize previous and start new
-                    if current_segment['type'] != segment_type:
-                        # Finalize the previous segment if it has data
-                        if current_segment['type'] is not None and len(current_segment['x']) > 0:
-                            segments.append(current_segment.copy())
-                        
-                        # Start new segment
-                        current_segment = {
-                            'type': segment_type, 
-                            'x': [timestamp], 
-                            'y': [power_value]
-                        }
-                    else:
-                        # Continue current segment
-                        current_segment['x'].append(timestamp)
-                        current_segment['y'].append(power_value)
-            
-            # Don't forget the last segment
-            if current_segment['type'] is not None and len(current_segment['x']) > 0:
-                segments.append(current_segment)
-            
-            # Plot the colored segments with proper continuity (same as original)
-            color_map = {
-                'below_target': {'color': 'blue', 'name': 'Below Monthly Target'},
-                'above_target_offpeak': {'color': 'green', 'name': 'Above Monthly Target - Off-Peak Period'},
-                'above_target_peak': {'color': 'red', 'name': 'Above Monthly Target - Peak Period'}
-            }
-            
-            # Track legend status
-            legend_added = {'below_target': False, 'above_target_offpeak': False, 'above_target_peak': False}
-            
-            # Create continuous line segments by color groups with bridge points (V1 approach)
-            i = 0
-            while i < len(segments):
-                current_segment = segments[i]
-                current_type = current_segment['type']
-                
-                # Extract segment data
-                segment_x = list(current_segment['x'])
-                segment_y = list(current_segment['y'])
-                
-                # Add bridge points for better continuity (connect to adjacent segments)
-                if i > 0:  # Add connection point from previous segment
-                    prev_segment = segments[i-1]
-                    if len(prev_segment['x']) > 0:
-                        segment_x.insert(0, prev_segment['x'][-1])
-                        segment_y.insert(0, prev_segment['y'][-1])
-                
-                if i < len(segments) - 1:  # Add connection point to next segment
-                    next_segment = segments[i+1]
-                    if len(next_segment['x']) > 0:
-                        segment_x.append(next_segment['x'][0])
-                        segment_y.append(next_segment['y'][0])
-                
-                # Get color info
-                color_info = color_map[current_type]
-                
-                # Only show legend for the first occurrence of each type
-                show_legend = not legend_added[current_type]
-                legend_added[current_type] = True
-                
-                # Add line segment
-                fig.add_trace(go.Scatter(
-                    x=segment_x,
-                    y=segment_y,
-                    mode='lines',
-                    line=dict(color=color_info['color'], width=1),
-                    name=color_info['name'],
-                    opacity=0.8,
-                    showlegend=show_legend,
-                    legendgroup=current_type,
-                    connectgaps=True  # Connect gaps within segments
-                ))
-                
-                i += 1
-            
-            # Update layout
-            fig.update_layout(
-                title=f"Battery Impact Visualization - {selected_battery_capacity} kWh Capacity",
-                xaxis_title="Time",
-                yaxis_title="Power (kW)",
-                height=600,
-                showlegend=True,
-                hovermode='x unified',
-                legend=dict(
-                    orientation="v",
-                    yanchor="top",
-                    y=1,
-                    xanchor="left",
-                    x=1.02
-                )
+        # Add target line if we can calculate it
+        try:
+            monthly_targets, _, _, _ = _calculate_monthly_targets_v2(
+                df, power_col, selected_tariff, holidays, 
+                target_method, shave_percent, target_percent, target_manual_kw
             )
             
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Add information about what this visualization shows
-            st.info(f"""
-            **📊 Graph Information:**
-            - This graph shows your original energy consumption pattern
-            - Battery capacity selected: **{selected_battery_capacity} kWh**
-            - The colored segments indicate where battery intervention would be beneficial
-            - 🔴 Red areas: Peak period events where battery discharge would reduce MD costs
-            - 🟢 Green areas: Off-peak period events where battery can charge at lower rates
-            - 🔵 Blue areas: Consumption already below target levels
-            
-            💡 **Next steps:** Further analysis will show specific shaving amounts and cost impacts.
-            """)
+            if not monthly_targets.empty:
+                # Create stepped target line
+                target_line_data = []
+                target_line_timestamps = []
+                
+                for month_period, target_value in monthly_targets.items():
+                    month_start = month_period.start_time
+                    month_end = month_period.end_time
+                    month_mask = (df.index >= month_start) & (df.index <= month_end)
+                    month_data = df[month_mask]
+                    
+                    if not month_data.empty:
+                        for timestamp in month_data.index:
+                            target_line_timestamps.append(timestamp)
+                            target_line_data.append(target_value)
+                
+                if target_line_data and target_line_timestamps:
+                    fig.add_trace(go.Scatter(
+                        x=target_line_timestamps,
+                        y=target_line_data,
+                        mode='lines',
+                        name=f'Target MD ({target_description})',
+                        line=dict(color='red', width=2, dash='dash'),
+                        opacity=0.9
+                    ))
+        except Exception as e:
+            st.warning(f"Could not calculate target line: {str(e)}")
+        
+        # Update layout
+        fig.update_layout(
+            title=f"Energy Consumption with {selected_battery_capacity} kWh Battery Impact (Preview)",
+            xaxis_title="Time",
+            yaxis_title="Power (kW)",
+            height=500,
+            showlegend=True,
+            hovermode='x unified'
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+        st.info(f"""
+        **📊 Preview Information:**
+        - This shows your current energy consumption pattern
+        - Red dashed line indicates monthly targets based on {target_description}
+        - Battery capacity selected: **{selected_battery_capacity} kWh**
+        - Full battery impact analysis coming in future updates
+        """)
+    else:
+        st.error("Power column not found in data")
 
 
 def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, target_method, shave_percent, target_percent, target_manual_kw, target_description):
@@ -1236,28 +1231,82 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
     
     st.markdown("### 📊 Peak Events Timeline")
     
-    # Calculate monthly-based target demands using dynamic user settings
+    # Calculate tariff-specific monthly targets using new V2 functions
     if power_col in df.columns:
-        # Calculate monthly maximum demands
-        df_monthly = df.copy()
-        df_monthly['Month'] = df_monthly.index.to_period('M')
-        monthly_max_demands = df_monthly.groupby('Month')[power_col].max()
+        # Use new tariff-specific target calculation
+        monthly_targets, reference_peaks, tariff_type, enhanced_target_description = _calculate_monthly_targets_v2(
+            df, power_col, selected_tariff, holidays, 
+            target_method, shave_percent, target_percent, target_manual_kw
+        )
         
-        # Calculate monthly targets using CORRECTED dynamic user settings
-        if target_method == "Manual Target (kW)":
-            # For manual target, use the same value for all months
-            monthly_targets = pd.Series(index=monthly_max_demands.index, data=target_manual_kw)
-            legend_label = f"Monthly Target ({target_manual_kw:.0f} kW)"
-        elif target_method == "Percentage to Shave":
-            # Calculate target as percentage reduction from each month's max
-            target_multiplier = 1 - (shave_percent / 100)
-            monthly_targets = monthly_max_demands * target_multiplier
-            legend_label = f"Monthly Target ({shave_percent}% shaving)"
-        else:  # Percentage of Current Max
-            # Calculate target as percentage of each month's max
-            target_multiplier = target_percent / 100
-            monthly_targets = monthly_max_demands * target_multiplier
-            legend_label = f"Monthly Target ({target_percent}% of max)"
+        # Also get both General and TOU peaks for comparison display
+        monthly_general_peaks, monthly_tou_peaks, _ = _calculate_tariff_specific_monthly_peaks(
+            df, power_col, selected_tariff, holidays
+        )
+        
+        # Set legend label based on tariff type
+        legend_label = f"Monthly Target - {tariff_type} ({enhanced_target_description})"
+        
+        # Display tariff-specific information
+        st.info(f"""
+        **🎯 Tariff-Specific Target Calculation:**
+        - **Tariff Type**: {tariff_type}
+        - **Reference Peak**: {enhanced_target_description}
+        - **Target Method**: {target_method}
+        - **Months Processed**: {len(monthly_targets)}
+        """)
+        
+        # Show monthly comparison table
+        if not reference_peaks.empty and not monthly_targets.empty:
+            comparison_data = []
+            
+            for month_period in reference_peaks.index:
+                general_peak = monthly_general_peaks[month_period] if month_period in monthly_general_peaks.index else 0
+                tou_peak = monthly_tou_peaks[month_period] if month_period in monthly_tou_peaks.index else 0
+                reference_peak = reference_peaks[month_period]
+                target = monthly_targets[month_period]
+                shaving_amount = reference_peak - target
+                
+                comparison_data.append({
+                    'Month': str(month_period),
+                    'General Peak (24/7)': f"{general_peak:.1f} kW",
+                    'TOU Peak (2PM-10PM)': f"{tou_peak:.1f} kW",
+                    'Reference Peak': f"{reference_peak:.1f} kW",
+                    'Target MD': f"{target:.1f} kW",
+                    'Shaving Amount': f"{shaving_amount:.1f} kW",
+                    'Tariff Type': tariff_type
+                })
+            
+            df_comparison = pd.DataFrame(comparison_data)
+            
+            st.markdown("#### 📋 Monthly Target Calculation Summary")
+            
+            # Highlight the reference column based on tariff type
+            def highlight_reference_peak(row):
+                colors = []
+                for col in row.index:
+                    if col == 'Reference Peak':
+                        colors.append('background-color: rgba(0, 255, 0, 0.3)')  # Green highlight
+                    elif col == 'TOU Peak (2PM-10PM)' and tariff_type == 'TOU':
+                        colors.append('background-color: rgba(255, 255, 0, 0.2)')  # Yellow highlight
+                    elif col == 'General Peak (24/7)' and tariff_type == 'General':
+                        colors.append('background-color: rgba(255, 255, 0, 0.2)')  # Yellow highlight
+                    else:
+                        colors.append('')
+                return colors
+            
+            styled_comparison = df_comparison.style.apply(highlight_reference_peak, axis=1)
+            st.dataframe(styled_comparison, use_container_width=True, hide_index=True)
+            
+            st.info(f"""
+            **📊 Target Calculation Explanation:**
+            - **General Peak**: Highest demand anytime (24/7) 
+            - **TOU Peak**: Highest demand during peak period (2PM-10PM weekdays only)
+            - **Reference Peak**: Used for target calculation based on {tariff_type} tariff
+            - **Target MD**: {enhanced_target_description}
+            - 🟢 **Green**: Reference peak used for calculations
+            - 🟡 **Yellow**: Peak type matching selected tariff
+            """)
         
         # Create stepped target line for visualization
         target_line_data = []
@@ -1419,12 +1468,14 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                         month_data, power_col, target_value, total_md_rate, interval_hours, selected_tariff
                     )
                     
-                    # Add month info to each event
+                    # Add month info to each event including both reference peaks
                     for event in peak_events:
                         event['Month'] = str(month_period)
                         event['Monthly_Target'] = target_value
-                        event['Monthly_Max'] = monthly_max_demands[month_period]
-                        event['Shaving_Amount'] = monthly_max_demands[month_period] - target_value
+                        event['Monthly_General_Peak'] = monthly_general_peaks[month_period] if month_period in monthly_general_peaks.index else 0
+                        event['Monthly_TOU_Peak'] = monthly_tou_peaks[month_period] if month_period in monthly_tou_peaks.index else 0
+                        event['Reference_Peak'] = reference_peaks[month_period]
+                        event['Shaving_Amount'] = reference_peaks[month_period] - target_value
                         all_monthly_events.append(event)
             
             # Update layout
@@ -1895,11 +1946,11 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                 st.warning("⚠️ Using fallback calculation for battery capacity - clustering analysis data not available")
                 
                 if monthly_targets is not None and len(monthly_targets) > 0:
-                    # Calculate max shaving power directly from monthly targets and max demands
+                    # Calculate max shaving power directly from monthly targets and reference peaks
                     shaving_amounts = []
                     for month_period, target_demand in monthly_targets.items():
-                        if month_period in monthly_max_demands:
-                            max_demand = monthly_max_demands[month_period]
+                        if month_period in reference_peaks:
+                            max_demand = reference_peaks[month_period]
                             shaving_amount = max_demand - target_demand
                             if shaving_amount > 0:
                                 shaving_amounts.append(shaving_amount)
@@ -2147,8 +2198,8 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                 if monthly_targets is not None and len(monthly_targets) > 0:
                     shaving_amounts = []
                     for month_period, target_demand in monthly_targets.items():
-                        if month_period in monthly_max_demands:
-                            max_demand = monthly_max_demands[month_period]
+                        if month_period in reference_peaks:
+                            max_demand = reference_peaks[month_period]
                             shaving_amount = max_demand - target_demand
                             if shaving_amount > 0:
                                 shaving_amounts.append(shaving_amount)
