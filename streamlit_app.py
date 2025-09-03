@@ -8,6 +8,7 @@ from tnb_tariff_comparison import show as show_tnb_tariff_comparison
 from advanced_energy_analysis import show as show_advanced_energy_analysis
 from md_shaving_solution import show as show_md_shaving_solution
 from md_shaving_solution_v2 import render_md_shaving_v2, render_battery_impact_visualization
+from md_shaving_solution_v3 import render_md_shaving_v3
 from md_pattern_analysis import show_md_pattern_analysis
 import sys
 import os
@@ -135,7 +136,7 @@ This tool provides comprehensive analysis of:
 - Demand shaving analysis
 """)
 
-tabs = st.tabs(["TNB New Tariff Comparison", "Load Profile Analysis", "Advanced Energy Analysis", "Monthly Rate Impact Analysis", "MD Shaving Solution", "🔋 MD Shaving (v2)", "📊 MD Patterns", "🔋 Advanced MD Shaving", "❄️ Chiller Energy Dashboard"])
+tabs = st.tabs(["TNB New Tariff Comparison", "Load Profile Analysis", "Advanced Energy Analysis", "Monthly Rate Impact Analysis", "MD Shaving Solution", "🔋 MD Shaving (v2)", "� MD Shaving (v3)", "�📊 MD Patterns", "🔋 Advanced MD Shaving", "❄️ Chiller Energy Dashboard"])
 
 with tabs[1]:
     st.title("Energy Analysis Dashboard")
@@ -2555,10 +2556,14 @@ with tabs[5]:
     # render_battery_impact_visualization()
 
 with tabs[6]:
-    # 📊 MD Patterns Tab
+    # � MD Shaving (v3) Tab - Next-Generation AI-Powered Analysis
+    render_md_shaving_v3()
+
+with tabs[8]:
+    # �📊 MD Patterns Tab
     show_md_pattern_analysis()
 
-with tabs[7]:
+with tabs[9]:
     # 🔋 Advanced MD Shaving Tab
     st.title("🔋 Advanced MD Shaving")
     st.markdown("""
@@ -4339,7 +4344,7 @@ with tabs[7]:
             st.dataframe(example_df, use_container_width=True)
             st.caption("Sample format showing expected columns and data types")
 
-with tabs[8]:
+with tabs[9]:
     # ❄️ Chiller Energy Dashboard Tab
     st.title("❄️ Chiller Plant Energy Dashboard")
     st.markdown("""
