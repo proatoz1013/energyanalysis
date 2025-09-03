@@ -555,8 +555,9 @@ def _display_v3_peak_events_chart(df_processed, power_col, target_kw, selected_t
 def _create_v3_conditional_demand_line(fig, df, power_col, target_kw, selected_tariff, holidays, trace_name):
     """
     V3 Enhanced conditional coloring logic with tariff-aware classification.
+    Follows exact V1/V2 logic: red = above target + peak, green = above target + off-peak, blue = below target.
     """
-    # Create color classification
+    # Create color classification following V1/V2 exact logic
     color_segments = []
     current_segment = {'type': None, 'x': [], 'y': []}
     
@@ -569,24 +570,24 @@ def _create_v3_conditional_demand_line(fig, df, power_col, target_kw, selected_t
         else:
             period_type = 'Peak'  # Default fallback
         
-        # Determine segment type based on power level and tariff period
-        if power_value <= target_kw:
-            segment_type = 'below_target'
-        else:
+        # Follow exact V1/V2 color logic
+        if power_value > target_kw:
             if period_type == 'Peak':
-                segment_type = 'above_target_peak'
+                color_class = 'red'
             else:
-                segment_type = 'above_target_offpeak'
+                color_class = 'green'
+        else:
+            color_class = 'blue'
         
         # Handle segment transitions
-        if current_segment['type'] != segment_type:
+        if current_segment['type'] != color_class:
             # Finalize previous segment
             if current_segment['type'] is not None and len(current_segment['x']) > 0:
                 color_segments.append(current_segment.copy())
             
             # Start new segment
             current_segment = {
-                'type': segment_type,
+                'type': color_class,
                 'x': [timestamp],
                 'y': [power_value]
             }
@@ -599,35 +600,23 @@ def _create_v3_conditional_demand_line(fig, df, power_col, target_kw, selected_t
     if current_segment['type'] is not None and len(current_segment['x']) > 0:
         color_segments.append(current_segment)
     
-    # Define color mapping with V3 enhanced descriptions
-    color_map = {
-        'below_target': {
-            'color': 'blue', 
-            'name': 'Below Monthly Target',
-            'opacity': 0.8
-        },
-        'above_target_offpeak': {
-            'color': 'green', 
-            'name': 'Above Monthly Target - Off-Peak Period',
-            'opacity': 0.8
-        },
-        'above_target_peak': {
-            'color': 'red', 
-            'name': 'Above Monthly Target - Peak Period',
-            'opacity': 0.9
-        }
+    # Define legend names following V1/V2 style
+    legend_names = {
+        'red': f'{trace_name} (Above Target - Peak Period)',
+        'green': f'{trace_name} (Above Target - Off-Peak Period)', 
+        'blue': f'{trace_name} (Below Target)'
     }
     
     # Track legend status
-    legend_added = {'below_target': False, 'above_target_offpeak': False, 'above_target_peak': False}
+    legend_added = {'red': False, 'green': False, 'blue': False}
     
-    # Add colored line segments with continuity
+    # Add colored line segments with continuity (V1/V2 style)
     for i, segment in enumerate(color_segments):
-        segment_type = segment['type']
+        color_class = segment['type']
         segment_x = list(segment['x'])
         segment_y = list(segment['y'])
         
-        # Add bridge points for continuity
+        # Add bridge points for continuity (V1/V2 approach)
         if i > 0:  # Connect to previous segment
             prev_segment = color_segments[i-1]
             if len(prev_segment['x']) > 0:
@@ -640,23 +629,19 @@ def _create_v3_conditional_demand_line(fig, df, power_col, target_kw, selected_t
                 segment_x.append(next_segment['x'][0])
                 segment_y.append(next_segment['y'][0])
         
-        # Get color configuration
-        color_config = color_map[segment_type]
+        # Only show legend for first occurrence (V1/V2 approach)
+        show_legend = not legend_added[color_class]
+        legend_added[color_class] = True
         
-        # Only show legend for first occurrence
-        show_legend = not legend_added[segment_type]
-        legend_added[segment_type] = True
-        
-        # Add line segment
+        # Add line segment with exact V1/V2 styling
         fig.add_trace(go.Scatter(
             x=segment_x,
             y=segment_y,
             mode='lines',
-            line=dict(color=color_config['color'], width=1),
-            name=color_config['name'],
-            opacity=color_config['opacity'],
+            line=dict(color=color_class, width=2),  # Use color name directly like V1/V2
+            name=legend_names[color_class],
             showlegend=show_legend,
-            legendgroup=segment_type,
+            legendgroup=color_class,
             connectgaps=True
         ))
     
