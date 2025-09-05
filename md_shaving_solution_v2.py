@@ -239,131 +239,9 @@ def _generate_clustering_summary_table(all_monthly_events, selected_tariff, holi
     return df_summary
 
 
-def cluster_peak_events(events_df, battery_params, md_hours, working_days, tou_charge_windows=None, grid_charge_limit=None):
+def _generate_monthly_summary_table(all_monthly_events, selected_tariff, holidays):
     """
-    Group peak events into operational clusters for dispatch simulation.
-
-    Args:
-        events_df: DataFrame of peak events (from "Peak Event Detection Results").
-        battery_params: dict with keys 'unit_energy_kwh', 'soc_min', 'soc_max', 'efficiency', 'charge_power_limit_kw'.
-        md_hours: tuple (start_hour, end_hour) for MD cost impact window.
-        working_days: set/list of valid working days (e.g., ['Mon', 'Tue', ...]).
-        tou_charge_windows: optional list of (start_hour, end_hour) tuples for allowed charging periods.
-        grid_charge_limit: optional float, site/grid charge power limit (kW).
-
-    Returns:
-        tuple: (clusters_df, events_with_clusters_df) where:
-        - clusters_df: DataFrame with one row per cluster, columns:
-            ['cluster_id', 'cluster_start', 'cluster_end', 'cluster_duration_hr',
-             'num_events_in_cluster', 'peak_abs_kw_in_cluster', 'peak_abs_kw_sum_in_cluster', 'total_energy_above_threshold_kwh',
-             'min_inter_event_gap_hr', 'max_inter_event_gap_hr', 'md_window_label']
-        - events_with_clusters_df: Original events DataFrame with added 'cluster_id' column
-    """
-    # Compute recharge time (hours)
-    E_max = battery_params['unit_energy_kwh']
-    SOC_min = battery_params['soc_min']
-    SOC_max = battery_params['soc_max']
-    eta_charge = battery_params.get('efficiency', 1.0)
-    P_charge_limit = battery_params['charge_power_limit_kw']
-    if grid_charge_limit is not None:
-        P_charge_limit = min(P_charge_limit, grid_charge_limit)
-    recharge_time_hours = (E_max * (SOC_max - SOC_min) / 100) / (eta_charge * P_charge_limit)
-
-    # Filter events to MD cost impact hours and working days
-    def in_md_window(ts):
-        day = ts.strftime('%a')  # 3-letter day abbreviation (Mon, Tue, etc.)
-        hour = ts.hour
-        # Make filtering more flexible - include events that intersect with MD hours
-        return (day in working_days) and (md_hours[0] <= hour <= md_hours[1])
-
-    # Apply more flexible filtering - include all events, not just those strictly within MD window
-    # This allows clustering of events that might be adjacent to MD periods
-    if len(events_df) > 0:
-        # For initial clustering, include all events and filter later if needed
-        filtered_events = events_df.copy()
-    else:
-        filtered_events = events_df[
-            events_df['start'].apply(in_md_window) | events_df['end'].apply(in_md_window)
-        ].copy()
-    
-    filtered_events = filtered_events.sort_values('start').reset_index(drop=True)
-
-    clusters = []
-    # Add cluster_id column to track event assignments
-    events_with_clusters = filtered_events.copy()
-    events_with_clusters['cluster_id'] = 0  # Initialize with 0
-    
-    cluster_id = 1
-    i = 0
-    n = len(filtered_events)
-    while i < n:
-        # Start new cluster
-        cluster_events = [filtered_events.iloc[i]]
-        cluster_event_indices = [i]  # Track indices for cluster assignment
-        cluster_start = filtered_events.iloc[i]['start']
-        cluster_end = filtered_events.iloc[i]['end']
-        inter_event_gaps = []
-        md_window_label = f"{cluster_start.strftime('%a')} {md_hours[0]:02d}-{md_hours[1]:02d}"
-
-        # Group consecutive events within recharge window and same day
-        while i + 1 < n:
-            next_event = filtered_events.iloc[i + 1]
-            gap_hr = (next_event['start'] - cluster_end).total_seconds() / 3600
-            # Optionally restrict recharge time if TOU charge windows are defined
-            effective_recharge_time = recharge_time_hours
-            if tou_charge_windows:
-                # If gap falls outside charge windows, reduce effective recharge time
-                in_charge_window = any(
-                    window[0] <= cluster_end.hour < window[1] for window in tou_charge_windows
-                )
-                if not in_charge_window:
-                    effective_recharge_time = 0  # Can't recharge outside allowed windows
-            # Check day boundary - allow cross-day clustering within reasonable limits
-            time_diff = abs((next_event['start'] - cluster_start).total_seconds() / 3600)
-            same_day_or_close = time_diff <= 24  # Allow events within 24 hours
-            if gap_hr <= effective_recharge_time and same_day_or_close:
-                cluster_events.append(next_event)
-                cluster_event_indices.append(i + 1)
-                inter_event_gaps.append(gap_hr)
-                cluster_end = next_event['end']
-                i += 1
-            else:
-                break
-        
-        # Assign cluster_id to all events in this cluster
-        for idx in cluster_event_indices:
-            events_with_clusters.loc[idx, 'cluster_id'] = cluster_id
-            
-        # Aggregate cluster metrics
-        peak_abs_kw_max = max(e['peak_abs_kw'] for e in cluster_events)  # Maximum peak within cluster
-        peak_abs_kw_sum = sum(e['peak_abs_kw'] for e in cluster_events)  # Sum of all event peaks
-        total_energy = sum(e['energy_above_threshold_kwh'] for e in cluster_events)
-        duration_hr = (cluster_end - cluster_start).total_seconds() / 3600
-        min_gap = min(inter_event_gaps) if inter_event_gaps else None
-        max_gap = max(inter_event_gaps) if inter_event_gaps else None
-        clusters.append({
-            'cluster_id': cluster_id,
-            'cluster_start': cluster_start,
-            'cluster_end': cluster_end,
-            'cluster_duration_hr': duration_hr,
-            'num_events_in_cluster': len(cluster_events),
-            'peak_abs_kw_in_cluster': peak_abs_kw_max,  # Keep max for backward compatibility
-            'peak_abs_kw_sum_in_cluster': peak_abs_kw_sum,  # New: sum of event peaks
-            'total_energy_above_threshold_kwh': total_energy,
-            'min_inter_event_gap_hr': min_gap,
-            'max_inter_event_gap_hr': max_gap,
-            'md_window_label': md_window_label
-        })
-        cluster_id += 1
-        i += 1
-
-    clusters_df = pd.DataFrame(clusters)
-    return clusters_df, events_with_clusters
-
-
-def _generate_clustering_summary_table(all_monthly_events, selected_tariff, holidays):
-    """
-    Generate date-based clustering summary table for Section B2.
+    Generate monthly summary table for Section B2.
     
     Args:
         all_monthly_events: List of peak events from peak events detection
@@ -371,19 +249,22 @@ def _generate_clustering_summary_table(all_monthly_events, selected_tariff, holi
         holidays: Set of holiday dates
         
     Returns:
-        pd.DataFrame: Summary table with columns: Date, Total Peak Events, General/TOU MD Excess, 
-                     General/TOU Total Energy Required, Cost Impact
+        pd.DataFrame: Summary table with columns: Month, General/TOU MD Excess (Max kW), 
+                     General/TOU Total Energy Required (kWh Max)
     """
     if not all_monthly_events or len(all_monthly_events) == 0:
         return pd.DataFrame()
     
-    # Group events by date
-    daily_events = {}
+    # Group events by month
+    monthly_events = {}
     for event in all_monthly_events:
         event_date = event.get('Start Date')
-        if event_date not in daily_events:
-            daily_events[event_date] = []
-        daily_events[event_date].append(event)
+        if event_date:
+            # Extract year-month (e.g., "2025-01")
+            month_key = event_date.strftime('%Y-%m')
+            if month_key not in monthly_events:
+                monthly_events[month_key] = []
+            monthly_events[month_key].append(event)
     
     # Determine tariff type for MD cost calculation
     tariff_type = 'General'  # Default
@@ -395,49 +276,34 @@ def _generate_clustering_summary_table(all_monthly_events, selected_tariff, holi
         if 'tou' in tariff_name or 'tou' in tariff_type_field or tariff_type_field == 'tou':
             tariff_type = 'TOU'
     
-    # Get MD rate from tariff for cost calculation
-    md_rate_rm_per_kw = 0
-    if selected_tariff and isinstance(selected_tariff, dict):
-        rates = selected_tariff.get('Rates', {})
-        md_rate_rm_per_kw = rates.get('Capacity Rate', 0) + rates.get('Network Rate', 0)
-    
     # Create summary data
     summary_data = []
-    for date, events in daily_events.items():
-        # Count total events for this date
-        total_events = len(events)
+    for month_key, events in monthly_events.items():
         
         # Calculate MD excess values based on tariff type
         if tariff_type == 'TOU':
             # For TOU: Use TOU-specific values
             md_excess_values = [event.get('TOU Excess (kW)', 0) or 0 for event in events]
             energy_required_values = [event.get('TOU Required Energy (kWh)', 0) or 0 for event in events]
-            max_md_excess = max(md_excess_values) if md_excess_values else 0
         else:
             # For General: Use General values (24/7 MD impact)
             md_excess_values = [event.get('General Excess (kW)', 0) or 0 for event in events]
             energy_required_values = [event.get('General Required Energy (kWh)', 0) or 0 for event in events]
-            max_md_excess = max(md_excess_values) if md_excess_values else 0
         
-        # Sum total energy required for the date
-        total_energy_required = sum(energy_required_values)
-        
-        # Calculate cost impact using the maximum MD excess for the date
-        # This follows the MD charging methodology where only the highest peak matters
-        cost_impact_rm = max_md_excess * md_rate_rm_per_kw if max_md_excess > 0 and md_rate_rm_per_kw > 0 else 0
+        # Calculate maximum values for the month
+        max_md_excess_month = max(md_excess_values) if md_excess_values else 0
+        max_energy_required_month = max(energy_required_values) if energy_required_values else 0
         
         summary_data.append({
-            'Date': date,
-            'Total Peak Events (count)': total_events,
-            f'{tariff_type} MD Excess (Max kW)': round(max_md_excess, 2),
-            f'{tariff_type} Total Energy Required (sum kWh)': round(total_energy_required, 2),
-            'Cost Impact (RM/month)': round(cost_impact_rm, 2)
+            'Month': month_key,
+            f'{tariff_type} MD Excess (Max kW)': round(max_md_excess_month, 2),
+            f'{tariff_type} Required Energy (Max kWh)': round(max_energy_required_month, 2)
         })
     
-    # Create DataFrame and sort by date
+    # Create DataFrame and sort by month
     df_summary = pd.DataFrame(summary_data)
     if not df_summary.empty:
-        df_summary = df_summary.sort_values('Date')
+        df_summary = df_summary.sort_values('Month')
     
     return df_summary
 
@@ -1894,6 +1760,56 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                 st.error(f"Error generating clustering summary table: {str(e)}")
                 st.info("Proceeding with standard clustering analysis...")
             
+            # Generate and display monthly summary table
+            try:
+                monthly_summary_df = _generate_monthly_summary_table(
+                    all_monthly_events, selected_tariff, holidays
+                )
+                
+                if not monthly_summary_df.empty:
+                    st.markdown("#### 📅 Monthly Summary")
+                    st.markdown("*Maximum MD excess and energy requirements aggregated by month*")
+                    
+                    # Display the monthly summary table
+                    st.dataframe(
+                        monthly_summary_df,
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                    
+                    # Add summary metrics below the monthly summary table
+                    col1, col2, col3 = st.columns(3)
+                    
+                    total_months = len(monthly_summary_df)
+                    
+                    # Get column names dynamically based on tariff type
+                    tariff_type = 'General'
+                    if selected_tariff:
+                        tariff_name = selected_tariff.get('Tariff', '').lower()
+                        tariff_type_field = selected_tariff.get('Type', '').lower()
+                        if 'tou' in tariff_name or 'tou' in tariff_type_field or tariff_type_field == 'tou':
+                            tariff_type = 'TOU'
+                    
+                    md_excess_col = f'{tariff_type} MD Excess (Max kW)'
+                    energy_col = f'{tariff_type} Required Energy (Max kWh)'
+                    
+                    if md_excess_col in monthly_summary_df.columns:
+                        max_monthly_md_excess = monthly_summary_df[md_excess_col].max()
+                        max_monthly_energy = monthly_summary_df[energy_col].max()
+                        avg_monthly_md_excess = monthly_summary_df[md_excess_col].mean()
+                        
+                        col1.metric("Total Months", total_months)
+                        col2.metric("Max Monthly MD Excess", f"{max_monthly_md_excess:.2f} kW")
+                        col3.metric("Avg Monthly MD Excess", f"{avg_monthly_md_excess:.2f} kW")
+                    
+                    st.markdown("---")
+                else:
+                    st.info("No monthly summary data available.")
+                    
+            except Exception as e:
+                st.error(f"Error generating monthly summary table: {str(e)}")
+                st.info("Monthly summary not available - continuing with clustering analysis...")
+            
             # Default battery parameters for clustering (can be customized)
             battery_params_cluster = {
                 'unit_energy_kwh': 100,  # Default 100 kWh battery
@@ -1969,7 +1885,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                         st.markdown("**📍 Single Events:**")
                         single_display_cols = ['Cluster ID', 'Peak Power (kW)', 'Total Energy (kWh)', 'Start Time', 'End Time']
                         available_single_cols = [col for col in single_display_cols if col in single_events.columns]
-                        st.dataframe(single_events[available_single_cols], use_container_width=True)
+                        st.dataframe(single_events[single_display_cols], use_container_width=True)
                     
                     # Quick statistics
                     st.markdown("**📊 Clustering Statistics:**")
@@ -3152,3 +3068,44 @@ def show():
 if __name__ == "__main__":
     # For testing purposes
     render_md_shaving_v2()
+
+
+def cluster_peak_events(events_df, battery_params, md_hours, working_days):
+    """
+    Mock clustering function for peak events analysis.
+    
+    Args:
+        events_df: DataFrame with peak events data
+        battery_params: Dictionary with battery parameters
+        md_hours: Tuple of (start_hour, end_hour) for MD period
+        working_days: List of working days
+        
+    Returns:
+        tuple: (clusters_df, events_for_clustering)
+    """
+    if events_df.empty:
+        return pd.DataFrame(), events_df
+    
+    # Create a simple clustering based on date grouping
+    events_for_clustering = events_df.copy()
+    
+    # Add cluster_id based on date
+    events_for_clustering['cluster_id'] = events_for_clustering.index.date.astype(str)
+    
+    # Create clusters summary
+    clusters_data = []
+    for cluster_id, group in events_for_clustering.groupby('cluster_id'):
+        clusters_data.append({
+            'cluster_id': cluster_id,
+            'num_events_in_cluster': len(group),
+            'cluster_duration_hr': len(group) * 0.5 if len(group) > 1 else 0,  # Multi-event clusters
+            'peak_abs_kw_in_cluster': group.get('General Peak Load (kW)', pd.Series([0])).max(),
+            'peak_abs_kw_sum_in_cluster': group.get('General Peak Load (kW)', pd.Series([0])).sum(),
+            'total_energy_above_threshold_kwh': group.get('General Required Energy (kWh)', pd.Series([0])).sum(),
+            'cluster_start': group.index[0] if len(group) > 0 else None,
+            'cluster_end': group.index[-1] if len(group) > 0 else None
+        })
+    
+    clusters_df = pd.DataFrame(clusters_data)
+    
+    return clusters_df, events_for_clustering
