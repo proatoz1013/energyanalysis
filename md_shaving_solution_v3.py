@@ -202,7 +202,7 @@ def analyze_tariff_impact_v3(df_processed, power_col, target_kw, selected_tariff
     return analysis
 
 def _render_v3_analysis_infrastructure(df_processed, power_col, target_kw, selected_tariff, holidays, 
-                                     overall_max_demand, avg_demand, load_factor):
+                                     overall_max_demand, avg_demand, load_factor, user_shave_pct=10):
     """
     Main V3 analysis infrastructure that coordinates all tariff-aware analysis.
     This sets up the scaffolding for future feature implementation.
@@ -217,7 +217,7 @@ def _render_v3_analysis_infrastructure(df_processed, power_col, target_kw, selec
         _display_tariff_summary_v3(tariff_analysis['tariff_config'])
         
         # Display enhanced peak events chart with colour-coded line and detailed table
-        _display_v3_peak_events_chart(df_processed, power_col, target_kw, selected_tariff, holidays, tariff_analysis)
+        _display_v3_peak_events_chart(df_processed, power_col, target_kw, selected_tariff, holidays, tariff_analysis, user_shave_pct)
         
     else:
         st.warning("⚠️ Tariff not configured. Using simplified analysis.")
@@ -320,13 +320,25 @@ def _display_battery_sizing_scaffolding_v3(tariff_analysis, target_kw, overall_m
     else:
         st.success("✅ No battery required - demand already within target!")
 
-def _calculate_v3_monthly_targets(df, power_col, base_target_kw, selected_tariff, holidays):
+def _calculate_v3_monthly_targets(df, power_col, base_target_kw, selected_tariff, holidays, user_shave_pct=10):
     """
     Calculate monthly targets for V3 stepped target line.
-    Creates month-specific targets based on monthly peak patterns and tariff type.
-    Ensures no gaps - populates every month between min/max timestamps.
+    Creates month-specific targets based on monthly peak patterns and user shaving percentage.
+    Formula: monthly_target = (1 - user_shave_pct/100) × monthly_peak
+    
+    Args:
+        df: DataFrame with power consumption data
+        power_col: Name of power consumption column
+        base_target_kw: Fallback target (used only in extreme fallback scenarios)
+        selected_tariff: Tariff configuration dictionary
+        holidays: List of holiday dates
+        user_shave_pct: User-defined shaving percentage (e.g., 10 for 10% shaving)
+        
+    Returns:
+        Dict mapping Period('M') to monthly target values
     """
     monthly_targets = {}
+    fallback_logs = []
     
     try:
         if df.empty:
@@ -349,12 +361,17 @@ def _calculate_v3_monthly_targets(df, power_col, base_target_kw, selected_tariff
         # Group data by month
         df_monthly = df_tz.groupby(df_tz.index.to_period('M'))
         
-        # Calculate targets for each month (including missing ones)
+        # Calculate global 24/7 peak for ultimate fallback
+        global_24_7_peak = df_tz[power_col].max()
+        global_fallback_target = global_24_7_peak * (1 - user_shave_pct/100)
+        
+        # Calculate targets for each month
         for month_period in all_months:
             if month_period in df_monthly.groups:
                 month_data = df_monthly.get_group(month_period)
                 
-                # Calculate monthly peak based on tariff type
+                # Build the monthly reference slice based on tariff type
+                monthly_peak = None
                 if selected_tariff:
                     tariff_type = selected_tariff.get('Type', '').lower()
                     tariff_name = selected_tariff.get('Tariff', '').lower()
@@ -363,59 +380,79 @@ def _calculate_v3_monthly_targets(df, power_col, base_target_kw, selected_tariff
                     if is_tou_tariff:
                         # For TOU tariffs, use peak during peak periods (2PM-10PM weekdays)
                         monthly_peak = _calculate_monthly_tou_peak(month_data, power_col, holidays)
-                        
-                        # If TOU slice is empty/None, fallback to overall monthly max
-                        if monthly_peak is None:
-                            monthly_peak = month_data[power_col].max()
-                            
-                        # If overall monthly max is also NaN/empty, use base_target_kw
-                        if pd.isna(monthly_peak) or not pd.isfinite(monthly_peak):
-                            monthly_peak = base_target_kw
-                    else:
-                        # For General tariffs, use overall monthly peak
-                        monthly_peak = month_data[power_col].max()
-                        
-                        # If overall monthly max is NaN/empty, use base_target_kw
-                        if pd.isna(monthly_peak) or not pd.isfinite(monthly_peak):
-                            monthly_peak = base_target_kw
                 else:
-                    # Fallback to overall monthly peak
+                    # For General/no tariff, use 24/7 monthly peak
                     monthly_peak = month_data[power_col].max()
                     
-                    # If overall monthly max is NaN/empty, use base_target_kw
-                    if pd.isna(monthly_peak) or not pd.isfinite(monthly_peak):
-                        monthly_peak = base_target_kw
+                # Apply fallback chain if monthly_peak is None or NaN
+                if monthly_peak is None or pd.isna(monthly_peak) or not pd.isfinite(monthly_peak):
+                    # Fallback A: Use same month's 24/7 peak
+                    monthly_24_7_peak = month_data[power_col].max()
+                    if not pd.isna(monthly_24_7_peak) and pd.isfinite(monthly_24_7_peak):
+                        monthly_peak = monthly_24_7_peak
+                        fallback_logs.append(f"{month_period}: Fallback A - 24/7 peak")
+                    else:
+                        # Fallback B: Carry nearest neighbor month's target (handled below after all months calculated)
+                        monthly_peak = None
+                        fallback_logs.append(f"{month_period}: Fallback B - neighbor needed")
                 
-                # Calculate target as percentage of monthly peak (default 90%)
-                target_percentage = 0.9  # 10% shaving
-                monthly_target = monthly_peak * target_percentage
-                
-                # Guard against NaN in monthly_target and ensure proper max calculation
-                if pd.isna(monthly_target) or not pd.isfinite(monthly_target):
-                    monthly_targets[month_period] = base_target_kw
+                # Calculate monthly target if we have a valid peak
+                if monthly_peak is not None and pd.isfinite(monthly_peak):
+                    monthly_target = monthly_peak * (1 - user_shave_pct/100)
+                    monthly_targets[month_period] = monthly_target
                 else:
-                    # Ensure non-NaN value is first argument to avoid max(NaN, X) = NaN
-                    fallback_target = base_target_kw * 0.8
-                    monthly_targets[month_period] = max(fallback_target, monthly_target)
+                    # Mark for neighbor fallback
+                    monthly_targets[month_period] = None
+                    
             else:
-                # Month has no data - use base target as fallback
-                monthly_targets[month_period] = base_target_kw
-                
-        # Final safety check: ensure no NaNs in monthly_targets
-        nan_months = [(m, v) for m, v in monthly_targets.items() if pd.isna(v)]
-        if nan_months:
-            print(f"⚠️ Correcting NaN targets for months: {sorted(nan_months)}")
-            for month_period, _ in nan_months:
-                monthly_targets[month_period] = base_target_kw
+                # Month has no data - mark for neighbor fallback
+                monthly_targets[month_period] = None
+                fallback_logs.append(f"{month_period}: No data - neighbor needed")
         
-        # Verification logs
-        print(f"✅ Month verification: {len(all_months)} months in data, {len(monthly_targets)} targets calculated")
+        # Handle Fallback B: Carry nearest neighbor month's target
+        sorted_months = sorted(all_months)
+        for i, month_period in enumerate(sorted_months):
+            if monthly_targets[month_period] is None:
+                # Try previous month first
+                neighbor_target = None
+                if i > 0 and monthly_targets[sorted_months[i-1]] is not None:
+                    neighbor_target = monthly_targets[sorted_months[i-1]]
+                    fallback_logs.append(f"{month_period}: Fallback B - used previous month")
+                # Try next month if previous not available
+                elif i < len(sorted_months)-1 and monthly_targets[sorted_months[i+1]] is not None:
+                    neighbor_target = monthly_targets[sorted_months[i+1]]
+                    fallback_logs.append(f"{month_period}: Fallback B - used next month")
+                
+                if neighbor_target is not None:
+                    monthly_targets[month_period] = neighbor_target
+                else:
+                    # Fallback C: Use global 24/7 peak scaled by user_shave_pct
+                    monthly_targets[month_period] = global_fallback_target
+                    fallback_logs.append(f"{month_period}: Fallback C - global peak")
+        
+        # Final safety check: ensure no NaNs remain
+        nan_months = [(m, v) for m, v in monthly_targets.items() if v is None or pd.isna(v)]
+        if nan_months:
+            for month_period, _ in nan_months:
+                monthly_targets[month_period] = global_fallback_target
+                fallback_logs.append(f"{month_period}: Emergency fallback to global")
+        
+        # Integrity checks and logging
+        expected_count = len(all_months)
+        actual_count = len(monthly_targets)
         nan_count = sum(1 for v in monthly_targets.values() if pd.isna(v))
-        print(f"✅ NaN check: {len(monthly_targets)} targets, {nan_count} NaNs (should be 0)")
+        
+        print(f"✅ Month verification: {expected_count} months expected, {actual_count} targets calculated")
+        print(f"✅ NaN check: {actual_count} targets, {nan_count} NaNs (should be 0)")
+        
+        if fallback_logs:
+            print(f"📋 Fallback usage: {', '.join(fallback_logs)}")
         
         return monthly_targets
+        
     except Exception as e:
-        # Return base target for all months if calculation fails
+        print(f"❌ Error in monthly targets calculation: {str(e)}")
+        # Return global fallback for all months if calculation fails
         if not df.empty:
             min_date = df.index.min()
             max_date = df.index.max()
@@ -424,7 +461,7 @@ def _calculate_v3_monthly_targets(df, power_col, base_target_kw, selected_tariff
                 end=max_date.to_period('M'),
                 freq='M'
             )
-            return {month_period: base_target_kw for month_period in all_months}
+            return {month_period: global_fallback_target for month_period in all_months}
         return {}
 
 def _calculate_monthly_tou_peak(month_data, power_col, holidays):
@@ -627,8 +664,8 @@ def _get_tariff_description(selected_tariff):
 
 def _add_v3_stepped_target_line(fig, df, monthly_targets, selected_tariff):
     """
-    Add stepped monthly target line to the figure with continuous coverage.
-    Ensures no gaps even if some months have sparse data.
+    Add truly stepped monthly target line to the figure.
+    Each month shows as a distinct horizontal step, not continuous.
     """
     if not monthly_targets or df.empty:
         return
@@ -644,7 +681,7 @@ def _add_v3_stepped_target_line(fig, df, monthly_targets, selected_tariff):
     data_start = df.index.min()
     data_end = df.index.max()
     
-    # Create continuous stepped line across the data range
+    # Create truly stepped line - each month gets its own horizontal segment
     for i, month_period in enumerate(sorted_months):
         target_value = monthly_targets[month_period]
         
@@ -652,15 +689,20 @@ def _add_v3_stepped_target_line(fig, df, monthly_targets, selected_tariff):
         month_start = max(month_period.start_time, data_start)
         month_end = min(month_period.end_time, data_end)
         
-        # Ensure we don't skip months - add at least start and end points
+        # Only add points if this month intersects with our data range
         if month_start <= data_end and month_end >= data_start:
-            # Add start point of month
+            # Add step: horizontal line for this month's target
             target_line_timestamps.append(month_start)
             target_line_data.append(target_value)
-            
-            # Add end point of month (for step effect)
             target_line_timestamps.append(month_end)
             target_line_data.append(target_value)
+            
+            # Add vertical connection to next month's target (if not last month)
+            if i < len(sorted_months) - 1:
+                next_target = monthly_targets[sorted_months[i + 1]]
+                # Add vertical line from current target to next target
+                target_line_timestamps.append(month_end)
+                target_line_data.append(next_target)
             
             # Debug logging for April specifically
             if month_period.month == 4:  # April
@@ -678,13 +720,9 @@ def _add_v3_stepped_target_line(fig, df, monthly_targets, selected_tariff):
         
         legend_label = f"Monthly Target - {tariff_description}"
         
-        # Sort timestamps and data together to ensure proper line continuity
-        sorted_data = sorted(zip(target_line_timestamps, target_line_data))
-        sorted_timestamps, sorted_values = zip(*sorted_data)
-        
         fig.add_trace(go.Scatter(
-            x=sorted_timestamps,
-            y=sorted_values,
+            x=target_line_timestamps,
+            y=target_line_data,
             mode='lines',
             name=legend_label,
             line=dict(color='red', width=2, dash='dash'),
@@ -692,7 +730,7 @@ def _add_v3_stepped_target_line(fig, df, monthly_targets, selected_tariff):
             showlegend=True
         ))
         
-        print(f"✅ Stepped line added: {len(sorted_timestamps)} points covering {len(sorted_months)} months")
+        print(f"✅ Stepped line added: {len(target_line_timestamps)} points covering {len(sorted_months)} months")
 
 def _display_v3_monthly_targets_summary(monthly_targets, selected_tariff):
     """
@@ -747,7 +785,7 @@ def _display_v3_monthly_targets_summary(monthly_targets, selected_tariff):
     - **Stepped Line**: Each month uses its specific calculated target
     """)
 
-def _display_v3_peak_events_chart(df_processed, power_col, target_kw, selected_tariff, holidays, tariff_analysis):
+def _display_v3_peak_events_chart(df_processed, power_col, target_kw, selected_tariff, holidays, tariff_analysis, user_shave_pct=10):
     """
     V3 Enhanced peak events visualization with tariff-aware coloring and analysis.
     """
@@ -760,7 +798,7 @@ def _display_v3_peak_events_chart(df_processed, power_col, target_kw, selected_t
     fig = go.Figure()
     
     # Calculate monthly targets for stepped target line
-    monthly_targets = _calculate_v3_monthly_targets(df_processed, power_col, target_kw, selected_tariff, holidays)
+    monthly_targets = _calculate_v3_monthly_targets(df_processed, power_col, target_kw, selected_tariff, holidays, user_shave_pct)
     
     # Create per-timestamp target series for enhanced coloring
     target_series = _create_per_timestamp_target_series(df_processed, monthly_targets)
@@ -1246,6 +1284,7 @@ def render_md_shaving_v3():
                         )
                         target_kw = overall_max_demand * (1 - shave_percent/100)
                         target_description = f"{shave_percent}% shaving (Target: {target_kw:.1f} kW)"
+                        user_shave_pct = shave_percent
                         
                     elif target_method == "Percentage of Current Max":
                         target_percent = st.slider(
@@ -1259,6 +1298,7 @@ def render_md_shaving_v3():
                         )
                         target_kw = overall_max_demand * (target_percent/100)
                         target_description = f"{target_percent}% of max (Target: {target_kw:.1f} kW)"
+                        user_shave_pct = 100 - target_percent  # Convert to shaving percentage
                         
                     else:  # Manual Target
                         target_kw = st.number_input(
@@ -1271,6 +1311,8 @@ def render_md_shaving_v3():
                             help="Enter your desired target maximum demand in kW"
                         )
                         target_description = f"Manual target: {target_kw:.1f} kW"
+                        # Calculate equivalent shaving percentage based on manual target
+                        user_shave_pct = ((overall_max_demand - target_kw) / overall_max_demand) * 100
                     
                     # Display target information
                     st.info(f"🎯 **Target Configuration:** {target_description}")
@@ -1278,7 +1320,7 @@ def render_md_shaving_v3():
                     # V3 Tariff-Aware Analysis Infrastructure
                     _render_v3_analysis_infrastructure(
                         df_processed, power_col, target_kw, selected_tariff, holidays, 
-                        overall_max_demand, avg_demand, load_factor
+                        overall_max_demand, avg_demand, load_factor, user_shave_pct
                     )
                     
                 else:
