@@ -158,6 +158,87 @@ def _calculate_monthly_targets_v2(df, power_col, selected_tariff, holidays, targ
     return monthly_targets, reference_peaks, tariff_type, target_description
 
 
+def _generate_clustering_summary_table(all_monthly_events, selected_tariff, holidays):
+    """
+    Generate date-based clustering summary table for Section B2.
+    
+    Args:
+        all_monthly_events: List of peak events from peak events detection
+        selected_tariff: Selected tariff configuration
+        holidays: Set of holiday dates
+        
+    Returns:
+        pd.DataFrame: Summary table with columns: Date, Total Peak Events, General/TOU MD Excess, 
+                     General/TOU Total Energy Required, Cost Impact
+    """
+    if not all_monthly_events or len(all_monthly_events) == 0:
+        return pd.DataFrame()
+    
+    # Group events by date
+    daily_events = {}
+    for event in all_monthly_events:
+        event_date = event.get('Start Date')
+        if event_date not in daily_events:
+            daily_events[event_date] = []
+        daily_events[event_date].append(event)
+    
+    # Determine tariff type for MD cost calculation
+    tariff_type = 'General'  # Default
+    if selected_tariff:
+        tariff_name = selected_tariff.get('Tariff', '').lower()
+        tariff_type_field = selected_tariff.get('Type', '').lower()
+        
+        # Check if it's a TOU tariff
+        if 'tou' in tariff_name or 'tou' in tariff_type_field or tariff_type_field == 'tou':
+            tariff_type = 'TOU'
+    
+    # Get MD rate from tariff for cost calculation
+    md_rate_rm_per_kw = 0
+    if selected_tariff and isinstance(selected_tariff, dict):
+        rates = selected_tariff.get('Rates', {})
+        md_rate_rm_per_kw = rates.get('Capacity Rate', 0) + rates.get('Network Rate', 0)
+    
+    # Create summary data
+    summary_data = []
+    for date, events in daily_events.items():
+        # Count total events for this date
+        total_events = len(events)
+        
+        # Calculate MD excess values based on tariff type
+        if tariff_type == 'TOU':
+            # For TOU: Use TOU-specific values
+            md_excess_values = [event.get('TOU Excess (kW)', 0) or 0 for event in events]
+            energy_required_values = [event.get('TOU Required Energy (kWh)', 0) or 0 for event in events]
+            max_md_excess = max(md_excess_values) if md_excess_values else 0
+        else:
+            # For General: Use General values (24/7 MD impact)
+            md_excess_values = [event.get('General Excess (kW)', 0) or 0 for event in events]
+            energy_required_values = [event.get('General Required Energy (kWh)', 0) or 0 for event in events]
+            max_md_excess = max(md_excess_values) if md_excess_values else 0
+        
+        # Sum total energy required for the date
+        total_energy_required = sum(energy_required_values)
+        
+        # Calculate cost impact using the maximum MD excess for the date
+        # This follows the MD charging methodology where only the highest peak matters
+        cost_impact_rm = max_md_excess * md_rate_rm_per_kw if max_md_excess > 0 and md_rate_rm_per_kw > 0 else 0
+        
+        summary_data.append({
+            'Date': date,
+            'Total Peak Events (count)': total_events,
+            f'{tariff_type} MD Excess (Max kW)': round(max_md_excess, 2),
+            f'{tariff_type} Total Energy Required (sum kWh)': round(total_energy_required, 2),
+            'Cost Impact (RM/month)': round(cost_impact_rm, 2)
+        })
+    
+    # Create DataFrame and sort by date
+    df_summary = pd.DataFrame(summary_data)
+    if not df_summary.empty:
+        df_summary = df_summary.sort_values('Date')
+    
+    return df_summary
+
+
 def cluster_peak_events(events_df, battery_params, md_hours, working_days, tou_charge_windows=None, grid_charge_limit=None):
     """
     Group peak events into operational clusters for dispatch simulation.
@@ -278,6 +359,87 @@ def cluster_peak_events(events_df, battery_params, md_hours, working_days, tou_c
 
     clusters_df = pd.DataFrame(clusters)
     return clusters_df, events_with_clusters
+
+
+def _generate_clustering_summary_table(all_monthly_events, selected_tariff, holidays):
+    """
+    Generate date-based clustering summary table for Section B2.
+    
+    Args:
+        all_monthly_events: List of peak events from peak events detection
+        selected_tariff: Selected tariff configuration
+        holidays: Set of holiday dates
+        
+    Returns:
+        pd.DataFrame: Summary table with columns: Date, Total Peak Events, General/TOU MD Excess, 
+                     General/TOU Total Energy Required, Cost Impact
+    """
+    if not all_monthly_events or len(all_monthly_events) == 0:
+        return pd.DataFrame()
+    
+    # Group events by date
+    daily_events = {}
+    for event in all_monthly_events:
+        event_date = event.get('Start Date')
+        if event_date not in daily_events:
+            daily_events[event_date] = []
+        daily_events[event_date].append(event)
+    
+    # Determine tariff type for MD cost calculation
+    tariff_type = 'General'  # Default
+    if selected_tariff:
+        tariff_name = selected_tariff.get('Tariff', '').lower()
+        tariff_type_field = selected_tariff.get('Type', '').lower()
+        
+        # Check if it's a TOU tariff
+        if 'tou' in tariff_name or 'tou' in tariff_type_field or tariff_type_field == 'tou':
+            tariff_type = 'TOU'
+    
+    # Get MD rate from tariff for cost calculation
+    md_rate_rm_per_kw = 0
+    if selected_tariff and isinstance(selected_tariff, dict):
+        rates = selected_tariff.get('Rates', {})
+        md_rate_rm_per_kw = rates.get('Capacity Rate', 0) + rates.get('Network Rate', 0)
+    
+    # Create summary data
+    summary_data = []
+    for date, events in daily_events.items():
+        # Count total events for this date
+        total_events = len(events)
+        
+        # Calculate MD excess values based on tariff type
+        if tariff_type == 'TOU':
+            # For TOU: Use TOU-specific values
+            md_excess_values = [event.get('TOU Excess (kW)', 0) or 0 for event in events]
+            energy_required_values = [event.get('TOU Required Energy (kWh)', 0) or 0 for event in events]
+            max_md_excess = max(md_excess_values) if md_excess_values else 0
+        else:
+            # For General: Use General values (24/7 MD impact)
+            md_excess_values = [event.get('General Excess (kW)', 0) or 0 for event in events]
+            energy_required_values = [event.get('General Required Energy (kWh)', 0) or 0 for event in events]
+            max_md_excess = max(md_excess_values) if md_excess_values else 0
+        
+        # Sum total energy required for the date
+        total_energy_required = sum(energy_required_values)
+        
+        # Calculate cost impact using the maximum MD excess for the date
+        # This follows the MD charging methodology where only the highest peak matters
+        cost_impact_rm = max_md_excess * md_rate_rm_per_kw if max_md_excess > 0 and md_rate_rm_per_kw > 0 else 0
+        
+        summary_data.append({
+            'Date': date,
+            'Total Peak Events (count)': total_events,
+            f'{tariff_type} MD Excess (Max kW)': round(max_md_excess, 2),
+            f'{tariff_type} Total Energy Required (sum kWh)': round(total_energy_required, 2),
+            'Cost Impact (RM/month)': round(cost_impact_rm, 2)
+        })
+    
+    # Create DataFrame and sort by date
+    df_summary = pd.DataFrame(summary_data)
+    if not df_summary.empty:
+        df_summary = df_summary.sort_values('Date')
+    
+    return df_summary
 
 
 def build_daily_simulator_structure(df, threshold_kw, clusters_df, selected_tariff=None):
@@ -1694,6 +1856,44 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
             st.markdown("### 🔗 Peak Event Clusters")
             st.markdown("**Grouping consecutive peak events that can be managed with a single battery charge/discharge cycle**")
             
+            # Generate and display clustering summary table
+            try:
+                clustering_summary_df = _generate_clustering_summary_table(
+                    all_monthly_events, selected_tariff, holidays
+                )
+                
+                if not clustering_summary_df.empty:
+                    st.markdown("#### 📊 Daily Clustering Summary")
+                    st.markdown("*Summary of peak events grouped by date with MD cost impact analysis*")
+                    
+                    # Display the clustering summary table
+                    st.dataframe(
+                        clustering_summary_df,
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                    
+                    # Add summary metrics below the table
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    total_dates = len(clustering_summary_df)
+                    total_peak_events = clustering_summary_df['Total Peak Events'].sum()
+                    max_daily_cost = clustering_summary_df['Cost Impact (RM/month)'].max()
+                    total_monthly_cost_impact = clustering_summary_df['Cost Impact (RM/month)'].sum()
+                    
+                    col1.metric("Peak Event Days", total_dates)
+                    col2.metric("Total Peak Events", total_peak_events)
+                    col3.metric("Max Daily Cost Impact", f"RM {max_daily_cost:.2f}")
+                    col4.metric("Total Monthly Cost Impact", f"RM {total_monthly_cost_impact:.2f}")
+                    
+                    st.markdown("---")
+                else:
+                    st.info("No peak events found for clustering analysis.")
+                    
+            except Exception as e:
+                st.error(f"Error generating clustering summary table: {str(e)}")
+                st.info("Proceeding with standard clustering analysis...")
+            
             # Default battery parameters for clustering (can be customized)
             battery_params_cluster = {
                 'unit_energy_kwh': 100,  # Default 100 kWh battery
@@ -1895,92 +2095,66 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                         if not multi_event_clusters.empty and 'peak_abs_kw_sum_in_cluster' in cluster_display.columns:
                             st.markdown("**📋 Multi-Event Cluster Energy & Power Breakdown:**")
                             cluster_analysis = multi_event_clusters.copy()
-                            if 'peak_abs_kw_sum_in_cluster' in clusters_df.columns:
-                                # Add the sum power column to display
-                                cluster_analysis['Total Peak Power (Sum)'] = clusters_df[clusters_df['cluster_duration_hr'] > 0]['peak_abs_kw_sum_in_cluster'].round(1)
-                                
-                                analysis_cols = ['Cluster ID', 'Events Count', 'Peak Power (kW)', 'Total Peak Power (Sum)', 'Total Energy (kWh)', 'Duration (minutes)']
-                                available_analysis_cols = [col for col in analysis_cols if col in cluster_analysis.columns]
-                                st.dataframe(cluster_analysis[available_analysis_cols], use_container_width=True)
+                            # Display additional cluster details if needed
+                    
                     else:
-                        st.warning("⚠️ Peak power sum data not available - please re-run clustering analysis")
-                    
-                else:
-                    st.warning("⚠️ No clusters generated - events may be too far apart for battery management")
-                    
-                    # Debug information to help understand why clustering failed
-                    st.markdown("**🔍 Debug Information:**")
-                    recharge_time = ((battery_params_cluster['unit_energy_kwh'] * (battery_params_cluster['soc_max'] - battery_params_cluster['soc_min']) / 100) / 
-                                   (battery_params_cluster['efficiency'] * battery_params_cluster['charge_power_limit_kw']))
-                    debug_info = f"""
-                    - **Total events to cluster**: {len(events_for_clustering)}
-                    - **MD hours filter**: {md_hours[0]:02d}:00 - {md_hours[1]:02d}:00
-                    - **Working days**: {', '.join(working_days)}
-                    - **Battery recharge power**: {battery_params_cluster['charge_power_limit_kw']} kW
-                    - **Estimated recharge time**: {recharge_time:.1f} hours
-                    """
-                    st.info(debug_info)
-                    
-                    # Show first few events for debugging
-                    if len(events_for_clustering) > 0:
-                        st.markdown("**📋 Sample Events (first 5):**")
-                        sample_events = events_for_clustering.head()
-                        debug_cols = ['Start Date', 'Start Time', 'End Date', 'End Time']
-                        available_debug_cols = [col for col in debug_cols if col in sample_events.columns]
-                        if available_debug_cols:
-                            st.dataframe(sample_events[available_debug_cols], use_container_width=True)
-                        else:
-                            st.write("Available columns:", list(sample_events.columns))
-                    
-                    st.markdown("**💡 Suggestions:**")
-                    st.write("- Try increasing the battery recharge power limit")
-                    st.write("- Check if events fall within the specified MD hours and working days")
-                    st.write("- Consider if events are too far apart in time for practical battery management")
-                    
-            except Exception as e:
-                st.error(f"❌ Clustering analysis failed: {str(e)}")
-                st.write("**Debug info:**", {
-                    'events_df_shape': df_events_summary.shape if 'df_events_summary' in locals() else 'N/A',
-                    'events_df_columns': list(df_events_summary.columns) if 'df_events_summary' in locals() else 'N/A'
-                })
-            
-        else:
-            st.success("🎉 No peak events detected above monthly targets!")
-            st.info("Current demand profile is within monthly target limits for all analyzed months")
-        
-        # Calculate optimal battery capacity based on shaving requirements
-        if monthly_targets is not None and len(monthly_targets) > 0:
-            st.markdown("#### 🔋 Recommended Battery Capacity")
-            
-            # Initialize values for battery capacity calculation
-            recommended_energy_capacity = 0
-            max_power_shaving_required = 0
-            
-            # Check if clustering analysis was performed and has results
-            if ('clusters_df' in locals() and not clusters_df.empty and 
-                'max_cluster_energy' in locals() and 'max_single_energy' in locals() and
-                'max_cluster_tou_excess' in locals() and 'max_single_tou_excess' in locals()):
+                        st.warning("No clustering data available for detailed power and energy analysis.")
                 
-                # Use clustering analysis results for battery capacity recommendation
-                # Battery capacity (kWh) = max of cluster energy vs single event energy
+                else:
+                    st.info("No peak events found for clustering analysis.")
+            
+            except Exception as e:
+                st.error(f"Error in clustering analysis: {str(e)}")
+                st.info("Falling back to simplified analysis...")
+            
+            # === BATTERY SIZING RECOMMENDATIONS ===
+            st.markdown("### 🔋 Battery Sizing Analysis")
+            
+            # Check if we have clustering results for battery sizing
+            if 'clusters_df' in locals() and not clusters_df.empty and 'peak_abs_kw_sum_in_cluster' in clusters_df.columns:
+                st.info("✅ Using enhanced clustering analysis for battery sizing recommendations")
+                
+                # Use clustering analysis results for more accurate power requirements
+                # Get max values from clustering analysis
+                max_cluster_energy = clusters_df[clusters_df['cluster_duration_hr'] > 0]['total_energy_above_threshold_kwh'].max() if len(clusters_df[clusters_df['cluster_duration_hr'] > 0]) > 0 else 0
+                max_single_energy = 0
+                
+                # Calculate max energy from single events
+                if len(clusters_df[clusters_df['cluster_duration_hr'] == 0]) > 0:
+                    single_event_ids = clusters_df[clusters_df['cluster_duration_hr'] == 0]['cluster_id']
+                    single_event_energies = []
+                    for cluster_id in single_event_ids:
+                        cluster_events = events_for_clustering[events_for_clustering['cluster_id'] == cluster_id]
+                        if 'General Required Energy (kWh)' in cluster_events.columns:
+                            single_event_energies.append(cluster_events['General Required Energy (kWh)'].max())
+                    max_single_energy = max(single_event_energies) if single_event_energies else 0
+                
+                # Use the larger value for energy capacity recommendation
                 recommended_energy_capacity = max(max_cluster_energy, max_single_energy)
                 
-                # Power shaving requirement (kW) = max of cluster TOU excess vs single event TOU excess  
-                max_power_shaving_required = max(max_cluster_tou_excess, max_single_tou_excess)
+                # Calculate power requirements from TOU Excess
+                max_cluster_tou_excess = 0
+                if len(clusters_df[clusters_df['cluster_duration_hr'] > 0]) > 0:
+                    for cluster_id in clusters_df[clusters_df['cluster_duration_hr'] > 0]['cluster_id']:
+                        cluster_events = events_for_clustering[events_for_clustering['cluster_id'] == cluster_id]
+                        cluster_tou_excess_sum = cluster_events['TOU Excess (kW)'].sum() if 'TOU Excess (kW)' in cluster_events.columns else 0
+                        max_cluster_tou_excess = max(max_cluster_tou_excess, cluster_tou_excess_sum)
                 
-                st.info(f"""
-                **🔋 Battery Capacity Calculation (Enhanced with Clustering Analysis):**
-                - **Max Cluster Energy**: {max_cluster_energy:.1f} kWh
-                - **Max Single Event Energy**: {max_single_energy:.1f} kWh
-                - **Recommended Energy Capacity**: {recommended_energy_capacity:.1f} kWh
-                - **Max Cluster TOU Excess**: {max_cluster_tou_excess:.1f} kW
-                - **Max Single Event TOU Excess**: {max_single_tou_excess:.1f} kW
-                - **Max Power Shaving Required**: {max_power_shaving_required:.1f} kW
-                """)
+                # Get max individual TOU Excess from single events
+                max_single_tou_excess = 0
+                if len(clusters_df[clusters_df['cluster_duration_hr'] == 0]) > 0:
+                    single_event_ids = clusters_df[clusters_df['cluster_duration_hr'] == 0]['cluster_id']
+                    max_single_tou_excess = events_for_clustering[events_for_clustering['cluster_id'].isin(single_event_ids)]['TOU Excess (kW)'].max() if 'TOU Excess (kW)' in events_for_clustering.columns else 0
+                
+                # Use the larger value for power requirement
+                max_power_shaving_required = max(max_cluster_tou_excess, max_single_tou_excess)
                 
             else:
                 # Fallback to original calculation method if clustering data not available
                 st.warning("⚠️ Using fallback calculation for battery capacity - clustering analysis data not available")
+                
+                recommended_energy_capacity = 0
+                max_power_shaving_required = 0
                 
                 if monthly_targets is not None and len(monthly_targets) > 0:
                     # Calculate max shaving power directly from monthly targets and reference peaks
