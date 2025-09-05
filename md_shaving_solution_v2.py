@@ -649,6 +649,135 @@ def _render_battery_selection_dropdown():
             return None
 
 
+def _render_battery_quantity_recommendation(max_power_shaving_required, recommended_energy_capacity):
+    """
+    Render battery quantity recommendation section between Tabled Analysis and Battery Sizing Analysis.
+    
+    Args:
+        max_power_shaving_required: Maximum power shaving required (kW)
+        recommended_energy_capacity: Maximum required energy (kWh)
+    """
+    st.markdown("#### 🔢 Battery Quantity Recommendation")
+    
+    # Check if user has selected a battery from the tabled analysis dropdown
+    if hasattr(st.session_state, 'tabled_analysis_selected_battery') and st.session_state.tabled_analysis_selected_battery:
+        selected_battery = st.session_state.tabled_analysis_selected_battery
+        battery_spec = selected_battery['spec']
+        battery_name = selected_battery['label']
+        
+        # Extract battery specifications
+        battery_power_kw = battery_spec.get('power_kW', 0)
+        battery_energy_kwh = battery_spec.get('energy_kWh', 0)
+        
+        if battery_power_kw > 0 and battery_energy_kwh > 0:
+            # Calculate recommended quantities
+            # Power Rating based quantity: roundup(Max Power Shaving Required / Battery Power Rating)
+            qty_for_power = max_power_shaving_required / battery_power_kw if battery_power_kw > 0 else 0
+            qty_for_power_rounded = int(np.ceil(qty_for_power))
+            
+            # Energy Capacity based quantity: roundup(Max Required Energy / Battery Energy Capacity) 
+            qty_for_energy = recommended_energy_capacity / battery_energy_kwh if battery_energy_kwh > 0 else 0
+            qty_for_energy_rounded = int(np.ceil(qty_for_energy))
+            
+            # Recommended quantity: maximum of the two
+            recommended_qty = max(qty_for_power_rounded, qty_for_energy_rounded)
+            
+            # Display metrics showing the calculation
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric(
+                    "Power-Based Qty", 
+                    f"{qty_for_power_rounded} units",
+                    help=f"Based on {max_power_shaving_required:.1f} kW ÷ {battery_power_kw} kW"
+                )
+                st.caption(f"Calculation: ⌈{max_power_shaving_required:.1f} ÷ {battery_power_kw}⌉")
+            
+            with col2:
+                st.metric(
+                    "Energy-Based Qty", 
+                    f"{qty_for_energy_rounded} units",
+                    help=f"Based on {recommended_energy_capacity:.1f} kWh ÷ {battery_energy_kwh} kWh"
+                )
+                st.caption(f"Calculation: ⌈{recommended_energy_capacity:.1f} ÷ {battery_energy_kwh}⌉")
+            
+            with col3:
+                st.metric(
+                    "Recommended Qty", 
+                    f"{recommended_qty} units",
+                    delta=f"{recommended_qty} units",
+                    help="Maximum of power-based and energy-based quantities"
+                )
+                st.caption("Auto-recommended based on max requirement")
+            
+            # Allow user to override the recommended quantity
+            st.markdown("**🎛️ Battery Quantity Configuration:**")
+            
+            # User input for quantity with recommended as default
+            user_selected_qty = st.number_input(
+                "Select Battery Quantity:",
+                min_value=1,
+                max_value=50,
+                value=recommended_qty,
+                step=1,
+                key="v2_battery_quantity_selection",
+                help=f"Auto-recommended: {recommended_qty} units. You can adjust this value if needed."
+            )
+            
+            # Show impact of user selection
+            total_power_capacity = user_selected_qty * battery_power_kw
+            total_energy_capacity = user_selected_qty * battery_energy_kwh
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric(
+                    "Total Power Capacity",
+                    f"{total_power_capacity:.1f} kW",
+                    f"{user_selected_qty} × {battery_power_kw} kW"
+                )
+            
+            with col2:
+                st.metric(
+                    "Total Energy Capacity", 
+                    f"{total_energy_capacity:.1f} kWh",
+                    f"{user_selected_qty} × {battery_energy_kwh} kWh"
+                )
+            
+            with col3:
+                # Calculate coverage percentages
+                power_coverage = (total_power_capacity / max_power_shaving_required * 100) if max_power_shaving_required > 0 else 100
+                energy_coverage = (total_energy_capacity / recommended_energy_capacity * 100) if recommended_energy_capacity > 0 else 100
+                
+                overall_coverage = min(power_coverage, energy_coverage)
+                
+                coverage_color = "normal" if overall_coverage >= 100 else "inverse"
+                st.metric(
+                    "Coverage",
+                    f"{overall_coverage:.1f}%",
+                    delta_color=coverage_color,
+                    help="Minimum of power and energy coverage percentages"
+                )
+            
+            # Store the selected quantity in session state for use in sizing analysis
+            st.session_state.tabled_analysis_battery_quantity = user_selected_qty
+            
+            # Provide guidance on the selection
+            if user_selected_qty == recommended_qty:
+                st.success(f"✅ **Optimal Configuration**: Using auto-recommended quantity of {recommended_qty} units based on your requirements.")
+            elif user_selected_qty > recommended_qty:
+                st.info(f"ℹ️ **Oversized Configuration**: You've selected {user_selected_qty} units, which is {user_selected_qty - recommended_qty} units more than the recommended {recommended_qty} units. This provides extra capacity margin.")
+            else:
+                st.warning(f"⚠️ **Undersized Configuration**: You've selected {user_selected_qty} units, which is {recommended_qty - user_selected_qty} units less than the recommended {recommended_qty} units. This may not fully meet your requirements.")
+            
+        else:
+            st.error("❌ Selected battery has invalid power or energy specifications")
+    
+    else:
+        st.warning("⚠️ **No Battery Selected**: Please select a battery from the '📋 Tabled Analysis' dropdown above to see quantity recommendations.")
+        st.info("💡 Battery quantity will be automatically calculated based on your requirements once a battery is selected.")
+
+
 def _render_battery_sizing_analysis(max_power_shaving_required, recommended_energy_capacity, total_md_cost):
     """
     Render comprehensive battery sizing and financial analysis table.
@@ -674,21 +803,16 @@ def _render_battery_sizing_analysis(max_power_shaving_required, recommended_ener
         battery_lifespan_years = battery_spec.get('lifespan_years', 15)
         
         if battery_power_kw > 0 and battery_energy_kwh > 0:
-            # Calculate battery quantities required
+            # Use the user-selected quantity from the quantity recommendation section
+            bess_quantity = getattr(st.session_state, 'tabled_analysis_battery_quantity', 1)
             
-            # Column 1: Battery quantity for selected power requirement
+            # Calculate quantities that would be needed (for reference only)
             qty_for_power = max_power_shaving_required / battery_power_kw if battery_power_kw > 0 else 0
             qty_for_power_rounded = int(np.ceil(qty_for_power))
-            print(max_power_shaving_required, qty_for_power)
-
-            # Column 2: Battery quantity for selected energy capacity requirement
             qty_for_excess = recommended_energy_capacity / battery_energy_kwh if battery_energy_kwh > 0 else 0
             qty_for_excess_rounded = int(np.ceil(qty_for_excess))
             
-            # Column 3: BESS quantity (higher of the two)
-            bess_quantity = max(qty_for_power_rounded, qty_for_excess_rounded)
-            
-            # Calculate total system specifications
+            # Calculate total system specifications based on user-selected quantity
             total_power_kw = bess_quantity * battery_power_kw
             total_energy_kwh = bess_quantity * battery_energy_kwh
             
@@ -2229,12 +2353,16 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                     max_power_shaving_required = max(shaving_amounts) if shaving_amounts else 0
                 
                 # Calculate max TOU excess from individual events (power-based, not energy)
-                recommended_energy_capacity = max([event.get('TOU Excess (kW)', 0) or 0 for event in all_monthly_events]) if all_monthly_events else 0
+                max_tou_excess_fallback = max([event.get('TOU Excess (kW)', 0) or 0 for event in all_monthly_events]) if all_monthly_events else 0
+                max_power_shaving_required = max(max_power_shaving_required, max_tou_excess_fallback)
+                
+                # Calculate recommended energy capacity from energy fields (kWh not kW)
+                recommended_energy_capacity = max([event.get('TOU Required Energy (kWh)', 0) or event.get('General Required Energy (kWh)', 0) or 0 for event in all_monthly_events]) if all_monthly_events else 0
                 
                 # Console logging for debugging - FALLBACK CALCULATION
                 print(f"🔋 DEBUG - Battery Sizing Values (FALLBACK METHOD):")
                 print(f"   max_power_shaving_required = {max_power_shaving_required:.1f} kW")
-                print(f"   recommended_energy_capacity = {recommended_energy_capacity:.1f} kW")
+                print(f"   recommended_energy_capacity = {recommended_energy_capacity:.1f} kWh")
                 print(f"   monthly_targets available: {monthly_targets is not None and len(monthly_targets) > 0}")
                 print(f"   number of all_monthly_events: {len(all_monthly_events) if all_monthly_events else 0}")
             
@@ -2244,8 +2372,11 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
         # Console logging for debugging - FINAL RESULTS (always executes)
         print(f"🔋 DEBUG - Final Battery Sizing Results:")
         print(f"   FINAL max_power_shaving_required = {max_power_shaving_required:.1f} kW")
-        print(f"   FINAL recommended_energy_capacity = {recommended_energy_capacity:.1f} kW") 
+        print(f"   FINAL recommended_energy_capacity = {recommended_energy_capacity:.1f} kWh")
         print(f"   FINAL total_md_cost = RM {total_md_cost:.2f}")
+        
+        # NEW: Battery Quantity Recommendation Section 
+        _render_battery_quantity_recommendation(max_power_shaving_required, recommended_energy_capacity)
         
         # Call the battery sizing analysis function with the calculated values
         _render_battery_sizing_analysis(max_power_shaving_required, recommended_energy_capacity, total_md_cost)
