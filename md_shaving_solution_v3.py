@@ -363,23 +363,56 @@ def _calculate_v3_monthly_targets(df, power_col, base_target_kw, selected_tariff
                     if is_tou_tariff:
                         # For TOU tariffs, use peak during peak periods (2PM-10PM weekdays)
                         monthly_peak = _calculate_monthly_tou_peak(month_data, power_col, holidays)
+                        
+                        # If TOU slice is empty/None, fallback to overall monthly max
+                        if monthly_peak is None:
+                            monthly_peak = month_data[power_col].max()
+                            
+                        # If overall monthly max is also NaN/empty, use base_target_kw
+                        if pd.isna(monthly_peak) or not pd.isfinite(monthly_peak):
+                            monthly_peak = base_target_kw
                     else:
                         # For General tariffs, use overall monthly peak
                         monthly_peak = month_data[power_col].max()
+                        
+                        # If overall monthly max is NaN/empty, use base_target_kw
+                        if pd.isna(monthly_peak) or not pd.isfinite(monthly_peak):
+                            monthly_peak = base_target_kw
                 else:
                     # Fallback to overall monthly peak
                     monthly_peak = month_data[power_col].max()
+                    
+                    # If overall monthly max is NaN/empty, use base_target_kw
+                    if pd.isna(monthly_peak) or not pd.isfinite(monthly_peak):
+                        monthly_peak = base_target_kw
                 
                 # Calculate target as percentage of monthly peak (default 90%)
                 target_percentage = 0.9  # 10% shaving
                 monthly_target = monthly_peak * target_percentage
                 
-                # Ensure target doesn't go below the base target (safety measure)
-                monthly_targets[month_period] = max(monthly_target, base_target_kw * 0.8)
+                # Guard against NaN in monthly_target and ensure proper max calculation
+                if pd.isna(monthly_target) or not pd.isfinite(monthly_target):
+                    monthly_targets[month_period] = base_target_kw
+                else:
+                    # Ensure non-NaN value is first argument to avoid max(NaN, X) = NaN
+                    fallback_target = base_target_kw * 0.8
+                    monthly_targets[month_period] = max(fallback_target, monthly_target)
             else:
                 # Month has no data - use base target as fallback
                 monthly_targets[month_period] = base_target_kw
                 
+        # Final safety check: ensure no NaNs in monthly_targets
+        nan_months = [(m, v) for m, v in monthly_targets.items() if pd.isna(v)]
+        if nan_months:
+            print(f"⚠️ Correcting NaN targets for months: {sorted(nan_months)}")
+            for month_period, _ in nan_months:
+                monthly_targets[month_period] = base_target_kw
+        
+        # Verification logs
+        print(f"✅ Month verification: {len(all_months)} months in data, {len(monthly_targets)} targets calculated")
+        nan_count = sum(1 for v in monthly_targets.values() if pd.isna(v))
+        print(f"✅ NaN check: {len(monthly_targets)} targets, {nan_count} NaNs (should be 0)")
+        
         return monthly_targets
     except Exception as e:
         # Return base target for all months if calculation fails
@@ -397,6 +430,7 @@ def _calculate_v3_monthly_targets(df, power_col, base_target_kw, selected_tariff
 def _calculate_monthly_tou_peak(month_data, power_col, holidays):
     """
     Calculate peak demand during TOU peak periods (2PM-10PM weekdays) for a given month.
+    Returns None if TOU slice is empty to let caller pick fallback.
     """
     tou_peak_data = []
     
@@ -410,7 +444,7 @@ def _calculate_monthly_tou_peak(month_data, power_col, holidays):
         if is_weekday and is_peak_hour and not is_holiday:
             tou_peak_data.append(row[power_col])
     
-    return max(tou_peak_data) if tou_peak_data else month_data[power_col].max()
+    return max(tou_peak_data) if tou_peak_data else None
 
 def _create_per_timestamp_target_series(df, monthly_targets):
     """
@@ -440,6 +474,14 @@ def _create_per_timestamp_target_series(df, monthly_targets):
             else:
                 # Ultimate fallback - should not happen with fixed _calculate_v3_monthly_targets
                 target_series.loc[timestamp] = 1000.0  # Safe default
+    
+    # Ensure no NaNs by forward-filling any missing values
+    target_series = target_series.ffill().bfill()
+    
+    # Final safety check - if still NaN, use the first available monthly target
+    if target_series.isna().any():
+        default_target = list(monthly_targets.values())[0] if monthly_targets else 1000.0
+        target_series = target_series.fillna(default_target)
     
     return target_series
 
@@ -585,29 +627,46 @@ def _get_tariff_description(selected_tariff):
 
 def _add_v3_stepped_target_line(fig, df, monthly_targets, selected_tariff):
     """
-    Add stepped monthly target line to the figure (V2 style implementation).
+    Add stepped monthly target line to the figure with continuous coverage.
+    Ensures no gaps even if some months have sparse data.
     """
+    if not monthly_targets or df.empty:
+        return
+    
     # Create stepped target line for visualization
     target_line_data = []
     target_line_timestamps = []
     
-    # Create a stepped line that changes at month boundaries
-    for month_period, target_value in monthly_targets.items():
-        # Get start and end of month
-        month_start = month_period.start_time
-        month_end = month_period.end_time
-        
-        # Filter data for this month
-        month_mask = (df.index >= month_start) & (df.index <= month_end)
-        month_data = df[month_mask]
-        
-        if not month_data.empty:
-            # Add target value for each timestamp in this month
-            for timestamp in month_data.index:
-                target_line_timestamps.append(timestamp)
-                target_line_data.append(target_value)
+    # Sort monthly targets by period to ensure chronological order
+    sorted_months = sorted(monthly_targets.keys())
     
-    # Add stepped monthly target line first
+    # Get overall data time range
+    data_start = df.index.min()
+    data_end = df.index.max()
+    
+    # Create continuous stepped line across the data range
+    for i, month_period in enumerate(sorted_months):
+        target_value = monthly_targets[month_period]
+        
+        # Determine month boundaries within the data range
+        month_start = max(month_period.start_time, data_start)
+        month_end = min(month_period.end_time, data_end)
+        
+        # Ensure we don't skip months - add at least start and end points
+        if month_start <= data_end and month_end >= data_start:
+            # Add start point of month
+            target_line_timestamps.append(month_start)
+            target_line_data.append(target_value)
+            
+            # Add end point of month (for step effect)
+            target_line_timestamps.append(month_end)
+            target_line_data.append(target_value)
+            
+            # Debug logging for April specifically
+            if month_period.month == 4:  # April
+                print(f"🔍 April stepped line debug: {month_period} = {target_value:.1f} kW, range: {month_start} to {month_end}")
+    
+    # Add stepped monthly target line
     if target_line_data and target_line_timestamps:
         # Determine tariff description for legend
         tariff_description = "General Tariff"
@@ -619,15 +678,21 @@ def _add_v3_stepped_target_line(fig, df, monthly_targets, selected_tariff):
         
         legend_label = f"Monthly Target - {tariff_description}"
         
+        # Sort timestamps and data together to ensure proper line continuity
+        sorted_data = sorted(zip(target_line_timestamps, target_line_data))
+        sorted_timestamps, sorted_values = zip(*sorted_data)
+        
         fig.add_trace(go.Scatter(
-            x=target_line_timestamps,
-            y=target_line_data,
+            x=sorted_timestamps,
+            y=sorted_values,
             mode='lines',
             name=legend_label,
             line=dict(color='red', width=2, dash='dash'),
             opacity=0.9,
             showlegend=True
         ))
+        
+        print(f"✅ Stepped line added: {len(sorted_timestamps)} points covering {len(sorted_months)} months")
 
 def _display_v3_monthly_targets_summary(monthly_targets, selected_tariff):
     """
