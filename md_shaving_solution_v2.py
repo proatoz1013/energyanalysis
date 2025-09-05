@@ -3290,12 +3290,21 @@ def _compute_per_event_bess_dispatch(all_monthly_events, monthly_targets, select
             soc_after_percent = max(soc_min_percent, soc_before_percent - soc_used_percent)
             current_soc_percent = soc_after_percent
             
-            # Shaving success classification
-            if residual_above_target_kw <= 0.1:
+            # Shaving success classification - FIXED LOGIC
+            if not tou_period and tariff_type == 'TOU':
+                # Events outside MD window should not be classified as failures
+                shaving_success = "⚪ Not Applicable"
+            elif excess_above_target_kw <= 0.1:
+                # No excess to shave
+                shaving_success = "✅ Complete"
+            elif residual_above_target_kw <= 0.1:
+                # Successfully reduced residual to near zero
                 shaving_success = "✅ Complete"
             elif power_shaved_kw > 0:
+                # Some shaving achieved but not complete
                 shaving_success = "🟡 Partial"
             else:
+                # Should have shaved (during MD window with excess) but couldn't
                 shaving_success = "🔴 Failed"
             
             # Recharge analysis for next event
@@ -3443,18 +3452,33 @@ def _render_event_results_table(all_monthly_events, monthly_targets, selected_ta
         st.error("❌ Failed to compute event results")
         return
     
-    # Display summary metrics
+    # Display summary metrics - Updated to handle "Not Applicable" events
     col1, col2, col3, col4 = st.columns(4)
     
     total_events = len(df_results)
-    complete_events = len(df_results[df_results['shaving_success'] == '✅ Complete'])
-    partial_events = len(df_results[df_results['shaving_success'] == '🟡 Partial'])
-    failed_events = len(df_results[df_results['shaving_success'] == '🔴 Failed'])
+    not_applicable_events = len(df_results[df_results['shaving_success'] == '⚪ Not Applicable'])
+    applicable_events = df_results[df_results['shaving_success'] != '⚪ Not Applicable']
+    total_applicable = len(applicable_events)
     
-    col1.metric("Total Events", total_events)
-    col2.metric("Complete Shaving", f"{complete_events} ({complete_events/total_events*100:.1f}%)")
-    col3.metric("Partial Shaving", f"{partial_events} ({partial_events/total_events*100:.1f}%)")
-    col4.metric("Failed Shaving", f"{failed_events} ({failed_events/total_events*100:.1f}%)")
+    if total_applicable > 0:
+        complete_events = len(applicable_events[applicable_events['shaving_success'] == '✅ Complete'])
+        partial_events = len(applicable_events[applicable_events['shaving_success'] == '🟡 Partial'])
+        failed_events = len(applicable_events[applicable_events['shaving_success'] == '🔴 Failed'])
+        
+        col1.metric("Total Events", f"{total_events} ({total_applicable} applicable)")
+        col2.metric("Complete Shaving", f"{complete_events} ({complete_events/total_applicable*100:.1f}%)")
+        col3.metric("Partial Shaving", f"{partial_events} ({partial_events/total_applicable*100:.1f}%)")
+        col4.metric("Failed Shaving", f"{failed_events} ({failed_events/total_applicable*100:.1f}%)")
+        
+        if not_applicable_events > 0:
+            st.info(f"ℹ️ **{not_applicable_events} events outside MD window** (not counted in success rates)")
+    else:
+        col1.metric("Total Events", total_events)
+        col2.metric("All Off-Peak Events", f"{not_applicable_events} events")
+        col3.metric("No MD Window Events", "Success rate: N/A")
+        col4.metric("", "")
+        
+        st.warning("⚠️ All events are outside MD billing window - no applicable shaving opportunities")
     
     # Additional summary metrics
     col1, col2, col3, col4 = st.columns(4)
@@ -3612,9 +3636,10 @@ def _render_event_results_table(all_monthly_events, monthly_targets, selected_ta
         4. **Recharge Analysis**: Evaluate time window and power availability for recharging
         
         **Success Classification:**
-        - ✅ **Complete**: Residual above target ≤ 0.1 kW
-        - 🟡 **Partial**: Some power shaved but residual > 0.1 kW  
-        - 🔴 **Failed**: No power shaved (constraint prevented dispatch)
+        - ⚪ **Not Applicable**: Events outside MD billing window (TOU tariff off-peak periods)
+        - ✅ **Complete**: Successfully reduced demand to target level (residual ≤ 0.1 kW)
+        - 🟡 **Partial**: Some power shaved but did not fully meet target (residual > 0.1 kW)  
+        - 🔴 **Failed**: No power shaved despite being in MD window with excess demand
         
         **MD Savings Attribution:**
         - Uses monthly maximum attribution methodology
