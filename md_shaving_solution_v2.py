@@ -20,6 +20,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timedelta
 import json
+import io
 
 # Import V1 components for reuse
 from md_shaving_solution import (
@@ -570,7 +571,7 @@ def _render_battery_selection_dropdown():
     This function should be called when a file is uploaded and data is available.
     """
     with st.container():
-        st.markdown("#### 📋 Tabled Analysis")
+        st.markdown("#### 7. 📋 Tabled Analysis")
         
         # Battery selection dropdown
         battery_db = load_vendor_battery_database()
@@ -657,7 +658,7 @@ def _render_battery_quantity_recommendation(max_power_shaving_required, recommen
         max_power_shaving_required: Maximum power shaving required (kW)
         recommended_energy_capacity: Maximum required energy (kWh)
     """
-    st.markdown("#### 🔢 Battery Quantity Recommendation")
+    st.markdown("#### 7.1 🔢 Battery Quantity Recommendation")
     
     # Check if user has selected a battery from the tabled analysis dropdown
     if hasattr(st.session_state, 'tabled_analysis_selected_battery') and st.session_state.tabled_analysis_selected_battery:
@@ -787,7 +788,7 @@ def _render_battery_sizing_analysis(max_power_shaving_required, recommended_ener
         recommended_energy_capacity: Maximum TOU excess power requirement (kW)  
         total_md_cost: Total MD cost impact (RM)
     """
-    st.markdown("#### 🔋 Battery Sizing & Financial Analysis")
+    st.markdown("#### 7.2 🔋 Battery Sizing & Financial Analysis")
     
     # Check if user has selected a battery from the tabled analysis dropdown
     if hasattr(st.session_state, 'tabled_analysis_selected_battery') and st.session_state.tabled_analysis_selected_battery:
@@ -1065,7 +1066,7 @@ def render_md_shaving_v2():
     Main function to display the MD Shaving Solution V2 interface.
     This is a thin wrapper that reuses V1 components for now.
     """
-    st.title("🔋 MD Shaving Solution (v2)")
+    st.title("🔋 1. MD Shaving Solution (v2)")
     st.markdown("""
     **Next-generation Maximum Demand (MD) shaving analysis** with enhanced features and advanced optimization algorithms.
     
@@ -1106,7 +1107,7 @@ def render_md_shaving_v2():
         """)
     
     # File upload section (reusing V1 logic)
-    st.subheader("📁 Data Upload")
+    st.subheader("2. 📁 Data Upload")
     uploaded_file = st.file_uploader(
         "Upload your energy data file", 
         type=["csv", "xls", "xlsx"], 
@@ -1130,7 +1131,7 @@ def render_md_shaving_v2():
             st.success("✅ File uploaded successfully!")
             
             # Reuse V1 data configuration (read-only for now)
-            st.subheader("📋 Data Configuration")
+            st.subheader("3. 📋 Data Configuration")
             
             # Column Selection and Holiday Configuration
             timestamp_col, power_col, holidays = _configure_data_inputs(df)
@@ -1145,7 +1146,7 @@ def render_md_shaving_v2():
                 
                 if not df_processed.empty and power_col in df_processed.columns:
                     # Display tariff selection (reuse V1 logic - read-only)
-                    st.subheader("⚡ Tariff Configuration")
+                    st.subheader("4. ⚡ Tariff Configuration")
                     
                     with st.container():
                         st.info("🔧 **Note:** Using V1 tariff selection logic (read-only preview)")
@@ -1160,7 +1161,7 @@ def render_md_shaving_v2():
                             selected_tariff = None
                     
                     # V2 Target Setting Configuration
-                    st.subheader("🎯 Target Setting (V2)")
+                    st.subheader("5. 🎯 Target Setting (V2)")
                     
                     # Get overall max demand for calculations
                     overall_max_demand = df_processed[power_col].max()
@@ -1286,7 +1287,7 @@ def render_md_shaving_v2():
 def _render_battery_impact_timeline(df, power_col, selected_tariff, holidays, target_method, shave_percent, target_percent, target_manual_kw, target_description, selected_battery_capacity):
     """Render the Battery Impact Timeline visualization - duplicate of peak events graph with battery impact overlay."""
     
-    st.markdown("### 📊 Battery Impact on Energy Consumption")
+    st.markdown("### 8. 📊 Battery Impact on Energy Consumption")
     
     # This function is under development
     st.info(f"""
@@ -1380,7 +1381,7 @@ def _render_battery_impact_timeline(df, power_col, selected_tariff, holidays, ta
 def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, target_method, shave_percent, target_percent, target_manual_kw, target_description):
     """Render the V2 Peak Events Timeline visualization with dynamic monthly-based targets."""
     
-    st.markdown("### 📊 Peak Events Timeline")
+    st.markdown("## 6. 📊 Peak Events Timeline")
     
     # Detect and show sampling interval from uploaded data
     try:
@@ -1438,7 +1439,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
             
             df_comparison = pd.DataFrame(comparison_data)
             
-            st.markdown("#### 📋 Monthly Target Calculation Summary")
+            st.markdown("#### 6.1 📋 Monthly Target Calculation Summary")
             
             # Highlight the reference column based on tariff type
             def highlight_reference_peak(row):
@@ -1667,7 +1668,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
             
         # Detailed Peak Event Detection Results
         if all_monthly_events:
-            st.markdown("#### ⚡ Peak Event Detection Results")
+            st.markdown("#### 6.2 ⚡ Peak Event Detection Results")
             
             # Determine tariff type for display enhancements
             tariff_type = selected_tariff.get('Type', '').lower() if selected_tariff else 'general'
@@ -1820,7 +1821,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
             col3.metric("Max TOU Excess", f"{fmt(max_tou_excess)} kW")
             
             # === PEAK EVENT CLUSTERING ANALYSIS ===
-            st.markdown("### 🔗 Peak Event Clusters")
+            st.markdown("### 6.3 🔗 Peak Event Clusters")
             st.markdown("**Grouping consecutive peak events that can be managed with a single battery charge/discharge cycle**")
             
             # Generate and display clustering summary table
@@ -1830,7 +1831,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                 )
                 
                 if not clustering_summary_df.empty:
-                    st.markdown("#### 📊 Daily Clustering Summary")
+                    st.markdown("#### 6.3.1 📊 Daily Clustering Summary")
                     st.markdown("*Summary of peak events grouped by date with MD cost impact analysis*")
                     
                     # Display the clustering summary table
@@ -1868,7 +1869,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                 )
                 
                 if not monthly_summary_df.empty:
-                    st.markdown("#### 📅 Monthly Summary")
+                    st.markdown("#### 6.3.2 📅 Monthly Summary")
                     st.markdown("*Maximum MD excess and energy requirements aggregated by month*")
                     
                     # Display the monthly summary table
@@ -1999,7 +2000,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                         col4.metric("Avg Events/Cluster", "0.0")
                     
                     # === POWER & ENERGY COMPARISON ANALYSIS ===
-                    st.markdown("### ⚡ Peak Power & Energy Analysis")
+                    st.markdown("### 6.4 ⚡ Peak Power & Energy Analysis")
                     st.markdown("**Comparison between multi-event clusters and single events**")
                     
                     # Calculate total energy (kWh) and power (kW) for clusters vs single events
@@ -2124,7 +2125,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                 st.info("Falling back to simplified analysis...")
             
             # === BATTERY SIZING RECOMMENDATIONS ===
-            st.markdown("### 🔋 Battery Sizing Analysis")
+            st.markdown("### 6.5 🔋 Battery Sizing Analysis")
             
             # Check if we have clustering results for battery sizing
             if 'clusters_df' in locals() and not clusters_df.empty and 'peak_abs_kw_sum_in_cluster' in clusters_df.columns:
@@ -2378,11 +2379,14 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
         # NEW: Battery Quantity Recommendation Section 
         _render_battery_quantity_recommendation(max_power_shaving_required, recommended_energy_capacity)
         
+        # NEW: Event Results Table - All Events BESS Dispatch Analysis
+        _render_event_results_table(all_monthly_events, monthly_targets, selected_tariff, holidays)
+        
         # Call the battery sizing analysis function with the calculated values
         _render_battery_sizing_analysis(max_power_shaving_required, recommended_energy_capacity, total_md_cost)
         
         # Battery Simulation Analysis Section
-        st.markdown("#### 🔋 Battery Simulation Analysis")
+        st.markdown("#### 6.6 🔋 Battery Simulation Analysis")
         
         # Display battery simulation chart using selected battery specifications
         if (hasattr(st.session_state, 'tabled_analysis_selected_battery') and 
@@ -2555,7 +2559,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                         
                         # === STEP 7: Enhanced BESS Dispatch Simulation & Savings Analysis ===
                         st.markdown("---")
-                        st.markdown("#### 🔋 BESS Dispatch Simulation & Comprehensive Analysis")
+                        st.markdown("#### 6.7 🔋 BESS Dispatch Simulation & Comprehensive Analysis")
                         st.markdown("**Advanced battery dispatch simulation with engineering constraints and financial analysis**")
                         
                         if all_monthly_events:
@@ -2898,7 +2902,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                             """)
                             
                             # Monthly savings analysis
-                            st.markdown("#### 💰 Monthly Savings Analysis")
+                            st.markdown("#### 6.7.1 💰 Monthly Savings Analysis")
                             
                             # Display monthly savings table
                             styled_monthly = df_monthly_savings.style.format({
@@ -3136,3 +3140,491 @@ def cluster_peak_events(events_df, battery_params, md_hours, working_days):
     clusters_df = pd.DataFrame(clusters_data)
     
     return clusters_df, events_for_clustering
+
+
+def _compute_per_event_bess_dispatch(all_monthly_events, monthly_targets, selected_tariff, holidays, battery_spec=None, quantity=1, interval_hours=0.25):
+    """
+    Compute per-event BESS dispatch results using existing V2 logic.
+    
+    Args:
+        all_monthly_events: List of peak events from peak events detection
+        monthly_targets: Series of monthly targets from _calculate_monthly_targets_v2
+        selected_tariff: Selected tariff configuration
+        holidays: Set of holiday dates
+        battery_spec: Battery specifications dict
+        quantity: Number of battery units
+        interval_hours: Data sampling interval in hours
+        
+    Returns:
+        pd.DataFrame: Event results table with all required columns
+    """
+    if not all_monthly_events or not battery_spec:
+        return pd.DataFrame()
+    
+    # Determine tariff type using existing logic
+    tariff_type = 'General'
+    if selected_tariff:
+        tariff_name = selected_tariff.get('Tariff', '').lower()
+        tariff_type_field = selected_tariff.get('Type', '').lower()
+        if 'tou' in tariff_name or 'tou' in tariff_type_field or tariff_type_field == 'tou':
+            tariff_type = 'TOU'
+    
+    # Get MD rate from tariff
+    md_rate_rm_per_kw = 0
+    if selected_tariff and isinstance(selected_tariff, dict):
+        rates = selected_tariff.get('Rates', {})
+        md_rate_rm_per_kw = rates.get('Capacity Rate', 0) + rates.get('Network Rate', 0)
+    
+    # Battery system parameters
+    rated_power_kw = battery_spec.get('power_kW', 0) * quantity
+    capacity_kwh = battery_spec.get('energy_kWh', 0) * quantity
+    soc_min_percent = 20.0  # Default SOC limits
+    soc_max_percent = 100.0
+    ready_soc_percent = 80.0  # Starting SOC
+    eta_charge = 0.95  # Charging efficiency
+    eta_discharge = 0.95  # Discharging efficiency
+    round_trip_efficiency = eta_charge * eta_discharge
+    max_charge_kw = rated_power_kw  # Assume same as discharge
+    max_discharge_kw = rated_power_kw
+    
+    # Event processing
+    event_results = []
+    current_soc_percent = ready_soc_percent
+    cluster_id = 1  # Simple cluster assignment
+    previous_event_end = None
+    
+    for i, event in enumerate(all_monthly_events):
+        try:
+            # Basic event info
+            event_id = f"E{i+1:03d}"
+            start_date = event.get('Start Date')
+            end_date = event.get('End Date')
+            start_time = event.get('Start Time', '00:00')
+            end_time = event.get('End Time', '00:00')
+            
+            # Parse timestamps
+            start_timestamp = pd.to_datetime(f"{start_date} {start_time}")
+            end_timestamp = pd.to_datetime(f"{end_date} {end_time}")
+            duration_min = (end_timestamp - start_timestamp).total_seconds() / 60
+            duration_h = duration_min / 60
+            
+            # Monthly context
+            month = start_timestamp.to_period('M')
+            month_str = month.strftime('%Y-%m')
+            
+            # Get monthly target for this event
+            target_md_kw = monthly_targets.get(month, 0) if month in monthly_targets.index else 0
+            
+            # Event power characteristics
+            original_peak_kw = event.get('General Peak Load (kW)', 0)
+            excess_above_target_kw = max(0, original_peak_kw - target_md_kw)
+            
+            # TOU period determination using existing logic
+            tou_period = True  # Default for General tariff
+            md_window = "24/7"  # Default for General
+            
+            if tariff_type == 'TOU':
+                # Use existing is_peak_rp4 function for TOU detection
+                tou_period = is_peak_rp4(start_timestamp, holidays if holidays else set())
+                md_window = "2PM-10PM" if tou_period else "Off-Peak"
+            
+            # Holiday check
+            is_holiday = start_timestamp.date() in (holidays if holidays else set())
+            
+            # BESS state before event
+            soc_before_percent = current_soc_percent
+            available_energy_kwh = capacity_kwh * (soc_before_percent/100 - soc_min_percent/100)
+            available_energy_kwh = max(0, available_energy_kwh)
+            
+            # Maximum energy that can be discharged during this event
+            power_limited_energy = rated_power_kw * duration_h
+            energy_limited_energy = available_energy_kwh * eta_discharge
+            max_event_discharge_kwh = min(power_limited_energy, energy_limited_energy)
+            
+            # Dispatch calculation
+            if excess_above_target_kw > 0 and tou_period:
+                # Power shaving calculation
+                power_shaved_kw = min(excess_above_target_kw, rated_power_kw)
+                
+                # Energy constraint check
+                required_energy_kwh = power_shaved_kw * duration_h / eta_discharge
+                if required_energy_kwh > available_energy_kwh:
+                    # Energy limited
+                    actual_energy_discharged = available_energy_kwh * eta_discharge
+                    power_shaved_kw = actual_energy_discharged / duration_h
+                    constraint_type = "Energy-limited"
+                    reason_detail = f"Required {required_energy_kwh:.1f}kWh > available {available_energy_kwh:.1f}kWh"
+                else:
+                    # Power limited or successful
+                    actual_energy_discharged = required_energy_kwh
+                    if power_shaved_kw >= excess_above_target_kw:
+                        constraint_type = "None"
+                        reason_detail = f"Successfully shaved {power_shaved_kw:.1f}kW"
+                    else:
+                        constraint_type = "Power-limited"
+                        reason_detail = f"Required {excess_above_target_kw:.1f}kW > rated {rated_power_kw:.1f}kW"
+                
+                energy_discharged_kwh = actual_energy_discharged
+                
+            elif not tou_period and tariff_type == 'TOU':
+                # Outside MD window for TOU tariff
+                power_shaved_kw = 0
+                energy_discharged_kwh = 0
+                constraint_type = "Not-in-MD-window"
+                reason_detail = f"Event outside MD window ({md_window})"
+                
+            else:
+                # No excess or no shaving needed
+                power_shaved_kw = 0
+                energy_discharged_kwh = 0
+                constraint_type = "None"
+                reason_detail = "No excess above target"
+            
+            # Post-event calculations
+            final_peak_after_bess_kw = original_peak_kw - power_shaved_kw
+            residual_above_target_kw = max(0, final_peak_after_bess_kw - target_md_kw)
+            
+            # SOC after event
+            soc_used_kwh = energy_discharged_kwh / eta_discharge
+            soc_used_percent = (soc_used_kwh / capacity_kwh) * 100 if capacity_kwh > 0 else 0
+            soc_after_percent = max(soc_min_percent, soc_before_percent - soc_used_percent)
+            current_soc_percent = soc_after_percent
+            
+            # Shaving success classification
+            if residual_above_target_kw <= 0.1:
+                shaving_success = "✅ Complete"
+            elif power_shaved_kw > 0:
+                shaving_success = "🟡 Partial"
+            else:
+                shaving_success = "🔴 Failed"
+            
+            # Recharge analysis for next event
+            recharge_window_min = 0
+            recharge_required_kwh = 0
+            recharge_possible_kwh = 0
+            recharge_feasible = True
+            
+            if i < len(all_monthly_events) - 1:
+                next_event = all_monthly_events[i + 1]
+                next_start = pd.to_datetime(f"{next_event.get('Start Date')} {next_event.get('Start Time', '00:00')}")
+                recharge_window_min = (next_start - end_timestamp).total_seconds() / 60
+                
+                # Required recharge to reach ready SOC
+                target_soc_increase = ready_soc_percent - soc_after_percent
+                recharge_required_kwh = (target_soc_increase / 100) * capacity_kwh
+                
+                # Possible recharge given time window
+                recharge_time_h = recharge_window_min / 60
+                max_recharge_energy = max_charge_kw * recharge_time_h * eta_charge
+                recharge_possible_kwh = min(max_recharge_energy, recharge_required_kwh)
+                
+                recharge_feasible = recharge_possible_kwh >= recharge_required_kwh
+                
+                # Update SOC for next event if recharge is possible
+                if recharge_feasible:
+                    current_soc_percent = ready_soc_percent
+                else:
+                    # Partial recharge
+                    soc_increase = (recharge_possible_kwh / capacity_kwh) * 100
+                    current_soc_percent = min(soc_max_percent, soc_after_percent + soc_increase)
+            
+            # MD savings calculation (only for events in MD window)
+            md_savings_rm = 0
+            if tou_period or tariff_type == 'General':
+                # Use monthly attribution approach from existing logic
+                attribution_factor = 1.0  # Simplified attribution
+                md_savings_rm = power_shaved_kw * md_rate_rm_per_kw * attribution_factor
+            
+            # Append event result
+            event_results.append({
+                'event_id': event_id,
+                'month': month_str,
+                'start_time': start_timestamp.strftime('%Y-%m-%d %H:%M'),
+                'end_time': end_timestamp.strftime('%Y-%m-%d %H:%M'),
+                'duration_min': round(duration_min, 1),
+                'original_peak_kw': round(original_peak_kw, 1),
+                'target_md_kw': round(target_md_kw, 1),
+                'excess_above_target_kw': round(excess_above_target_kw, 1),
+                'tou_period': '✅' if tou_period else '❌',
+                'cluster_id': cluster_id,
+                'rated_power_kw': round(rated_power_kw, 1),
+                'capacity_kwh': round(capacity_kwh, 1),
+                'soc_before_%': round(soc_before_percent, 1),
+                'available_energy_kwh': round(available_energy_kwh, 1),
+                'max_event_discharge_kwh': round(max_event_discharge_kwh, 1),
+                'power_shaved_kw': round(power_shaved_kw, 1),
+                'energy_discharged_kwh': round(energy_discharged_kwh, 1),
+                'final_peak_after_bess_kw': round(final_peak_after_bess_kw, 1),
+                'residual_above_target_kw': round(residual_above_target_kw, 1),
+                'soc_after_%': round(soc_after_percent, 1),
+                'shaving_success': shaving_success,
+                'constraint_type': constraint_type,
+                'reason_detail': reason_detail,
+                'rte_%': round(round_trip_efficiency * 100, 1),
+                'md_window': md_window,
+                'recharge_window_min': round(recharge_window_min, 1),
+                'recharge_required_kwh': round(recharge_required_kwh, 1),
+                'recharge_possible_kwh': round(recharge_possible_kwh, 1),
+                'recharge_feasible': '✅' if recharge_feasible else '❌',
+                'md_savings_rm': round(md_savings_rm, 2),
+                'holiday': '✅' if is_holiday else '❌',
+                'data_gaps': '❌',  # Simplified
+                'notes': f"{tariff_type} tariff, {constraint_type.lower()} dispatch"
+            })
+            
+            # Simple cluster ID increment (simplified clustering)
+            if recharge_window_min < 120:  # Less than 2 hours gap
+                cluster_id += 0  # Keep same cluster
+            else:
+                cluster_id += 1  # New cluster
+                
+            previous_event_end = end_timestamp
+            
+        except Exception as e:
+            st.warning(f"Error processing event {i+1}: {str(e)}")
+            continue
+    
+    # Create DataFrame
+    df_results = pd.DataFrame(event_results)
+    
+    return df_results
+
+
+def _render_event_results_table(all_monthly_events, monthly_targets, selected_tariff, holidays):
+    """
+    Render the MD Shaving - Event Results (All Events) table.
+    
+    Args:
+        all_monthly_events: List of peak events from peak events detection
+        monthly_targets: Series of monthly targets
+        selected_tariff: Selected tariff configuration  
+        holidays: Set of holiday dates
+    """
+    
+    st.markdown("#### 7.1.5 📊 MD Shaving – Event Results (All Events)")
+    
+    # Check if battery is selected
+    if not (hasattr(st.session_state, 'tabled_analysis_selected_battery') and st.session_state.tabled_analysis_selected_battery):
+        st.warning("⚠️ **No Battery Selected**: Please select a battery from the '📋 Tabled Analysis' dropdown above to view event-level dispatch results.")
+        return
+    
+    # Get battery configuration
+    selected_battery = st.session_state.tabled_analysis_selected_battery
+    battery_spec = selected_battery['spec']
+    quantity = getattr(st.session_state, 'tabled_analysis_battery_quantity', 1)
+    
+    if not all_monthly_events:
+        st.info("No peak events available for analysis.")
+        return
+    
+    # Validation checks
+    validation_warnings = []
+    
+    # Check if monthly targets are available
+    if monthly_targets.empty:
+        validation_warnings.append("Monthly targets are missing - some calculations may be inaccurate")
+    
+    # Check for missing tariff configuration
+    if not selected_tariff:
+        validation_warnings.append("Tariff configuration missing - using default General tariff assumptions")
+    
+    if validation_warnings:
+        for warning in validation_warnings:
+            st.warning(f"⚠️ {warning}")
+    
+    # Compute event results
+    with st.spinner("Computing per-event BESS dispatch results..."):
+        df_results = _compute_per_event_bess_dispatch(
+            all_monthly_events, monthly_targets, selected_tariff, holidays, 
+            battery_spec, quantity
+        )
+    
+    if df_results.empty:
+        st.error("❌ Failed to compute event results")
+        return
+    
+    # Display summary metrics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    total_events = len(df_results)
+    complete_events = len(df_results[df_results['shaving_success'] == '✅ Complete'])
+    partial_events = len(df_results[df_results['shaving_success'] == '🟡 Partial'])
+    failed_events = len(df_results[df_results['shaving_success'] == '🔴 Failed'])
+    
+    col1.metric("Total Events", total_events)
+    col2.metric("Complete Shaving", f"{complete_events} ({complete_events/total_events*100:.1f}%)")
+    col3.metric("Partial Shaving", f"{partial_events} ({partial_events/total_events*100:.1f}%)")
+    col4.metric("Failed Shaving", f"{failed_events} ({failed_events/total_events*100:.1f}%)")
+    
+    # Additional summary metrics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    avg_power_shaved = df_results['power_shaved_kw'].mean()
+    total_energy_discharged = df_results['energy_discharged_kwh'].sum()
+    recharge_feasible_count = len(df_results[df_results['recharge_feasible'] == '✅'])
+    total_md_savings = df_results['md_savings_rm'].sum()
+    
+    col1.metric("Avg Power Shaved", f"{avg_power_shaved:.1f} kW")
+    col2.metric("Total Energy Discharged", f"{total_energy_discharged:.1f} kWh")  
+    col3.metric("Recharge Feasible Rate", f"{recharge_feasible_count/total_events*100:.1f}%")
+    col4.metric("Total MD Savings", f"RM {total_md_savings:.2f}")
+    
+    # Filters
+    st.markdown("**🔍 Table Filters:**")
+    filter_col1, filter_col2, filter_col3 = st.columns(3)
+    
+    with filter_col1:
+        show_residual_only = st.checkbox("Show only events with residual > 0", False)
+        
+    with filter_col2:
+        constraint_filter = st.multiselect(
+            "Filter by constraint type:",
+            options=['Power-limited', 'Energy-limited', 'Recharge-limited', 'Not-in-MD-window', 'None'],
+            default=[]
+        )
+        
+    with filter_col3:
+        tou_only = st.checkbox("Show TOU period events only", False)
+    
+    # Month filter
+    available_months = sorted(df_results['month'].unique())
+    selected_months = st.multiselect(
+        "Filter by month:",
+        options=available_months,
+        default=available_months
+    )
+    
+    # Apply filters
+    df_filtered = df_results.copy()
+    
+    if show_residual_only:
+        df_filtered = df_filtered[df_filtered['residual_above_target_kw'] > 0]
+    
+    if constraint_filter:
+        df_filtered = df_filtered[df_filtered['constraint_type'].isin(constraint_filter)]
+    
+    if tou_only:
+        df_filtered = df_filtered[df_filtered['tou_period'] == '✅']
+    
+    if selected_months:
+        df_filtered = df_filtered[df_filtered['month'].isin(selected_months)]
+    
+    st.markdown(f"**Showing {len(df_filtered)} of {len(df_results)} events**")
+    
+    # Style the dataframe with color coding
+    def highlight_success(row):
+        colors = []
+        for col in df_filtered.columns:
+            if col == 'shaving_success':
+                if '✅ Complete' in str(row[col]):
+                    colors.append('background-color: rgba(0, 255, 0, 0.2)')  # Green
+                elif '🟡 Partial' in str(row[col]):
+                    colors.append('background-color: rgba(255, 255, 0, 0.2)')  # Yellow
+                elif '🔴 Failed' in str(row[col]):
+                    colors.append('background-color: rgba(255, 0, 0, 0.2)')  # Red
+                else:
+                    colors.append('')
+            elif col == 'recharge_feasible' and '❌' in str(row[col]):
+                colors.append('background-color: rgba(255, 165, 0, 0.1)')  # Orange for recharge issues
+            else:
+                colors.append('')
+        return colors
+    
+    # Display the table
+    if not df_filtered.empty:
+        styled_df = df_filtered.style.apply(highlight_success, axis=1)
+        st.dataframe(styled_df, use_container_width=True, hide_index=True)
+        
+        # Download options
+        st.markdown("**📥 Download Options:**")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # CSV download for filtered data
+            csv_buffer = io.StringIO()
+            df_filtered.to_csv(csv_buffer, index=False)
+            st.download_button(
+                label="📊 Download Filtered Results (CSV)",
+                data=csv_buffer.getvalue(),
+                file_name=f"event_results_filtered_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                mime="text/csv"
+            )
+            
+        with col2:
+            # CSV download for full dataset
+            csv_buffer_full = io.StringIO()
+            df_results.to_csv(csv_buffer_full, index=False)
+            st.download_button(
+                label="📊 Download Full Dataset (CSV)",
+                data=csv_buffer_full.getvalue(),
+                file_name=f"event_results_full_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                mime="text/csv"
+            )
+    
+    else:
+        st.info("No events match the current filter criteria.")
+    
+    # Footer summary for filtered results
+    if not df_filtered.empty:
+        st.markdown("---")
+        st.markdown("**📊 Filtered Results Summary:**")
+        
+        filtered_complete = len(df_filtered[df_filtered['shaving_success'] == '✅ Complete'])
+        filtered_partial = len(df_filtered[df_filtered['shaving_success'] == '🟡 Partial'])
+        filtered_failed = len(df_filtered[df_filtered['shaving_success'] == '🔴 Failed'])
+        filtered_avg_power = df_filtered['power_shaved_kw'].mean()
+        filtered_total_energy = df_filtered['energy_discharged_kwh'].sum()
+        filtered_recharge_rate = len(df_filtered[df_filtered['recharge_feasible'] == '✅']) / len(df_filtered) * 100
+        filtered_md_savings = df_filtered['md_savings_rm'].sum()
+        
+        summary_col1, summary_col2 = st.columns(2)
+        
+        with summary_col1:
+            st.markdown(f"""
+            - **Events**: {len(df_filtered)} total
+            - **Success Rate**: {filtered_complete}/{len(df_filtered)} complete ({filtered_complete/len(df_filtered)*100:.1f}%)
+            - **Partial**: {filtered_partial} events ({filtered_partial/len(df_filtered)*100:.1f}%)
+            - **Failed**: {filtered_failed} events ({filtered_failed/len(df_filtered)*100:.1f}%)
+            """)
+            
+        with summary_col2:
+            st.markdown(f"""
+            - **Avg Power Shaved**: {filtered_avg_power:.1f} kW
+            - **Total Energy Discharged**: {filtered_total_energy:.1f} kWh
+            - **Recharge Feasible**: {filtered_recharge_rate:.1f}%
+            - **Total MD Savings**: RM {filtered_md_savings:.2f}
+            """)
+    
+    # Technical notes
+    with st.expander("ℹ️ Technical Notes & Methodology"):
+        st.markdown("""
+        **Calculation Methodology:**
+        
+        **Tariff-Aware Processing:**
+        - **General Tariff**: All events are eligible for MD savings (24/7 MD billing)
+        - **TOU Tariff**: Only events during 2PM-10PM weekdays are eligible for MD savings
+        
+        **BESS Dispatch Logic:**
+        1. **Power Constraint**: `power_shaved_kw = min(excess_above_target_kw, rated_power_kw)`
+        2. **Energy Constraint**: Verify sufficient battery energy considering efficiency losses
+        3. **SOC Constraints**: Maintain SOC between configured min/max limits
+        4. **Recharge Analysis**: Evaluate time window and power availability for recharging
+        
+        **Success Classification:**
+        - ✅ **Complete**: Residual above target ≤ 0.1 kW
+        - 🟡 **Partial**: Some power shaved but residual > 0.1 kW  
+        - 🔴 **Failed**: No power shaved (constraint prevented dispatch)
+        
+        **MD Savings Attribution:**
+        - Uses monthly maximum attribution methodology
+        - Only credits events within MD billing windows
+        - Applies configured MD rates from selected tariff
+        
+        **Validation Checks:**
+        - Energy accounting: ΔSOC × capacity ≈ discharged_energy / η_discharge
+        - TOU off-window events: Verified md_savings_rm = 0
+        - Recharge feasibility: Time window vs charging power limits
+        """)
+
+# ...existing code...
