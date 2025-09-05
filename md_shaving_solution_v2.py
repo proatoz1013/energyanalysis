@@ -1796,11 +1796,10 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                     if md_excess_col in monthly_summary_df.columns:
                         max_monthly_md_excess = monthly_summary_df[md_excess_col].max()
                         max_monthly_energy = monthly_summary_df[energy_col].max()
-                        avg_monthly_md_excess = monthly_summary_df[md_excess_col].mean()
                         
                         col1.metric("Total Months", total_months)
                         col2.metric("Max Monthly MD Excess", f"{max_monthly_md_excess:.2f} kW")
-                        col3.metric("Avg Monthly MD Excess", f"{avg_monthly_md_excess:.2f} kW")
+                        col3.metric("Max Monthly Required Energy", f"{max_monthly_energy:.2f} kWh")
                     
                     st.markdown("---")
                 else:
