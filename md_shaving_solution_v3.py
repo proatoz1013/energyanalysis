@@ -20,9 +20,12 @@ from md_shaving_solution import (
     _configure_tariff_selection,
     _detect_peak_events,
     _display_battery_simulation_chart,
-    _simulate_battery_operation
+    _simulate_battery_operation,
+    create_conditional_demand_line_with_peak_logic,
+    _display_peak_event_results,
+    get_tariff_period_classification
 )
-from tariffs.peak_logic import is_peak_rp4
+from tariffs.peak_logic import is_peak_rp4, get_period_classification
 
 # ============================================================================
 # TARIFF-AWARE SCAFFOLDING AND LOGIC INFRASTRUCTURE
@@ -213,20 +216,8 @@ def _render_v3_analysis_infrastructure(df_processed, power_col, target_kw, selec
         st.subheader("⚡ Tariff Analysis Summary")
         _display_tariff_summary_v3(tariff_analysis['tariff_config'])
         
-        # Peak Events Analysis (Scaffolding)
-        st.subheader("📊 Peak Events Analysis")
-        _display_peak_events_summary_v3(tariff_analysis['peak_events'], target_kw)
-        
-        # V3 Peak Events Timeline visualization
+        # Display enhanced peak events chart with colour-coded line and detailed table
         _display_v3_peak_events_chart(df_processed, power_col, target_kw, selected_tariff, holidays, tariff_analysis)
-        
-        # Cost Analysis (Scaffolding)
-        st.subheader("💰 Cost Impact Analysis")
-        _display_cost_analysis_summary_v3(tariff_analysis['cost_analysis'])
-        
-        # Battery Sizing Scaffolding
-        st.subheader("🔋 Battery Sizing Analysis")
-        _display_battery_sizing_scaffolding_v3(tariff_analysis, target_kw, overall_max_demand)
         
     else:
         st.warning("⚠️ Tariff not configured. Using simplified analysis.")
@@ -520,8 +511,8 @@ def _display_v3_peak_events_chart(df_processed, power_col, target_kw, selected_t
             annotation_position="top right"
         )
     
-    # Create color-coded continuous line using V3 tariff logic
-    fig = _create_v3_conditional_demand_line(
+    # Create color-coded continuous line using V1 reused function
+    fig = create_conditional_demand_line_with_peak_logic(
         fig, df_processed, power_col, target_kw, selected_tariff, holidays, "Power Consumption"
     )
     
@@ -551,99 +542,122 @@ def _display_v3_peak_events_chart(df_processed, power_col, target_kw, selected_t
     # Display additional analysis if peak events exist
     if peak_events_list:
         _display_v3_peak_events_analysis_summary(peak_events_list, tariff_analysis)
+        
+        # Display detailed peak events table using V1 reused function
+        _display_v3_peak_events_table(df_processed, power_col, target_kw, selected_tariff, holidays)
 
-def _create_v3_conditional_demand_line(fig, df, power_col, target_kw, selected_tariff, holidays, trace_name):
+def _create_v3_conditional_demand_line(fig, df, power_col, monthly_targets, selected_tariff, holidays, trace_name):
     """
-    V3 Enhanced conditional coloring logic with tariff-aware classification.
-    Follows exact V1/V2 logic: red = above target + peak, green = above target + off-peak, blue = below target.
+    V3 conditional coloring logic - exact copy from V2 with V3 tariff classification.
+    Creates continuous line segments with different colors based on monthly targets.
     """
-    # Create color classification following V1/V2 exact logic
-    color_segments = []
+    # Process data chronologically to create continuous segments
+    all_timestamps = sorted(df.index)
+    
+    # Create segments for continuous colored lines
+    segments = []
     current_segment = {'type': None, 'x': [], 'y': []}
     
-    for timestamp, row in df.iterrows():
-        power_value = row[power_col]
+    for timestamp in all_timestamps:
+        power_value = df.loc[timestamp, power_col]
         
-        # Get tariff period classification using V3 logic
-        if selected_tariff:
-            period_type = get_tariff_period_classification_v3(timestamp, selected_tariff, holidays)
-        else:
-            period_type = 'Peak'  # Default fallback
-        
-        # Follow exact V1/V2 color logic
-        if power_value > target_kw:
-            if period_type == 'Peak':
-                color_class = 'red'
-            else:
-                color_class = 'green'
-        else:
-            color_class = 'blue'
-        
-        # Handle segment transitions
-        if current_segment['type'] != color_class:
-            # Finalize previous segment
-            if current_segment['type'] is not None and len(current_segment['x']) > 0:
-                color_segments.append(current_segment.copy())
+        # Get the monthly target for this timestamp (V2 logic)
+        month_period = timestamp.to_period('M')
+        if month_period in monthly_targets:
+            target_value = monthly_targets[month_period]
             
-            # Start new segment
-            current_segment = {
-                'type': color_class,
-                'x': [timestamp],
-                'y': [power_value]
-            }
-        else:
-            # Continue current segment
-            current_segment['x'].append(timestamp)
-            current_segment['y'].append(power_value)
+            # Determine the color category for this point
+            if power_value <= target_value:
+                segment_type = 'below_target'
+            else:
+                # Use V3 tariff classification instead of V2's is_peak_rp4
+                if selected_tariff:
+                    period_type = get_tariff_period_classification_v3(timestamp, selected_tariff, holidays)
+                else:
+                    # Fallback to V2's original logic for compatibility
+                    is_peak = is_peak_rp4(timestamp, holidays if holidays else set())
+                    period_type = 'Peak' if is_peak else 'Off-Peak'
+                
+                if period_type == 'Peak':
+                    segment_type = 'above_target_peak'
+                else:
+                    segment_type = 'above_target_offpeak'
+            
+            # If this is the start or the segment type changed, finalize previous and start new
+            if current_segment['type'] != segment_type:
+                # Finalize the previous segment if it has data
+                if current_segment['type'] is not None and len(current_segment['x']) > 0:
+                    segments.append(current_segment.copy())
+                
+                # Start new segment
+                current_segment = {
+                    'type': segment_type, 
+                    'x': [timestamp], 
+                    'y': [power_value]
+                }
+            else:
+                # Continue current segment
+                current_segment['x'].append(timestamp)
+                current_segment['y'].append(power_value)
     
     # Don't forget the last segment
     if current_segment['type'] is not None and len(current_segment['x']) > 0:
-        color_segments.append(current_segment)
+        segments.append(current_segment)
     
-    # Define legend names following V1/V2 style
-    legend_names = {
-        'red': f'{trace_name} (Above Target - Peak Period)',
-        'green': f'{trace_name} (Above Target - Off-Peak Period)', 
-        'blue': f'{trace_name} (Below Target)'
+    # Plot the colored segments with proper continuity (exact V2 approach)
+    color_map = {
+        'below_target': {'color': 'blue', 'name': f'{trace_name} (Below Monthly Target)'},
+        'above_target_offpeak': {'color': 'green', 'name': f'{trace_name} (Above Monthly Target - Off-Peak Period)'},
+        'above_target_peak': {'color': 'red', 'name': f'{trace_name} (Above Monthly Target - Peak Period)'}
     }
     
     # Track legend status
-    legend_added = {'red': False, 'green': False, 'blue': False}
+    legend_added = {'below_target': False, 'above_target_offpeak': False, 'above_target_peak': False}
     
-    # Add colored line segments with continuity (V1/V2 style)
-    for i, segment in enumerate(color_segments):
-        color_class = segment['type']
-        segment_x = list(segment['x'])
-        segment_y = list(segment['y'])
+    # Create continuous line segments by color groups with bridge points (exact V2 approach)
+    i = 0
+    while i < len(segments):
+        current_segment = segments[i]
+        current_type = current_segment['type']
         
-        # Add bridge points for continuity (V1/V2 approach)
-        if i > 0:  # Connect to previous segment
-            prev_segment = color_segments[i-1]
+        # Extract segment data
+        segment_x = list(current_segment['x'])
+        segment_y = list(current_segment['y'])
+        
+        # Add bridge points for better continuity (connect to adjacent segments)
+        if i > 0:  # Add connection point from previous segment
+            prev_segment = segments[i-1]
             if len(prev_segment['x']) > 0:
                 segment_x.insert(0, prev_segment['x'][-1])
                 segment_y.insert(0, prev_segment['y'][-1])
         
-        if i < len(color_segments) - 1:  # Connect to next segment
-            next_segment = color_segments[i+1]
+        if i < len(segments) - 1:  # Add connection point to next segment
+            next_segment = segments[i+1]
             if len(next_segment['x']) > 0:
                 segment_x.append(next_segment['x'][0])
                 segment_y.append(next_segment['y'][0])
         
-        # Only show legend for first occurrence (V1/V2 approach)
-        show_legend = not legend_added[color_class]
-        legend_added[color_class] = True
+        # Get color info
+        color_info = color_map[current_type]
         
-        # Add line segment with exact V1/V2 styling
+        # Only show legend for the first occurrence of each type
+        show_legend = not legend_added[current_type]
+        legend_added[current_type] = True
+        
+        # Add line segment
         fig.add_trace(go.Scatter(
             x=segment_x,
             y=segment_y,
             mode='lines',
-            line=dict(color=color_class, width=2),  # Use color name directly like V1/V2
-            name=legend_names[color_class],
+            line=dict(color=color_info['color'], width=1),
+            name=color_info['name'],
+            opacity=0.8,
             showlegend=show_legend,
-            legendgroup=color_class,
-            connectgaps=True
+            legendgroup=current_type,
+            connectgaps=True  # Connect gaps within segments
         ))
+        
+        i += 1
     
     return fig
 
@@ -704,6 +718,33 @@ def _add_v3_peak_event_highlights(fig, df, power_col, target_kw, peak_events_lis
             legendgroup='offpeak_events',
             hoverinfo='skip'
         ))
+
+def _display_v3_peak_events_table(df_processed, power_col, target_kw, selected_tariff, holidays):
+    """
+    Display detailed peak events table using V1 reused function with lifted parameters.
+    """
+    # Calculate parameters needed for V1 function (lifting globals to parameters)
+    overall_max_demand = df_processed[power_col].max()
+    
+    # Calculate interval hours
+    if len(df_processed) > 1:
+        time_diff = df_processed.index[1] - df_processed.index[0]
+        interval_hours = time_diff.total_seconds() / 3600
+    else:
+        interval_hours = 0.25  # Default 15-minute intervals
+    
+    # Get MD rate from tariff
+    total_md_rate = get_tariff_md_rate_v3(selected_tariff) if selected_tariff else 30.0
+    
+    # Detect peak events using V1 function
+    event_summaries = _detect_peak_events(
+        df_processed, power_col, target_kw, total_md_rate, interval_hours, selected_tariff
+    )
+    
+    # Note: Peak events table and chart are now handled by _display_v3_peak_events_chart in _render_v3_analysis_infrastructure
+    if not event_summaries:
+        st.info("✅ No peak events detected above target demand!")
+
 
 def _display_v3_peak_events_analysis_summary(peak_events_list, tariff_analysis):
     """
