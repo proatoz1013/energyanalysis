@@ -324,15 +324,36 @@ def _calculate_v3_monthly_targets(df, power_col, base_target_kw, selected_tariff
     """
     Calculate monthly targets for V3 stepped target line.
     Creates month-specific targets based on monthly peak patterns and tariff type.
+    Ensures no gaps - populates every month between min/max timestamps.
     """
     monthly_targets = {}
     
     try:
-        # Group data by month and calculate monthly peaks
-        df_monthly = df.groupby(df.index.to_period('M'))
+        if df.empty:
+            return {}
+            
+        # Ensure timezone alignment with df.index
+        df_tz = df.copy()
+        if df.index.tz is None:
+            df_tz.index = pd.to_datetime(df.index)
         
-        for month_period, month_data in df_monthly:
-            if not month_data.empty:
+        # Get all months between min and max dates
+        min_date = df_tz.index.min()
+        max_date = df_tz.index.max()
+        all_months = pd.period_range(
+            start=min_date.to_period('M'),
+            end=max_date.to_period('M'),
+            freq='M'
+        )
+        
+        # Group data by month
+        df_monthly = df_tz.groupby(df_tz.index.to_period('M'))
+        
+        # Calculate targets for each month (including missing ones)
+        for month_period in all_months:
+            if month_period in df_monthly.groups:
+                month_data = df_monthly.get_group(month_period)
+                
                 # Calculate monthly peak based on tariff type
                 if selected_tariff:
                     tariff_type = selected_tariff.get('Type', '').lower()
@@ -350,17 +371,28 @@ def _calculate_v3_monthly_targets(df, power_col, base_target_kw, selected_tariff
                     monthly_peak = month_data[power_col].max()
                 
                 # Calculate target as percentage of monthly peak (default 90%)
-                # This creates varying targets that adapt to monthly demand patterns
                 target_percentage = 0.9  # 10% shaving
                 monthly_target = monthly_peak * target_percentage
                 
                 # Ensure target doesn't go below the base target (safety measure)
                 monthly_targets[month_period] = max(monthly_target, base_target_kw * 0.8)
+            else:
+                # Month has no data - use base target as fallback
+                monthly_targets[month_period] = base_target_kw
                 
         return monthly_targets
     except Exception as e:
-        # Return simple monthly targets if calculation fails
-        return {df.index[0].to_period('M'): base_target_kw} if len(df) > 0 else {}
+        # Return base target for all months if calculation fails
+        if not df.empty:
+            min_date = df.index.min()
+            max_date = df.index.max()
+            all_months = pd.period_range(
+                start=min_date.to_period('M'),
+                end=max_date.to_period('M'),
+                freq='M'
+            )
+            return {month_period: base_target_kw for month_period in all_months}
+        return {}
 
 def _calculate_monthly_tou_peak(month_data, power_col, holidays):
     """
@@ -379,6 +411,177 @@ def _calculate_monthly_tou_peak(month_data, power_col, holidays):
             tou_peak_data.append(row[power_col])
     
     return max(tou_peak_data) if tou_peak_data else month_data[power_col].max()
+
+def _create_per_timestamp_target_series(df, monthly_targets):
+    """
+    Create a pandas Series with per-timestamp targets aligned to df.index.
+    No NaNs - ensures every timestamp has a target value.
+    """
+    if not monthly_targets or df.empty:
+        return None
+    
+    # Create target series aligned to df index
+    target_series = pd.Series(index=df.index, dtype=float)
+    
+    # Map each timestamp to its monthly target
+    for timestamp in df.index:
+        month_period = timestamp.to_period('M')
+        
+        # Find target for this month (handle missing months with fallback)
+        if month_period in monthly_targets:
+            target_series.loc[timestamp] = monthly_targets[month_period]
+        else:
+            # Fallback to nearest available monthly target
+            available_periods = list(monthly_targets.keys())
+            if available_periods:
+                # Use the closest month's target
+                closest_period = min(available_periods, key=lambda x: abs((x.start_time - timestamp).days))
+                target_series.loc[timestamp] = monthly_targets[closest_period]
+            else:
+                # Ultimate fallback - should not happen with fixed _calculate_v3_monthly_targets
+                target_series.loc[timestamp] = 1000.0  # Safe default
+    
+    return target_series
+
+def create_conditional_demand_line_with_stepped_targets(fig, df, power_col, target_demand, selected_tariff=None, holidays=None, trace_name="Power Consumption"):
+    """
+    Enhanced version of V1 function that accepts either scalar or Series targets.
+    Creates continuous line segments with different colors based on per-timestamp targets.
+    
+    Args:
+        target_demand: Either a scalar value or a pandas Series aligned to df.index
+    """
+    # Convert index to datetime if it's not already
+    if not pd.api.types.is_datetime64_any_dtype(df.index):
+        df_copy = df.copy()
+        df_copy.index = pd.to_datetime(df.index)
+    else:
+        df_copy = df
+    
+    # Create a series with color classifications
+    df_copy = df_copy.copy()
+    df_copy['color_class'] = ''
+    
+    # Check if target_demand is a Series or scalar
+    is_target_series = isinstance(target_demand, pd.Series)
+    
+    for i in range(len(df_copy)):
+        timestamp = df_copy.index[i]
+        demand_value = df_copy.iloc[i][power_col]
+        
+        # Get the appropriate target for this timestamp
+        if is_target_series:
+            current_target = target_demand.loc[timestamp] if timestamp in target_demand.index else target_demand.iloc[0]
+        else:
+            current_target = target_demand
+        
+        # Get peak period classification based on selected tariff
+        if selected_tariff:
+            period_type = get_tariff_period_classification(timestamp, selected_tariff, holidays)
+        else:
+            # Fallback to default RP4 logic
+            period_type = get_period_classification(timestamp, holidays)
+        
+        if demand_value > current_target:
+            if period_type == 'Peak':
+                df_copy.iloc[i, df_copy.columns.get_loc('color_class')] = 'red'
+            else:
+                df_copy.iloc[i, df_copy.columns.get_loc('color_class')] = 'green'
+        else:
+            df_copy.iloc[i, df_copy.columns.get_loc('color_class')] = 'blue'
+    
+    # Create a single continuous line with color-coded segments
+    x_data = df_copy.index
+    y_data = df_copy[power_col]
+    colors = df_copy['color_class']
+    
+    # Track legend status
+    legend_added = {'red': False, 'green': False, 'blue': False}
+    
+    # Create continuous line segments by color groups with bridge points
+    i = 0
+    while i < len(df_copy):
+        current_color = colors.iloc[i]
+        
+        # Find the end of current color segment
+        j = i
+        while j < len(colors) and colors.iloc[j] == current_color:
+            j += 1
+        
+        # Extract segment data
+        segment_x = list(x_data[i:j])
+        segment_y = list(y_data[i:j])
+        
+        # Add bridge points for better continuity (connect to adjacent segments)
+        if i > 0:  # Add connection point from previous segment
+            segment_x.insert(0, x_data[i-1])
+            segment_y.insert(0, y_data[i-1])
+        
+        if j < len(colors):  # Add connection point to next segment
+            segment_x.append(x_data[j])
+            segment_y.append(y_data[j])
+        
+        # Determine trace name based on color and tariff type
+        tariff_description = _get_tariff_description(selected_tariff) if selected_tariff else "RP4 Peak Period"
+        
+        # Check if it's a TOU tariff for enhanced hover info
+        is_tou = False
+        if selected_tariff:
+            tariff_type = selected_tariff.get('Type', '').lower()
+            tariff_name = selected_tariff.get('Tariff', '').lower()
+            is_tou = tariff_type == 'tou' or 'tou' in tariff_name
+        
+        if current_color == 'red':
+            segment_name = f'{trace_name} (Above Target - {tariff_description})'
+            if is_tou:
+                hover_info = f'<b>Above Target - TOU Peak Rate Period</b><br><i>High Energy Cost + MD Cost Impact</i>'
+            else:
+                hover_info = f'<b>Above Target - General Tariff</b><br><i>MD Cost Impact Only (Flat Energy Rate)</i>'
+        elif current_color == 'green':
+            segment_name = f'{trace_name} (Above Target - Off-Peak)'
+            if is_tou:
+                hover_info = '<b>Above Target - TOU Off-Peak</b><br><i>Low Energy Cost, No MD Impact</i>'
+            else:
+                hover_info = '<b>Above Target - General Tariff</b><br><i>This should not appear for General tariffs</i>'
+        else:  # blue
+            segment_name = f'{trace_name} (Below Target)'
+            hover_info = '<b>Below Target</b><br><i>Within Acceptable Limits</i>'
+        
+        # Only show legend for the first occurrence of each color
+        show_legend = not legend_added[current_color]
+        legend_added[current_color] = True
+        
+        # Color mapping
+        color_map = {'red': 'red', 'green': 'green', 'blue': 'blue'}
+        
+        # Add the trace
+        fig.add_trace(go.Scatter(
+            x=segment_x,
+            y=segment_y,
+            mode='lines',
+            line=dict(color=color_map[current_color], width=2),
+            name=segment_name,
+            showlegend=show_legend,
+            legendgroup=current_color,
+            hovertemplate=f'{hover_info}<br>Time: %{{x}}<br>Power: %{{y:.1f}} kW<extra></extra>',
+        ))
+        
+        i = j
+    
+    return fig
+
+def _get_tariff_description(selected_tariff):
+    """Helper function to get tariff description for legend."""
+    if not selected_tariff:
+        return "RP4 Peak Period"
+    
+    tariff_type = selected_tariff.get('Type', '').lower()
+    tariff_name = selected_tariff.get('Tariff', '').lower()
+    
+    if tariff_type == 'tou' or 'tou' in tariff_name:
+        return "TOU Peak Period"
+    else:
+        return "General Tariff Peak"
 
 def _add_v3_stepped_target_line(fig, df, monthly_targets, selected_tariff):
     """
@@ -494,9 +697,21 @@ def _display_v3_peak_events_chart(df_processed, power_col, target_kw, selected_t
     # Calculate monthly targets for stepped target line
     monthly_targets = _calculate_v3_monthly_targets(df_processed, power_col, target_kw, selected_tariff, holidays)
     
+    # Create per-timestamp target series for enhanced coloring
+    target_series = _create_per_timestamp_target_series(df_processed, monthly_targets)
+    
     # Display monthly targets summary if available
     if monthly_targets and len(monthly_targets) > 1:
         _display_v3_monthly_targets_summary(monthly_targets, selected_tariff)
+        
+        # Log verification for acceptance checks
+        unique_months_in_data = len(df_processed.index.to_period('M').unique())
+        unique_months_in_targets = len(monthly_targets)
+        print(f"✅ Month verification: {unique_months_in_data} months in data, {unique_months_in_targets} targets calculated")
+        
+        if target_series is not None:
+            nan_count = target_series.isna().sum()
+            print(f"✅ Target series verification: {len(target_series)} values, {nan_count} NaNs")
     
     # Add stepped monthly target line first (before power consumption line)
     if monthly_targets:
@@ -511,14 +726,23 @@ def _display_v3_peak_events_chart(df_processed, power_col, target_kw, selected_t
             annotation_position="top right"
         )
     
-    # Create color-coded continuous line using V1 reused function
-    fig = create_conditional_demand_line_with_peak_logic(
-        fig, df_processed, power_col, target_kw, selected_tariff, holidays, "Power Consumption"
-    )
+    # Create color-coded continuous line using enhanced function with per-timestamp targets
+    if target_series is not None:
+        fig = create_conditional_demand_line_with_stepped_targets(
+            fig, df_processed, power_col, target_series, selected_tariff, holidays, "Power Consumption"
+        )
+    else:
+        # Fallback to original V1 function with scalar target
+        fig = create_conditional_demand_line_with_peak_logic(
+            fig, df_processed, power_col, target_kw, selected_tariff, holidays, "Power Consumption"
+        )
     
-    # Highlight individual peak events with filled areas
+    # Highlight individual peak events with filled areas using enhanced function
     if peak_events_list:
-        _add_v3_peak_event_highlights(fig, df_processed, power_col, target_kw, peak_events_list)
+        if target_series is not None:
+            _add_v3_peak_event_highlights(fig, df_processed, power_col, target_series, peak_events_list)
+        else:
+            _add_v3_peak_event_highlights(fig, df_processed, power_col, target_kw, peak_events_list)
     
     # Update layout with V3 styling
     fig.update_layout(
@@ -661,10 +885,17 @@ def _create_v3_conditional_demand_line(fig, df, power_col, monthly_targets, sele
     
     return fig
 
-def _add_v3_peak_event_highlights(fig, df, power_col, target_kw, peak_events_list):
+def _add_v3_peak_event_highlights(fig, df, power_col, target_demand, peak_events_list):
     """
     Add filled areas to highlight individual peak events.
+    Enhanced to accept either scalar or Series targets.
+    
+    Args:
+        target_demand: Either a scalar value or a pandas Series aligned to df.index
     """
+    # Check if target_demand is a Series or scalar
+    is_target_series = isinstance(target_demand, pd.Series)
+    
     # Group events by period type for better visualization
     peak_period_events = [e for e in peak_events_list if e['period'] == 'Peak']
     offpeak_period_events = [e for e in peak_events_list if e['period'] == 'Off-Peak']
@@ -674,13 +905,19 @@ def _add_v3_peak_event_highlights(fig, df, power_col, target_kw, peak_events_lis
         timestamp = event['timestamp']
         power_kw = event['power_kw']
         
+        # Get the appropriate target for this timestamp
+        if is_target_series:
+            current_target = target_demand.loc[timestamp] if timestamp in target_demand.index else target_demand.iloc[0]
+        else:
+            current_target = target_demand
+        
         # Create a small area around this event (± 15 minutes for visibility)
         start_time = timestamp - timedelta(minutes=7.5)
         end_time = timestamp + timedelta(minutes=7.5)
         
         # Create filled area
         x_coords = [start_time, end_time, end_time, start_time]
-        y_coords = [target_kw, target_kw, power_kw, power_kw]
+        y_coords = [current_target, current_target, power_kw, power_kw]
         
         fig.add_trace(go.Scatter(
             x=x_coords,
@@ -699,13 +936,19 @@ def _add_v3_peak_event_highlights(fig, df, power_col, target_kw, peak_events_lis
         timestamp = event['timestamp']
         power_kw = event['power_kw']
         
+        # Get the appropriate target for this timestamp
+        if is_target_series:
+            current_target = target_demand.loc[timestamp] if timestamp in target_demand.index else target_demand.iloc[0]
+        else:
+            current_target = target_demand
+        
         # Create a small area around this event
         start_time = timestamp - timedelta(minutes=7.5)
         end_time = timestamp + timedelta(minutes=7.5)
         
         # Create filled area
         x_coords = [start_time, end_time, end_time, start_time]
-        y_coords = [target_kw, target_kw, power_kw, power_kw]
+        y_coords = [current_target, current_target, power_kw, power_kw]
         
         fig.add_trace(go.Scatter(
             x=x_coords,
