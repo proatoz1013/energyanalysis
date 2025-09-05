@@ -385,10 +385,10 @@ def _calculate_v3_monthly_targets(df, power_col, base_target_kw, selected_tariff
                     monthly_peak = month_data[power_col].max()
                     
                 # Apply fallback chain if monthly_peak is None or NaN
-                if monthly_peak is None or pd.isna(monthly_peak) or not pd.isfinite(monthly_peak):
+                if monthly_peak is None or pd.isna(monthly_peak) or not np.isfinite(monthly_peak):
                     # Fallback A: Use same month's 24/7 peak
                     monthly_24_7_peak = month_data[power_col].max()
-                    if not pd.isna(monthly_24_7_peak) and pd.isfinite(monthly_24_7_peak):
+                    if not pd.isna(monthly_24_7_peak) and np.isfinite(monthly_24_7_peak):
                         monthly_peak = monthly_24_7_peak
                         fallback_logs.append(f"{month_period}: Fallback A - 24/7 peak")
                     else:
@@ -397,7 +397,7 @@ def _calculate_v3_monthly_targets(df, power_col, base_target_kw, selected_tariff
                         fallback_logs.append(f"{month_period}: Fallback B - neighbor needed")
                 
                 # Calculate monthly target if we have a valid peak
-                if monthly_peak is not None and pd.isfinite(monthly_peak):
+                if monthly_peak is not None and np.isfinite(monthly_peak):
                     monthly_target = monthly_peak * (1 - user_shave_pct/100)
                     monthly_targets[month_period] = monthly_target
                 else:
@@ -405,45 +405,35 @@ def _calculate_v3_monthly_targets(df, power_col, base_target_kw, selected_tariff
                     monthly_targets[month_period] = None
                     
             else:
-                # Month has no data - mark for neighbor fallback
+                # Month has no data - skip this month
                 monthly_targets[month_period] = None
-                fallback_logs.append(f"{month_period}: No data - neighbor needed")
+                fallback_logs.append(f"{month_period}: No data - skipping month")
         
-        # Handle Fallback B: Carry nearest neighbor month's target
-        sorted_months = sorted(all_months)
-        for i, month_period in enumerate(sorted_months):
-            if monthly_targets[month_period] is None:
-                # Try previous month first
-                neighbor_target = None
-                if i > 0 and monthly_targets[sorted_months[i-1]] is not None:
-                    neighbor_target = monthly_targets[sorted_months[i-1]]
-                    fallback_logs.append(f"{month_period}: Fallback B - used previous month")
-                # Try next month if previous not available
-                elif i < len(sorted_months)-1 and monthly_targets[sorted_months[i+1]] is not None:
-                    neighbor_target = monthly_targets[sorted_months[i+1]]
-                    fallback_logs.append(f"{month_period}: Fallback B - used next month")
-                
-                if neighbor_target is not None:
-                    monthly_targets[month_period] = neighbor_target
-                else:
-                    # Fallback C: Use global 24/7 peak scaled by user_shave_pct
-                    monthly_targets[month_period] = global_fallback_target
-                    fallback_logs.append(f"{month_period}: Fallback C - global peak")
+        # Handle Fallback A only: Skip Fallback B (neighbor) and C (global)
+        # Simply ignore NaN/None months instead of trying to fill them
+        final_monthly_targets = {}
         
-        # Final safety check: ensure no NaNs remain
-        nan_months = [(m, v) for m, v in monthly_targets.items() if v is None or pd.isna(v)]
-        if nan_months:
-            for month_period, _ in nan_months:
-                monthly_targets[month_period] = global_fallback_target
-                fallback_logs.append(f"{month_period}: Emergency fallback to global")
+        for month_period in all_months:
+            if monthly_targets.get(month_period) is not None:
+                target_value = monthly_targets[month_period]
+                if not pd.isna(target_value) and np.isfinite(target_value):
+                    final_monthly_targets[month_period] = target_value
+                    continue
+            
+            # If we reach here, the month has NaN/None/invalid target
+            # Skip this month entirely instead of using neighbor/global fallbacks
+            fallback_logs.append(f"{month_period}: Skipped - no valid monthly data (ignoring NaN)")
+        
+        # Update monthly_targets to only contain valid months
+        monthly_targets = final_monthly_targets
         
         # Integrity checks and logging
         expected_count = len(all_months)
         actual_count = len(monthly_targets)
-        nan_count = sum(1 for v in monthly_targets.values() if pd.isna(v))
+        skipped_count = expected_count - actual_count
         
-        print(f"✅ Month verification: {expected_count} months expected, {actual_count} targets calculated")
-        print(f"✅ NaN check: {actual_count} targets, {nan_count} NaNs (should be 0)")
+        print(f"✅ Month verification: {expected_count} months in data, {actual_count} targets calculated, {skipped_count} skipped")
+        print(f"✅ NaN check: {actual_count} targets, 0 NaNs (NaN months ignored)")
         
         if fallback_logs:
             print(f"📋 Fallback usage: {', '.join(fallback_logs)}")
@@ -665,7 +655,7 @@ def _get_tariff_description(selected_tariff):
 def _add_v3_stepped_target_line(fig, df, monthly_targets, selected_tariff):
     """
     Add truly stepped monthly target line to the figure.
-    Each month shows as a distinct horizontal step, not continuous.
+    Each month shows as a distinct horizontal step, with gaps allowed for missing months.
     """
     if not monthly_targets or df.empty:
         return
@@ -681,7 +671,15 @@ def _add_v3_stepped_target_line(fig, df, monthly_targets, selected_tariff):
     data_start = df.index.min()
     data_end = df.index.max()
     
+    # Get all possible months in the data range for gap detection
+    all_possible_months = pd.period_range(
+        start=data_start.to_period('M'),
+        end=data_end.to_period('M'),
+        freq='M'
+    )
+    
     # Create truly stepped line - each month gets its own horizontal segment
+    # Allow gaps for months that don't have valid targets
     for i, month_period in enumerate(sorted_months):
         target_value = monthly_targets[month_period]
         
@@ -691,18 +689,21 @@ def _add_v3_stepped_target_line(fig, df, monthly_targets, selected_tariff):
         
         # Only add points if this month intersects with our data range
         if month_start <= data_end and month_end >= data_start:
+            # If this is not the first valid month and there's a gap, add None to create a line break
+            if i > 0:
+                prev_month = sorted_months[i-1]
+                # Check if there are missing months between prev_month and current month_period
+                months_between = pd.period_range(start=prev_month, end=month_period, freq='M')
+                if len(months_between) > 2:  # More than just prev and current month
+                    # There's a gap - add None values to break the line
+                    target_line_timestamps.append(month_start)
+                    target_line_data.append(None)
+            
             # Add step: horizontal line for this month's target
             target_line_timestamps.append(month_start)
             target_line_data.append(target_value)
             target_line_timestamps.append(month_end)
             target_line_data.append(target_value)
-            
-            # Add vertical connection to next month's target (if not last month)
-            if i < len(sorted_months) - 1:
-                next_target = monthly_targets[sorted_months[i + 1]]
-                # Add vertical line from current target to next target
-                target_line_timestamps.append(month_end)
-                target_line_data.append(next_target)
             
             # Debug logging for April specifically
             if month_period.month == 4:  # April
@@ -727,10 +728,12 @@ def _add_v3_stepped_target_line(fig, df, monthly_targets, selected_tariff):
             name=legend_label,
             line=dict(color='red', width=2, dash='dash'),
             opacity=0.9,
-            showlegend=True
+            showlegend=True,
+            connectgaps=False  # Don't connect across None values (gaps)
         ))
         
-        print(f"✅ Stepped line added: {len(target_line_timestamps)} points covering {len(sorted_months)} months")
+        valid_months = len([v for v in target_line_data if v is not None])
+        print(f"✅ Stepped line added: {len(target_line_timestamps)} points covering {valid_months} valid months (gaps allowed)")
 
 def _display_v3_monthly_targets_summary(monthly_targets, selected_tariff):
     """
