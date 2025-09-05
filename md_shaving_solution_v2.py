@@ -2044,8 +2044,29 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                             single_event_energies.append(cluster_events['General Required Energy (kWh)'].max())
                     max_single_energy = max(single_event_energies) if single_event_energies else 0
                 
-                # Use the larger value for energy capacity recommendation
-                recommended_energy_capacity = max(max_cluster_energy, max_single_energy)
+                # Use the Max Monthly Required Energy from Section B2's monthly summary instead of clustering calculation
+                # This ensures consistency between Battery Sizing Analysis and Section B2
+                if 'monthly_summary_df' in locals() and not monthly_summary_df.empty:
+                    # Determine tariff type for column selection
+                    tariff_type = 'General'
+                    if selected_tariff:
+                        tariff_name = selected_tariff.get('Tariff', '').lower()
+                        tariff_type_field = selected_tariff.get('Type', '').lower()
+                        if 'tou' in tariff_name or 'tou' in tariff_type_field or tariff_type_field == 'tou':
+                            tariff_type = 'TOU'
+                    
+                    energy_col = f'{tariff_type} Required Energy (Max kWh)'
+                    if energy_col in monthly_summary_df.columns:
+                        recommended_energy_capacity = monthly_summary_df[energy_col].max()
+                        # Debug log to verify synchronization
+                        print(f"🔋 DEBUG - Using Max Monthly Required Energy from Section B2: {recommended_energy_capacity:.2f} kWh")
+                    else:
+                        # Fallback to clustering calculation if monthly summary doesn't have the column
+                        recommended_energy_capacity = max(max_cluster_energy, max_single_energy)
+                        print(f"🔋 DEBUG - Column '{energy_col}' not found, using clustering calculation: {recommended_energy_capacity:.2f} kWh")
+                else:
+                    # Fallback to clustering calculation if monthly summary is not available
+                    recommended_energy_capacity = max(max_cluster_energy, max_single_energy)
                 
                 # Calculate power requirements from TOU Excess
                 max_cluster_tou_excess = 0
@@ -2068,7 +2089,21 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                 # Fallback to original calculation method if clustering data not available
                 st.warning("⚠️ Using fallback calculation for battery capacity - clustering analysis data not available")
                 
+                # Try to use Max Monthly Required Energy from Section B2's monthly summary for consistency
                 recommended_energy_capacity = 0
+                if 'monthly_summary_df' in locals() and not monthly_summary_df.empty:
+                    # Determine tariff type for column selection
+                    tariff_type = 'General'
+                    if selected_tariff:
+                        tariff_name = selected_tariff.get('Tariff', '').lower()
+                        tariff_type_field = selected_tariff.get('Type', '').lower()
+                        if 'tou' in tariff_name or 'tou' in tariff_type_field or tariff_type_field == 'tou':
+                            tariff_type = 'TOU'
+                    
+                    energy_col = f'{tariff_type} Required Energy (Max kWh)'
+                    if energy_col in monthly_summary_df.columns:
+                        recommended_energy_capacity = monthly_summary_df[energy_col].max()
+                
                 max_power_shaving_required = 0
                 
                 if monthly_targets is not None and len(monthly_targets) > 0:
@@ -2087,144 +2122,29 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                 max_tou_excess_fallback = max([event.get('TOU Excess (kW)', 0) or 0 for event in all_monthly_events]) if 'all_monthly_events' in locals() and all_monthly_events else 0
                 max_power_shaving_required = max(max_power_shaving_required, max_tou_excess_fallback)
                 
-                # For fallback, use power shaving as energy capacity estimate
-                recommended_energy_capacity = max_power_shaving_required
+                # If monthly summary wasn't available, use power shaving as energy capacity estimate
+                if recommended_energy_capacity == 0:
+                    recommended_energy_capacity = max_power_shaving_required
             
             # Round up to nearest whole number for recommended capacity
             recommended_capacity_rounded = int(np.ceil(recommended_energy_capacity)) if recommended_energy_capacity > 0 else 0
             
-            # Display key metrics
+            # Display key metrics only
             col1, col2 = st.columns(2)
             
             with col1:
                 st.metric(
-                    "Max Power Shaving Required", 
+                    "Max Power Shaving Required",
                     f"{max_power_shaving_required:.1f} kW",
                     help="Maximum power reduction required based on TOU excess from clustering analysis"
                 )
             
             with col2:
                 st.metric(
-                    "Recommended Battery Capacity", 
-                    f"{recommended_capacity_rounded} kWh",
-                    help="Battery energy capacity based on maximum energy requirement from clustering analysis"
+                    "Max Required Energy",
+                    f"{recommended_energy_capacity:.1f} kWh", 
+                    help="Maximum monthly energy requirement from Section B2 monthly summary analysis"
                 )
-            
-            # Main recommendation
-            st.markdown("##### 💡 Battery Capacity Recommendation")
-            
-            if recommended_capacity_rounded > 0:
-                # Check which method was used for the recommendation
-                if ('clusters_df' in locals() and not clusters_df.empty and 
-                    'max_cluster_energy' in locals() and 'max_single_energy' in locals()):
-                    analysis_method = "enhanced clustering analysis"
-                    
-                    # Determine which source drove the energy capacity
-                    if recommended_energy_capacity == max_cluster_energy and max_cluster_energy > max_single_energy:
-                        energy_source = "multi-event cluster"
-                    else:
-                        energy_source = "single event"
-                    
-                    # Determine which source drove the power requirement
-                    if max_power_shaving_required == max_cluster_tou_excess and max_cluster_tou_excess > max_single_tou_excess:
-                        power_source = "multi-event cluster"
-                    else:
-                        power_source = "single event"
-                    
-                    rationale = f"Battery capacity (kWh) is based on the maximum energy requirement from {energy_source} analysis ({recommended_energy_capacity:.1f} kWh). Power shaving requirement is {max_power_shaving_required:.1f} kW from {power_source} analysis."
-                else:
-                    analysis_method = "standard peak events analysis"
-                    rationale = "Battery capacity (kWh) is set to match the maximum power requirement to ensure complete peak shaving capability."
-                
-                st.success(f"""
-                **Recommended Battery Capacity: {recommended_capacity_rounded} kWh**
-                
-                This recommendation is based on the maximum TOU Excess of {recommended_energy_capacity:.1f} kW from the {analysis_method}.
-                
-                **Rationale**: {rationale}
-                """)
-                
-                # Load battery database to show matching options
-                battery_db = load_vendor_battery_database()
-                if battery_db:
-                    matching_batteries = get_battery_options_for_capacity(battery_db, recommended_capacity_rounded, tolerance=20)
-                    
-                    if matching_batteries:
-                        st.markdown("##### 🏭 Available Battery Options")
-                        st.info(f"Found {len(matching_batteries)} battery options within ±20 kWh of recommended capacity:")
-                        
-                        for i, battery in enumerate(matching_batteries[:5]):  # Show top 5 matches
-                            spec = battery['spec']
-                            st.markdown(f"""
-                            **{spec.get('manufacturer', 'Unknown')} - {spec.get('model', battery['id'])}**
-                            - Capacity: {battery['capacity_kwh']} kWh
-                            - Power: {battery['power_kw']} kW  
-                            - C-Rate: {battery['c_rate']}C
-                            """)
-                    else:
-                        st.warning("No matching batteries found in database for the recommended capacity.")
-            else:
-                st.info("No peak events detected - battery may not be required with current target settings.")
-            
-            # Create comprehensive battery unit calculation
-            if recommended_capacity_rounded > 0:
-                st.markdown("##### 🔋 Battery Unit Requirements")
-                
-                # Load battery database for unit calculations
-                battery_db = load_vendor_battery_database()
-                if battery_db and matching_batteries:
-                    st.markdown("**Battery Units Required for Each Option:**")
-                    
-                    # Create calculation table for each battery option
-                    unit_calculations = []
-                    
-                    for i, battery in enumerate(matching_batteries[:5]):  # Show top 5 matches
-                        spec = battery['spec']
-                        battery_capacity_kwh = battery['capacity_kwh']
-                        battery_power_kw = battery['power_kw']
-                        
-                        # Calculate units required based on energy capacity
-                        units_for_energy = int(np.ceil(recommended_capacity_rounded / battery_capacity_kwh)) if battery_capacity_kwh > 0 else 0
-                        
-                        # Calculate units required based on power requirement
-                        units_for_power = int(np.ceil(max_power_shaving_required / battery_power_kw)) if battery_power_kw > 0 else 0
-                        
-                        # Total units required (higher of the two)
-                        total_units_required = max(units_for_energy, units_for_power)
-                        
-                        # Calculate total system specifications
-                        total_system_capacity = total_units_required * battery_capacity_kwh
-                        total_system_power = total_units_required * battery_power_kw
-                        
-                        # Determine limiting factor
-                        limiting_factor = "Energy" if units_for_energy >= units_for_power else "Power"
-                        
-                        unit_calculations.append({
-                            'Battery Model': f"{spec.get('manufacturer', 'Unknown')} - {spec.get('model', battery['id'])}",
-                            'Unit Specs': f"{battery_capacity_kwh} kWh / {battery_power_kw} kW",
-                            'Units for Energy': f"{units_for_energy} units",
-                            'Units for Power': f"{units_for_power} units", 
-                            'Total Units Required': f"{total_units_required} units",
-                            'Limiting Factor': limiting_factor,
-                            'Total System Capacity': f"{total_system_capacity:.1f} kWh",
-                            'Total System Power': f"{total_system_power:.1f} kW"
-                        })
-                    
-                    # Display the unit calculations table
-                    df_units = pd.DataFrame(unit_calculations)
-                    st.dataframe(df_units, use_container_width=True, hide_index=True)
-                    
-                    # Explanation of calculations
-                    st.info(f"""
-                    **Unit Calculation Methodology:**
-                    - **Energy-based units**: {recommended_capacity_rounded} kWh ÷ Battery Capacity (kWh/unit)
-                    - **Power-based units**: {max_power_shaving_required:.1f} kW ÷ Battery Power (kW/unit)
-                    - **Total units**: Higher of energy-based or power-based requirement
-                    - **Limiting factor**: Whether energy capacity or power capability drives the unit count
-                    """)
-                    
-                else:
-                    st.warning("⚠️ Battery database not available or no matching batteries found for unit calculations")
         
         # Battery Impact Analysis Section moved to separate function
         
