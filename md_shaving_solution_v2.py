@@ -31,7 +31,9 @@ from md_shaving_solution import (
     create_conditional_demand_line_with_peak_logic,
     _detect_peak_events,
     _display_battery_simulation_chart,
-    _simulate_battery_operation
+    _simulate_battery_operation,
+    get_tariff_period_classification,
+    _get_tariff_description
 )
 from tariffs.peak_logic import is_peak_rp4
 
@@ -2499,12 +2501,13 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                     except Exception:
                         pass
                     
-                    st.info(f"🔧 Using {interval_hours*60:.0f}-minute intervals for battery simulation")
+                    st.info(f"🔧 Using {interval_hours*60:.0f}-minute intervals for V2 battery simulation")
                     
-                    simulation_results = _simulate_battery_operation(
+                    # V2 ENHANCEMENT: Use monthly targets instead of static target
+                    simulation_results = _simulate_battery_operation_v2(
                         df_for_v1,                     # DataFrame with demand data
                         power_col,                     # Column name containing power demand
-                        target_demand_for_sim,         # Target demand value
+                        monthly_targets,               # V2: Dynamic monthly targets instead of static target
                         battery_sizing,                # Battery sizing dictionary
                         battery_params,                # Battery parameters dictionary  
                         interval_hours,                # Interval length in hours
@@ -2514,7 +2517,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                     
                     # === STEP 5: Display results and metrics ===
                     if simulation_results and 'df_simulation' in simulation_results:
-                        st.success("✅ Battery simulation completed successfully!")
+                        st.success("✅ V2 Battery simulation with monthly targets completed successfully!")
                         
                         # Show key simulation metrics
                         col1, col2, col3, col4 = st.columns(4)
@@ -2522,7 +2525,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                         with col1:
                             st.metric(
                                 "Peak Reduction", 
-                                f"{simulation_results.get('peak_reduction_kw', 0):.1f} kW",
+                                f"{simulation_results.get('peak_reduction_kw', 0): .1f} kW",
                                 help="Maximum demand reduction achieved"
                             )
                         
@@ -3742,12 +3745,10 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
         yaxis='y2'
     ))
     
-    # Add enhanced conditional coloring for Original Demand line LAST so it renders on top
-    # For V2, use average monthly target for conditional coloring logic
-    avg_monthly_target = target_series.mean() if len(target_series) > 0 else df_sim['Original_Demand'].quantile(0.9)
-    
-    fig = create_conditional_demand_line_with_peak_logic(
-        fig, df_sim, 'Original_Demand', avg_monthly_target, selected_tariff, holidays, "Original Demand"
+    # V2 ENHANCEMENT: Add dynamic conditional coloring using monthly targets instead of static average
+    # This replaces the V1 averaging approach with dynamic monthly target-based coloring
+    fig = _create_v2_conditional_demand_line_with_dynamic_targets(
+        fig, df_sim, 'Original_Demand', target_series, selected_tariff, holidays, "Original Demand"
     )
     
     # Compute symmetric range for y2 to show positive/negative bars
@@ -3776,6 +3777,16 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
     )
     
     st.plotly_chart(fig, use_container_width=True)
+    
+    # V2 ENHANCEMENT INFO: Add explanation about dynamic color coding
+    st.info("""
+    🆕 **V2 Color Coding Enhancement**: The colored line segments now use **dynamic monthly targets** instead of a static average target.
+    - **Blue segments**: Below monthly target (acceptable levels)
+    - **Green segments**: Above monthly target during off-peak periods (energy cost only)
+    - **Red segments**: Above monthly target during peak periods (energy + MD cost impact)
+    
+    This provides more accurate visual feedback about when intervention is needed based on realistic monthly billing patterns.
+    """)
     
     # Panel 2: Combined SOC and Battery Power Chart (same as V1)
     st.markdown("##### 2️⃣ Combined SOC and Battery Power Chart")
@@ -4181,6 +4192,7 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
     # Add insight about V2 methodology
     if len(monthly_targets) > 0:
         insights.append(f"📊 **V2 Innovation**: Analysis uses {len(monthly_targets)} dynamic monthly targets vs traditional static targets for superior accuracy")
+        insights.append(f"🎨 **V2 Color Enhancement**: Line color coding now reflects dynamic monthly targets instead of static averaging - providing month-specific intervention guidance")
     
     if not insights:
         insights.append("✅ **Optimal V2 Performance**: Battery system operating within acceptable parameters with monthly targets")
@@ -4248,6 +4260,441 @@ def _get_monthly_target_for_date(date, monthly_targets):
     else:
         # Fallback: use the first available target
         if len(monthly_targets) > 0:
-            return monthly_targets.iloc[0]
+            return monthly_targets.iloc(0)
         else:
             return 1000.0  # Safe fallback
+
+
+def _create_v2_conditional_demand_line_with_dynamic_targets(fig, df, power_col, target_series, selected_tariff=None, holidays=None, trace_name="Original Demand"):
+    """
+    V2 ENHANCEMENT: Enhanced conditional coloring logic for Original Demand line with DYNAMIC monthly targets.
+    Creates continuous line segments with different colors based on monthly target conditions.
+    
+    Key V2 Innovation: Uses dynamic monthly targets instead of static averaging for color decisions.
+    
+    Color Logic:
+    - Red: Above monthly target during Peak Periods (based on selected tariff) - Direct MD cost impact
+    - Green: Above monthly target during Off-Peak Periods - No MD cost impact  
+    - Blue: Below monthly target (any time) - Within acceptable limits
+    
+    Args:
+        fig: Plotly figure to add traces to
+        df: Simulation dataframe
+        power_col: Power column name
+        target_series: V2's dynamic monthly target series (same index as df)
+        selected_tariff: Tariff configuration for period classification
+        holidays: Set of holiday dates
+        trace_name: Name for the trace
+        
+    Returns:
+        Modified plotly figure with colored demand line segments
+    """
+    from tariffs.peak_logic import is_peak_rp4, get_period_classification
+    
+    # Validate inputs
+    if target_series is None or len(target_series) == 0:
+        st.warning("⚠️ V2 Dynamic Coloring: target_series is empty, falling back to single average")
+        # Fallback to V1 approach with average target
+        avg_target = df[power_col].quantile(0.9)
+        return create_conditional_demand_line_with_peak_logic(fig, df, power_col, avg_target, selected_tariff, holidays, trace_name)
+    
+    # Convert index to datetime if it's not already
+    if not pd.api.types.is_datetime64_any_dtype(df.index):
+        df_copy = df.copy()
+        df_copy.index = pd.to_datetime(df.index)
+    else:
+        df_copy = df
+    
+    # Create a series with color classifications using DYNAMIC monthly targets
+    df_copy = df_copy.copy()
+    df_copy['color_class'] = ''
+    
+    for i in range(len(df_copy)):
+        timestamp = df_copy.index[i]
+        demand_value = df_copy.iloc[i][power_col]
+        
+        # V2 ENHANCEMENT: Get DYNAMIC monthly target for this specific timestamp
+        if timestamp in target_series.index:
+            current_target = target_series.loc[timestamp]
+        else:
+            # Fallback to closest available target
+            month_period = timestamp.to_period('M')
+            available_periods = [t.to_period('M') for t in target_series.index if not pd.isna(target_series.loc[t])]
+            if available_periods:
+                closest_period_timestamp = min(target_series.index, 
+                                             key=lambda t: abs((timestamp - t).total_seconds()))
+                current_target = target_series.loc[closest_period_timestamp]
+            else:
+                current_target = df[power_col].quantile(0.9)  # Safe fallback
+        
+        # Get peak period classification based on selected tariff
+        if selected_tariff:
+            try:
+                period_type = get_tariff_period_classification(timestamp, selected_tariff, holidays)
+            except:
+                period_type = get_period_classification(timestamp, holidays)
+        else:
+            # Fallback to default RP4 logic
+            try:
+                period_type = get_period_classification(timestamp, holidays)
+            except:
+                # Ultimate fallback - simple hour-based check
+                if timestamp.weekday() < 5 and 14 <= timestamp.hour < 22:
+                    period_type = 'Peak'
+                else:
+                    period_type = 'Off-Peak'
+        
+        # V2 LOGIC: Color classification using dynamic monthly target
+        if demand_value > current_target:
+            if period_type == 'Peak':
+                df_copy.iloc[i, df_copy.columns.get_loc('color_class')] = 'red'
+            else:
+                df_copy.iloc[i, df_copy.columns.get_loc('color_class')] = 'green'
+        else:
+            df_copy.iloc[i, df_copy.columns.get_loc('color_class')] = 'blue'
+    
+    # Create continuous line segments with color-coded segments
+    x_data = df_copy.index
+    y_data = df_copy[power_col]
+    colors = df_copy['color_class']
+    
+    # Track legend status
+    legend_added = {'red': False, 'green': False, 'blue': False}
+    
+    # Create continuous line segments by color groups with bridge points
+    i = 0
+    while i < len(df_copy):
+        current_color = colors.iloc[i]
+        
+        # Find the end of current color segment
+        j = i
+        while j < len(colors) and colors.iloc[j] == current_color:
+            j += 1
+        
+        # Extract segment data
+        segment_x = list(x_data[i:j])
+        segment_y = list(y_data[i:j])
+        
+        # Add bridge points for better continuity (connect to adjacent segments)
+        if i > 0:  # Add connection point from previous segment
+            segment_x.insert(0, x_data[i-1])
+            segment_y.insert(0, y_data[i-1])
+        
+        if j < len(colors):  # Add connection point to next segment
+            segment_x.append(x_data[j])
+            segment_y.append(y_data[j])
+        
+        # Determine trace name based on color and tariff type
+        tariff_description = _get_tariff_description(selected_tariff) if selected_tariff else "RP4 Peak Period"
+        
+        # Check if it's a TOU tariff for enhanced hover info
+        is_tou = False
+        if selected_tariff:
+            tariff_type = selected_tariff.get('Type', '').lower()
+            tariff_name = selected_tariff.get('Tariff', '').lower()
+            is_tou = tariff_type == 'tou' or 'tou' in tariff_name
+        
+        if current_color == 'red':
+            segment_name = f'{trace_name} (Above Target - {tariff_description})'
+            if is_tou:
+                hover_info = f'<b>Above Monthly Target - TOU Peak Rate Period</b><br><i>High Energy Cost + MD Cost Impact</i><br><i>Using V2 Dynamic Monthly Targets</i>'
+            else:
+                hover_info = f'<b>Above Monthly Target - General Tariff</b><br><i>MD Cost Impact Only (Flat Energy Rate)</i><br><i>Using V2 Dynamic Monthly Targets</i>'
+        elif current_color == 'green':
+            segment_name = f'{trace_name} (Above Target - Off-Peak)'
+            if is_tou:
+                hover_info = '<b>Above Monthly Target - TOU Off-Peak</b><br><i>Low Energy Cost, No MD Impact</i><br><i>Using V2 Dynamic Monthly Targets</i>'
+            else:
+                hover_info = '<b>Above Monthly Target - General Tariff</b><br><i>This should not appear for General tariffs</i><br><i>Using V2 Dynamic Monthly Targets</i>'
+        else:  # blue
+            segment_name = f'{trace_name} (Below Target)'
+            hover_info = '<b>Below Monthly Target</b><br><i>Within Acceptable Limits</i><br><i>Using V2 Dynamic Monthly Targets</i>'
+        
+        # Only show legend for the first occurrence of each color
+        show_legend = not legend_added[current_color]
+        legend_added[current_color] = True
+        
+        # Add line segment
+        fig.add_trace(go.Scatter(
+            x=segment_x,
+            y=segment_y,
+            mode='lines',
+            line=dict(color=current_color, width=2),
+            name=segment_name,
+            hovertemplate=f'{trace_name}: %{{y:.2f}} kW<br>%{{x}}<br>{hover_info}<extra></extra>',
+            showlegend=show_legend,
+            legendgroup=current_color,
+            connectgaps=True  # Connect gaps within segments
+        ))
+        
+        i = j
+    
+    return fig
+
+
+def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizing, battery_params, interval_hours, selected_tariff=None, holidays=None):
+    """
+    V2-specific battery simulation that ensures Net Demand NEVER goes below monthly targets.
+    
+    Key V2 Innovation: Monthly targets act as FLOOR values for Net Demand.
+    - Net Demand must stay ABOVE or EQUAL to the monthly target at all times
+    - Battery discharge is limited to keep Net Demand >= Monthly Target
+    - Uses dynamic monthly targets instead of static target
+    
+    Args:
+        df: Energy data DataFrame with datetime index
+        power_col: Name of power demand column
+        monthly_targets: Series with Period index containing monthly targets
+        battery_sizing: Dictionary with capacity_kwh, power_rating_kw
+        battery_params: Dictionary with efficiency, depth_of_discharge
+        interval_hours: Time interval in hours (e.g., 0.25 for 15-min)
+        selected_tariff: Tariff configuration
+        holidays: Set of holiday dates
+        
+    Returns:
+        Dictionary with simulation results and V2-specific metrics
+    """
+    import numpy as np
+    import pandas as pd
+    
+    # Create simulation dataframe
+    df_sim = df[[power_col]].copy()
+    df_sim['Original_Demand'] = df_sim[power_col]
+    
+    # V2 ENHANCEMENT: Create dynamic monthly target series for each timestamp
+    target_series = _create_v2_dynamic_target_series(df_sim.index, monthly_targets)
+    df_sim['Monthly_Target'] = target_series
+    df_sim['Excess_Demand'] = (df_sim[power_col] - df_sim['Monthly_Target']).clip(lower=0)
+    
+    # Battery state variables
+    battery_capacity = battery_sizing['capacity_kwh']
+    usable_capacity = battery_capacity * (battery_params['depth_of_discharge'] / 100)
+    max_power = battery_sizing['power_rating_kw']
+    efficiency = battery_params['round_trip_efficiency'] / 100
+    
+    # Initialize battery state
+    soc = np.zeros(len(df_sim))  # State of Charge in kWh
+    soc_percent = np.zeros(len(df_sim))  # SOC as percentage
+    battery_power = np.zeros(len(df_sim))  # Positive = discharge, Negative = charge
+    net_demand = df_sim[power_col].copy()
+    
+    # V2 SIMULATION LOOP - Monthly Target Floor Implementation
+    for i in range(len(df_sim)):
+        current_demand = df_sim[power_col].iloc[i]
+        monthly_target = df_sim['Monthly_Target'].iloc[i]
+        excess = max(0, current_demand - monthly_target)
+        current_timestamp = df_sim.index[i]
+        
+        # Determine if discharge is allowed based on tariff type
+        should_discharge = excess > 0
+        
+        if selected_tariff and should_discharge:
+            # Apply TOU logic for discharge decisions
+            tariff_type = selected_tariff.get('Type', '').lower()
+            tariff_name = selected_tariff.get('Tariff', '').lower()
+            is_tou_tariff = tariff_type == 'tou' or 'tou' in tariff_name
+            
+            if is_tou_tariff:
+                # TOU tariffs: Only discharge during peak periods (2PM-10PM weekdays)
+                period_classification = get_tariff_period_classification(current_timestamp, selected_tariff, holidays)
+                should_discharge = (excess > 0) and (period_classification == 'Peak')
+            # For General tariffs, discharge anytime above target (original behavior)
+        
+        if should_discharge:  # V2 DISCHARGE LOGIC - Monthly Target Floor
+            # V2 CRITICAL CONSTRAINT: Calculate maximum discharge that keeps Net Demand >= Monthly Target
+            max_allowable_discharge = current_demand - monthly_target
+            
+            # Calculate required discharge power (limited by monthly target floor)
+            required_discharge = min(max_allowable_discharge, max_power)
+            
+            # Check if battery has enough energy
+            available_energy = soc[i-1] if i > 0 else usable_capacity * 0.8  # Start at 80% SOC
+            max_discharge_energy = available_energy
+            max_discharge_power = min(max_discharge_energy / interval_hours, required_discharge)
+            
+            actual_discharge = max_discharge_power
+            battery_power[i] = actual_discharge
+            soc[i] = (soc[i-1] if i > 0 else usable_capacity * 0.8) - actual_discharge * interval_hours
+            
+            # V2 GUARANTEE: Net Demand = Original Demand - Discharge, but NEVER below Monthly Target
+            net_demand_candidate = current_demand - actual_discharge
+            net_demand.iloc[i] = max(net_demand_candidate, monthly_target)
+            
+        else:  # Can charge battery if there's room and low demand
+            if i > 0:
+                soc[i] = soc[i-1]
+            else:
+                soc[i] = usable_capacity * 0.8
+            
+            # Enhanced charging logic with better conditions and SOC awareness
+            current_time = df_sim.index[i]
+            hour = current_time.hour
+            soc_percentage = (soc[i] / usable_capacity) * 100
+            
+            # Calculate dynamic demand thresholds based on recent patterns
+            lookback_periods = min(96, len(df_sim))  # 24 hours of 15-min data or available
+            start_idx = max(0, i - lookback_periods)
+            recent_demand = df_sim[power_col].iloc[start_idx:i+1]
+            
+            if len(recent_demand) > 0:
+                avg_demand = recent_demand.mean()
+                demand_25th = recent_demand.quantile(0.25)
+            else:
+                avg_demand = df_sim[power_col].mean()
+                demand_25th = avg_demand * 0.6
+            
+            # Determine charging conditions based on SOC level and time
+            should_charge = False
+            charge_rate_factor = 0.3  # Default conservative rate
+            
+            # Critical SOC - charge aggressively
+            if soc_percentage < 30:
+                should_charge = current_demand < avg_demand * 0.9  # Lenient threshold
+                charge_rate_factor = 0.8  # Higher charge rate
+            # Low SOC - moderate charging
+            elif soc_percentage < 60:
+                if hour >= 22 or hour < 8:  # Off-peak hours
+                    should_charge = current_demand < avg_demand * 0.8
+                    charge_rate_factor = 0.6
+                else:  # Peak hours - more selective
+                    should_charge = current_demand < demand_25th * 1.2
+                    charge_rate_factor = 0.4
+            # Normal SOC - conservative charging
+            elif soc_percentage < 90:  # Increased from 90% (was implicit at 95%)
+                if hour >= 22 or hour < 8:  # Off-peak hours
+                    should_charge = current_demand < avg_demand * 0.7
+                    charge_rate_factor = 0.5
+                else:  # Peak hours - very selective
+                    should_charge = current_demand < demand_25th
+                    charge_rate_factor = 0.3
+            
+            # Execute charging if conditions are met
+            if should_charge and soc[i] < usable_capacity * 0.95:
+                # Calculate charge power with improved logic
+                remaining_capacity = usable_capacity * 0.95 - soc[i]
+                max_charge_energy = remaining_capacity / efficiency
+                
+                charge_power = min(
+                    max_power * charge_rate_factor,  # Dynamic charging rate
+                    max_charge_energy / interval_hours,  # Energy constraint
+                    remaining_capacity / interval_hours / efficiency  # Don't exceed 95% SOC
+                )
+                
+                # Apply charging
+                battery_power[i] = -charge_power  # Negative for charging
+                soc[i] = soc[i] + charge_power * interval_hours * efficiency
+                net_demand.iloc[i] = current_demand + charge_power
+        
+        # Ensure SOC stays within limits
+        soc[i] = max(0, min(soc[i], usable_capacity))
+        soc_percent[i] = (soc[i] / usable_capacity) * 100
+    
+    # Add V2 simulation results to dataframe
+    df_sim['Battery_Power_kW'] = battery_power
+    df_sim['Battery_SOC_kWh'] = soc
+    df_sim['Battery_SOC_Percent'] = soc_percent
+    df_sim['Net_Demand_kW'] = net_demand
+    df_sim['Peak_Shaved'] = df_sim['Original_Demand'] - df_sim['Net_Demand_kW']
+    
+    # V2 VALIDATION: Ensure Net Demand never goes below monthly targets
+    violations = df_sim[df_sim['Net_Demand_kW'] < df_sim['Monthly_Target']]
+    if len(violations) > 0:
+        st.warning(f"⚠️ V2 Constraint Violation: {len(violations)} intervals where Net Demand < Monthly Target detected!")
+    
+    # Calculate V2 performance metrics
+    total_energy_discharged = sum([p * interval_hours for p in battery_power if p > 0])
+    total_energy_charged = sum([abs(p) * interval_hours for p in battery_power if p < 0])
+    
+    # V2 Peak reduction using monthly targets (not static)
+    df_md_peak_for_reduction = df_sim[df_sim.index.to_series().apply(lambda ts: ts.weekday() < 5 and 14 <= ts.hour < 22)]
+    
+    if len(df_md_peak_for_reduction) > 0:
+        # V2 CALCULATION: Peak reduction against monthly targets
+        daily_reduction_analysis = df_md_peak_for_reduction.groupby(df_md_peak_for_reduction.index.date).agg({
+            'Original_Demand': 'max',
+            'Net_Demand_kW': 'max',
+            'Monthly_Target': 'first'  # V2: Get monthly target for each day
+        }).reset_index()
+        daily_reduction_analysis.columns = ['Date', 'Original_Peak_MD', 'Net_Peak_MD', 'Monthly_Target']
+        
+        # V2 Peak reduction: Original - Net (with monthly target context)
+        daily_reduction_analysis['Peak_Reduction'] = daily_reduction_analysis['Original_Peak_MD'] - daily_reduction_analysis['Net_Peak_MD']
+        peak_reduction = daily_reduction_analysis['Peak_Reduction'].max()
+    else:
+        # Fallback calculation
+        peak_reduction = df_sim['Original_Demand'].max() - df_sim['Net_Demand_kW'].max()
+    
+    # V2 MD-focused success rate using dynamic monthly targets
+    df_md_peak = df_sim[df_sim.index.to_series().apply(lambda ts: ts.weekday() < 5 and 14 <= ts.hour < 22)]
+    
+    # Store V2 debug information
+    debug_info = {
+        'total_points': len(df_sim),
+        'md_peak_points': len(df_md_peak),
+        'monthly_targets_used': len(monthly_targets),
+        'constraint_violations': len(violations),
+        'sample_timestamps': df_sim.index[:3].tolist() if len(df_sim) > 0 else [],
+        'v2_methodology': 'Monthly targets as floor constraints'
+    }
+    
+    if len(df_md_peak) > 0:
+        # V2 SUCCESS CALCULATION: Using monthly targets instead of static target
+        daily_md_analysis = df_md_peak.groupby(df_md_peak.index.date).agg({
+            'Original_Demand': 'max',
+            'Net_Demand_kW': 'max',
+            'Monthly_Target': 'first'
+        }).reset_index()
+        daily_md_analysis.columns = ['Date', 'Original_Peak_MD', 'Net_Peak_MD', 'Monthly_Target']
+        
+        # V2 SUCCESS CRITERIA: Net Peak <= Monthly Target (not static target)
+        daily_md_analysis['Success'] = daily_md_analysis['Net_Peak_MD'] <= daily_md_analysis['Monthly_Target'] * 1.05  # 5% tolerance
+        
+        successful_days = sum(daily_md_analysis['Success'])
+        total_days = len(daily_md_analysis)
+        success_rate = (successful_days / total_days * 100) if total_days > 0 else 0
+        md_focused_calculation = True
+        
+        # Store V2 debug info
+        debug_info['md_calculation_details'] = {
+            'successful_days': successful_days,
+            'total_days': total_days,
+            'calculation_method': 'V2 MD-focused with dynamic monthly targets'
+        }
+    else:
+        # Fallback success calculation
+        successful_shaves = len(df_sim[
+            (df_sim['Original_Demand'] > df_sim['Monthly_Target']) & 
+            (df_sim['Net_Demand_kW'] <= df_sim['Monthly_Target'] * 1.05)
+        ])
+        
+        total_peak_events = len(df_sim[df_sim['Original_Demand'] > df_sim['Monthly_Target']])
+        success_rate = (successful_shaves / total_peak_events * 100) if total_peak_events > 0 else 0
+        successful_days = successful_shaves
+        total_days = total_peak_events
+        md_focused_calculation = False
+        
+        debug_info['md_calculation_details'] = {
+            'successful_intervals': successful_shaves,
+            'total_intervals': total_peak_events,
+            'calculation_method': 'V2 Fallback with monthly targets'
+        }
+    
+    # V2 RETURN RESULTS with monthly target context
+    return {
+        'df_simulation': df_sim,
+        'total_energy_discharged': total_energy_discharged,
+        'total_energy_charged': total_energy_charged,
+        'peak_reduction_kw': peak_reduction,
+        'success_rate_percent': success_rate,
+        'successful_shaves': successful_days,
+        'total_peak_events': total_days,
+        'average_soc': np.mean(soc_percent),
+        'min_soc': np.min(soc_percent),
+        'max_soc': np.max(soc_percent),
+        'md_focused_calculation': md_focused_calculation,
+        'v2_constraint_violations': len(violations),
+        'monthly_targets_count': len(monthly_targets),
+        'debug_info': debug_info
+    }
+
+# ...existing code...
