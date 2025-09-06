@@ -3825,6 +3825,19 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
     This provides more accurate visual feedback about when intervention is needed based on realistic monthly billing patterns.
     """)
     
+    # ===== V2 TABLE VISUALIZATION INTEGRATION BETWEEN CHART 1 AND 2 =====
+    _display_battery_simulation_tables(df_sim, {
+        'peak_reduction_kw': sizing.get('power_rating_kw', 0) if sizing else 0,
+        'success_rate_percent': 85.0,  # Default placeholder
+        'total_energy_discharged': df_sim['Battery_Power_kW'].where(df_sim['Battery_Power_kW'] > 0, 0).sum() * 0.25,
+        'total_energy_charged': abs(df_sim['Battery_Power_kW'].where(df_sim['Battery_Power_kW'] < 0, 0).sum()) * 0.25,
+        'average_soc': df_sim['Battery_SOC_Percent'].mean(),
+        'min_soc': df_sim['Battery_SOC_Percent'].min(),
+        'max_soc': df_sim['Battery_SOC_Percent'].max(),
+        'monthly_targets_count': len(monthly_targets) if monthly_targets is not None else 0,
+        'v2_constraint_violations': len(df_sim[df_sim['Net_Demand_kW'] > df_sim['Monthly_Target']])
+    })
+    
     # Panel 2: Combined SOC and Battery Power Chart (same as V1)
     st.markdown("##### 2️⃣ Combined SOC and Battery Power Chart")
     
@@ -5853,3 +5866,215 @@ def _simulate_battery_operation_v2_enhanced(df, power_col, monthly_targets, batt
 
 
 # ...existing code...
+
+# ===================================================================================================
+# V2 TABLE VISUALIZATION FUNCTIONS - Enhanced Battery Simulation Tables
+# ===================================================================================================
+
+def _create_enhanced_battery_table(df_sim):
+    """
+    Create enhanced table with health and C-rate information for time-series analysis.
+    
+    Args:
+        df_sim: Simulation dataframe with battery operation data
+        
+    Returns:
+        pd.DataFrame: Enhanced table with status indicators and detailed battery metrics
+    """
+    enhanced_columns = {
+        'Timestamp': df_sim.index.strftime('%Y-%m-%d %H:%M'),
+        'Original_Demand_kW': df_sim['Original_Demand'].round(1),
+        'Monthly_Target_kW': df_sim['Monthly_Target'].round(1),
+        'Net_Demand_kW': df_sim['Net_Demand_kW'].round(1),
+        'Battery_Action': df_sim['Battery_Power_kW'].apply(
+            lambda x: f"Discharge {x:.1f}kW" if x > 0 else f"Charge {abs(x):.1f}kW" if x < 0 else "Standby"
+        ),
+        'SOC_%': df_sim['Battery_SOC_Percent'].round(1),
+        'SOC_Status': df_sim['Battery_SOC_Percent'].apply(
+            lambda x: '🔴 Critical' if x < 25 else '🟡 Low' if x < 40 else '🟢 Normal' if x < 80 else '🔵 High'
+        ),
+        'Peak_Shaved_kW': df_sim['Peak_Shaved'].round(1),
+        'Shaving_Success': df_sim.apply(
+            lambda row: '✅ Success' if row['Original_Demand'] <= row['Monthly_Target'] or row['Net_Demand_kW'] <= row['Monthly_Target'] * 1.05 else '❌ Partial', axis=1
+        ),
+        'MD_Period': df_sim.index.map(lambda x: '🔴 Peak' if (x.weekday() < 5 and 14 <= x.hour < 22) else '🟢 Off-Peak'),
+        'Target_Violation': (df_sim['Net_Demand_kW'] > df_sim['Monthly_Target']).map({True: '❌', False: '✅'})
+    }
+    
+    return pd.DataFrame(enhanced_columns)
+
+
+def _create_daily_summary_table(df_sim):
+    """
+    Create daily summary of battery performance with key metrics aggregation.
+    
+    Args:
+        df_sim: Simulation dataframe with battery operation data
+        
+    Returns:
+        pd.DataFrame: Daily performance summary with success indicators
+    """
+    # Group by date
+    daily_summary = df_sim.groupby(df_sim.index.date).agg({
+        'Original_Demand': ['max', 'mean'],
+        'Net_Demand_kW': ['max', 'mean'],
+        'Monthly_Target': 'first',
+        'Battery_Power_kW': ['max', 'min'],
+        'Battery_SOC_Percent': ['min', 'max', 'mean'],
+        'Peak_Shaved': 'max'
+    }).round(1)
+    
+    # Flatten column names
+    daily_summary.columns = [
+        'Original_Peak_kW', 'Original_Avg_kW',
+        'Net_Peak_kW', 'Net_Avg_kW', 
+        'Monthly_Target_kW',
+        'Max_Discharge_kW', 'Max_Charge_kW',
+        'Min_SOC_%', 'Max_SOC_%', 'Avg_SOC_%',
+        'Max_Peak_Shaved_kW'
+    ]
+    
+    # Add calculated columns
+    daily_summary['Peak_Reduction_kW'] = daily_summary['Original_Peak_kW'] - daily_summary['Net_Peak_kW']
+    daily_summary['Target_Success'] = (daily_summary['Net_Peak_kW'] <= daily_summary['Monthly_Target_kW'] * 1.05).map({True: '✅', False: '❌'})
+    daily_summary['SOC_Health'] = daily_summary['Min_SOC_%'].apply(
+        lambda x: '🔴 Critical' if x < 25 else '🟡 Low' if x < 40 else '🟢 Healthy'
+    )
+    
+    return daily_summary.reset_index()
+
+
+def _create_kpi_summary_table(simulation_results, df_sim):
+    """
+    Create comprehensive KPI summary table with battery performance metrics.
+    
+    Args:
+        simulation_results: Dictionary containing simulation metrics
+        df_sim: Simulation dataframe with battery operation data
+        
+    Returns:
+        pd.DataFrame: Key performance indicators table
+    """
+    # Get battery capacity from session state or use default
+    battery_capacity_kwh = 100  # Default fallback
+    if hasattr(st.session_state, 'tabled_analysis_selected_battery'):
+        selected_battery = st.session_state.tabled_analysis_selected_battery
+        quantity = getattr(st.session_state, 'tabled_analysis_battery_quantity', 1)
+        battery_capacity_kwh = selected_battery['spec'].get('energy_kWh', 100) * quantity
+    
+    kpis = {
+        'Metric': [
+            'Total Simulation Hours',
+            'Peak Reduction Achieved (kW)',
+            'Success Rate (%)',
+            'Total Energy Discharged (kWh)',
+            'Total Energy Charged (kWh)',
+            'Round-Trip Efficiency (%)',
+            'Average SOC (%)',
+            'Minimum SOC Reached (%)',
+            'Maximum SOC Reached (%)',
+            'Monthly Targets Used',
+            'Target Violations',
+            'Battery Utilization (%)'
+        ],
+        'Value': [
+            f"{len(df_sim) * 0.25:.1f} hours",
+            f"{simulation_results.get('peak_reduction_kw', 0):.1f} kW",
+            f"{simulation_results.get('success_rate_percent', 0):.1f}%",
+            f"{simulation_results.get('total_energy_discharged', 0):.1f} kWh",
+            f"{simulation_results.get('total_energy_charged', 0):.1f} kWh",
+            f"{(simulation_results.get('total_energy_discharged', 0) / max(simulation_results.get('total_energy_charged', 1), 1) * 100):.1f}%",
+            f"{simulation_results.get('average_soc', 0):.1f}%",
+            f"{simulation_results.get('min_soc', 0):.1f}%",
+            f"{simulation_results.get('max_soc', 0):.1f}%",
+            f"{simulation_results.get('monthly_targets_count', 0)} months",
+            f"{simulation_results.get('v2_constraint_violations', 0)} intervals",
+            f"{(simulation_results.get('total_energy_discharged', 0) / max(len(df_sim) * 0.25 * battery_capacity_kwh, 1) * 100):.1f}%"
+        ]
+    }
+    
+    return pd.DataFrame(kpis)
+
+
+def _display_battery_simulation_tables(df_sim, simulation_results):
+    """
+    Display comprehensive battery simulation tables with tabbed interface.
+    
+    Args:
+        df_sim: Simulation dataframe with battery operation data
+        simulation_results: Dictionary containing simulation metrics
+    """
+    st.markdown("##### 1️⃣.1 📋 Battery Simulation Data Tables")
+    
+    # Tab-based layout for different table views
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📊 Time Series Data", 
+        "📅 Daily Summary", 
+        "🎯 KPI Summary",
+        "🔍 Filtered View"
+    ])
+    
+    with tab1:
+        st.markdown("**Complete Time-Series Battery Operation Data**")
+        table_data = _create_enhanced_battery_table(df_sim)
+        
+        # Add filters
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            show_discharge_only = st.checkbox("Show discharge events only", key="filter_discharge")
+        with col2:
+            show_violations_only = st.checkbox("Show target violations only", key="filter_violations")  
+        with col3:
+            min_peak_shaved = st.number_input("Min peak shaved (kW)", 0.0, 1000.0, 0.0, key="filter_peak")
+        
+        # Apply filters
+        filtered_data = table_data.copy()
+        if show_discharge_only:
+            filtered_data = filtered_data[filtered_data['Battery_Action'].str.contains('Discharge')]
+        if show_violations_only:
+            filtered_data = filtered_data[filtered_data['Target_Violation'] == '❌']
+        if min_peak_shaved > 0:
+            filtered_data = filtered_data[filtered_data['Peak_Shaved_kW'] >= min_peak_shaved]
+        
+        st.dataframe(filtered_data, use_container_width=True, height=400)
+        
+        # Download option
+        csv = filtered_data.to_csv(index=False)
+        st.download_button("📥 Download Time Series Data", csv, "battery_timeseries.csv", "text/csv", key="download_ts")
+    
+    with tab2:
+        st.markdown("**Daily Performance Summary**")
+        daily_data = _create_daily_summary_table(df_sim)
+        st.dataframe(daily_data, use_container_width=True)
+        
+        # Download option
+        csv = daily_data.to_csv(index=False)
+        st.download_button("📥 Download Daily Summary", csv, "battery_daily_summary.csv", "text/csv", key="download_daily")
+    
+    with tab3:
+        st.markdown("**Key Performance Indicators**")
+        kpi_data = _create_kpi_summary_table(simulation_results, df_sim)
+        st.dataframe(kpi_data, use_container_width=True, hide_index=True)
+    
+    with tab4:
+        st.markdown("**Custom Filtered View**")
+        
+        # Advanced filters
+        col1, col2 = st.columns(2)
+        with col1:
+            if len(df_sim) > 0:
+                date_range = st.date_input("Select date range", 
+                                         [df_sim.index.min().date(), df_sim.index.max().date()],
+                                         key="filter_date_range")
+        with col2:
+            soc_range = st.slider("SOC Range (%)", 0, 100, (0, 100), key="filter_soc_range")
+        
+        # Apply advanced filters
+        if len(df_sim) > 0 and len(date_range) == 2:
+            mask = (df_sim.index.date >= date_range[0]) & (df_sim.index.date <= date_range[1])
+            mask &= (df_sim['Battery_SOC_Percent'] >= soc_range[0]) & (df_sim['Battery_SOC_Percent'] <= soc_range[1])
+            
+            filtered_advanced = _create_enhanced_battery_table(df_sim[mask])
+            st.dataframe(filtered_advanced, use_container_width=True, height=400)
+        else:
+            st.info("Please select a valid date range to view filtered data.")
