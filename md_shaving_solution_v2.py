@@ -2549,9 +2549,9 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                         
                         # === STEP 6: Display the battery simulation chart ===
                         st.subheader("📊 Battery Operation Simulation")
-                        _display_battery_simulation_chart(
+                        _display_v2_battery_simulation_chart(
                             simulation_results['df_simulation'],  # Simulated dataframe
-                            target_demand_for_sim,              # Target demand (scalar)
+                            monthly_targets,              # V2 dynamic monthly targets
                             sizing_dict,                        # Battery sizing dictionary
                             selected_tariff,                    # Tariff configuration
                             holidays if 'holidays' in locals() else set()  # Holidays set
@@ -3652,4 +3652,602 @@ def _render_event_results_table(all_monthly_events, monthly_targets, selected_ta
         - Recharge feasibility: Time window vs charging power limits
         """)
 
-# ...existing code...
+
+def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=None, selected_tariff=None, holidays=None):
+    """
+    V2-specific battery operation simulation chart with DYNAMIC monthly targets.
+    
+    Key V2 Enhancement: Replaces static target line with stepped monthly target line.
+    
+    Args:
+        df_sim: Simulation dataframe with battery operation data
+        monthly_targets: V2's dynamic monthly targets (Series with Period index)
+        sizing: Battery sizing dictionary from V2 analysis
+        selected_tariff: Tariff configuration for MD period detection
+        holidays: Set of holiday dates
+    """
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+    
+    # Handle None parameters with safe defaults
+    if monthly_targets is None:
+        st.error("❌ V2 Chart Error: monthly_targets is required for dynamic target visualization")
+        return
+        
+    if sizing is None:
+        sizing = {'power_rating_kw': 100, 'capacity_kwh': 100}
+    
+    # Resolve Net Demand column name flexibly
+    net_candidates = ['Net_Demand_kW', 'Net_Demand_KW', 'Net_Demand']
+    net_col = next((c for c in net_candidates if c in df_sim.columns), None)
+    
+    # Validate required columns exist
+    required_base = ['Original_Demand', 'Battery_Power_kW', 'Battery_SOC_Percent']
+    missing_columns = [col for col in required_base if col not in df_sim.columns]
+    if net_col is None:
+        missing_columns.append('Net_Demand_kW')
+    
+    if missing_columns:
+        st.error(f"❌ Missing required columns in V2 simulation data: {missing_columns}")
+        st.info("Available columns: " + ", ".join(df_sim.columns.tolist()))
+        return
+    
+    # Create V2 dynamic target series (stepped monthly targets)
+    target_series = _create_v2_dynamic_target_series(df_sim.index, monthly_targets)
+    
+    # Panel 1: V2 Enhanced MD Shaving Effectiveness with Dynamic Monthly Targets
+    st.markdown("##### 1️⃣ V2 MD Shaving Effectiveness: Demand vs Battery vs Dynamic Monthly Targets")
+    st.info("🆕 **V2 Enhancement**: Target line now changes monthly based on your V2 target configuration")
+    
+    fig = go.Figure()
+    
+    # Add demand lines
+    fig.add_trace(
+        go.Scatter(x=df_sim.index, y=df_sim[net_col], 
+                  name='Net Demand (with Battery)', line=dict(color='#00BFFF', width=2),
+                  hovertemplate='Net: %{y:.1f} kW<br>%{x}<extra></extra>')
+    )
+    
+    # V2 ENHANCEMENT: Add stepped monthly target line instead of static line
+    fig.add_trace(
+        go.Scatter(x=df_sim.index, y=target_series, 
+                  name='Monthly Target (V2 Dynamic)', 
+                  line=dict(color='green', dash='dash', width=3),
+                  hovertemplate='Monthly Target: %{y:.1f} kW<br>%{x}<extra></extra>')
+    )
+    
+    # Replace area fills with bar charts for battery discharge/charge
+    discharge_series = df_sim['Battery_Power_kW'].where(df_sim['Battery_Power_kW'] > 0, other=0)
+    charge_series = df_sim['Battery_Power_kW'].where(df_sim['Battery_Power_kW'] < 0, other=0)
+    
+    # Discharge bars
+    fig.add_trace(go.Bar(
+        x=df_sim.index,
+        y=discharge_series,
+        name='Battery Discharge (kW)',
+        marker=dict(color='orange'),
+        opacity=0.6,
+        hovertemplate='Discharge: %{y:.1f} kW<br>%{x}<extra></extra>',
+        yaxis='y2'
+    ))
+    
+    # Charge bars (negative values)
+    fig.add_trace(go.Bar(
+        x=df_sim.index,
+        y=charge_series,
+        name='Battery Charge (kW)',
+        marker=dict(color='green'),
+        opacity=0.6,
+        hovertemplate='Charge: %{y:.1f} kW<br>%{x}<extra></extra>',
+        yaxis='y2'
+    ))
+    
+    # Add enhanced conditional coloring for Original Demand line LAST so it renders on top
+    # For V2, use average monthly target for conditional coloring logic
+    avg_monthly_target = target_series.mean() if len(target_series) > 0 else df_sim['Original_Demand'].quantile(0.9)
+    
+    fig = create_conditional_demand_line_with_peak_logic(
+        fig, df_sim, 'Original_Demand', avg_monthly_target, selected_tariff, holidays, "Original Demand"
+    )
+    
+    # Compute symmetric range for y2 to show positive/negative bars
+    try:
+        max_abs_power = float(df_sim['Battery_Power_kW'].abs().max())
+    except Exception:
+        max_abs_power = float(sizing.get('power_rating_kw', 100))
+    y2_limit = max(max_abs_power * 1.1, sizing.get('power_rating_kw', 100) * 0.5)
+    
+    fig.update_layout(
+        title='🎯 V2 MD Shaving Effectiveness: Demand vs Battery vs Dynamic Monthly Targets',
+        xaxis_title='Time',
+        yaxis_title='Power Demand (kW)',
+        yaxis2=dict(
+            title='Battery Power (kW) [+ discharge | - charge]',
+            overlaying='y',
+            side='right',
+            range=[-y2_limit, y2_limit],
+            zeroline=True,
+            zerolinecolor='gray'
+        ),
+        height=500,
+        hovermode='x unified',
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        barmode='overlay'
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Panel 2: Combined SOC and Battery Power Chart (same as V1)
+    st.markdown("##### 2️⃣ Combined SOC and Battery Power Chart")
+    
+    fig2 = make_subplots(specs=[[{"secondary_y": True}]])
+    
+    # SOC line (left y-axis)
+    fig2.add_trace(
+        go.Scatter(x=df_sim.index, y=df_sim['Battery_SOC_Percent'],
+                  name='SOC (%)', line=dict(color='purple', width=2),
+                  hovertemplate='SOC: %{y:.1f}%<br>%{x}<extra></extra>'),
+        secondary_y=False
+    )
+    
+    # Battery power line (right y-axis) 
+    fig2.add_trace(
+        go.Scatter(x=df_sim.index, y=df_sim['Battery_Power_kW'],
+                  name='Battery Power', line=dict(color='orange', width=2),
+                  hovertemplate='Power: %{y:.1f} kW<br>%{x}<extra></extra>'),
+        secondary_y=True
+    )
+    
+    # Add horizontal line for minimum SOC warning
+    fig2.add_hline(y=20, line_dash="dot", line_color="red", 
+                   annotation_text="Low SOC Warning (20%)", secondary_y=False)
+    
+    # Update axes
+    fig2.update_xaxes(title_text="Time")
+    fig2.update_yaxes(title_text="State of Charge (%)", secondary_y=False, range=[0, 100])
+    fig2.update_yaxes(title_text="Battery Discharge Power (kW)", secondary_y=True)
+    
+    fig2.update_layout(
+        title='⚡ SOC vs Battery Power: Timing Analysis',
+        height=400,
+        hovermode='x unified'
+    )
+    
+    st.plotly_chart(fig2, use_container_width=True)
+    
+    # Panel 3: Battery Power Utilization Heatmap (same as V1)
+    st.markdown("##### 3️⃣ Battery Power Utilization Heatmap")
+    
+    # Prepare data for heatmap
+    df_heatmap = df_sim.copy()
+    df_heatmap['Date'] = df_heatmap.index.date
+    df_heatmap['Hour'] = df_heatmap.index.hour
+    df_heatmap['Battery_Utilization_%'] = (df_heatmap['Battery_Power_kW'] / sizing['power_rating_kw'] * 100).clip(0, 100)
+    
+    # Create pivot table for heatmap
+    heatmap_data = df_heatmap.pivot_table(
+        values='Battery_Utilization_%', 
+        index='Hour', 
+        columns='Date', 
+        aggfunc='mean',
+        fill_value=0
+    )
+    
+    # Create heatmap
+    fig3 = go.Figure(data=go.Heatmap(
+        z=heatmap_data.values,
+        x=[str(d) for d in heatmap_data.columns],
+        y=heatmap_data.index,
+        colorscale='Viridis',
+        hoverongaps=False,
+        hovertemplate='Date: %{x}<br>Hour: %{y}<br>Utilization: %{z:.1f}%<extra></extra>',
+        colorbar=dict(title="Battery Utilization (%)")
+    ))
+    
+    fig3.update_layout(
+        title='🔥 Battery Power Utilization Heatmap (% of Rated Power)',
+        xaxis_title='Date',
+        yaxis_title='Hour of Day',
+        height=400
+    )
+    
+    st.plotly_chart(fig3, use_container_width=True)
+    
+    # Panel 4: V2 Enhanced Daily Peak Shave Effectiveness with Monthly Target Context
+    st.markdown("##### 4️⃣ V2 Daily Peak Shave Effectiveness & Success Analysis (MD Peak Periods Only)")
+    st.info("🆕 **V2 Enhancement**: Success/failure calculated against dynamic monthly targets")
+    
+    # Filter data for MD peak periods only (2 PM-10 PM, weekdays)
+    def is_md_peak_period_for_effectiveness(timestamp):
+        return timestamp.weekday() < 5 and 14 <= timestamp.hour < 22
+        
+    df_md_peak = df_sim[df_sim.index.to_series().apply(is_md_peak_period_for_effectiveness)]
+    
+    # Calculate daily analysis using MD peak periods only WITH V2 monthly targets
+    if len(df_md_peak) > 0:
+        daily_analysis = df_md_peak.groupby(df_md_peak.index.date).agg({
+            'Original_Demand': 'max',
+            net_col: 'max',
+            'Battery_Power_kW': 'max',
+            'Battery_SOC_Percent': ['min', 'mean']
+        }).reset_index()
+        
+        # Flatten column names
+        daily_analysis.columns = ['Date', 'Original_Peak_MD', 'Net_Peak_MD', 'Max_Battery_Power', 'Min_SOC', 'Avg_SOC']
+        
+        # V2 ENHANCEMENT: Get monthly target for each day
+        daily_analysis['Monthly_Target'] = daily_analysis['Date'].apply(
+            lambda date: _get_monthly_target_for_date(date, monthly_targets)
+        )
+        
+        # Calculate detailed metrics based on V2 monthly targets
+        md_rate_estimate = 97.06  # RM/kW from Medium Voltage TOU
+        daily_analysis['Peak_Reduction'] = daily_analysis['Original_Peak_MD'] - daily_analysis['Net_Peak_MD']
+        daily_analysis['Est_Monthly_Saving'] = daily_analysis['Peak_Reduction'] * md_rate_estimate
+        
+        # V2 SUCCESS LOGIC: Compare against monthly targets instead of static target
+        daily_analysis['Success'] = daily_analysis['Net_Peak_MD'] <= daily_analysis['Monthly_Target'] * 1.05  # 5% tolerance
+        daily_analysis['Peak_Shortfall'] = (daily_analysis['Net_Peak_MD'] - daily_analysis['Monthly_Target']).clip(lower=0)
+        daily_analysis['Required_Additional_Power'] = daily_analysis['Peak_Shortfall']
+        
+        # Add informational note about V2 monthly target logic
+        st.info("""
+        📋 **V2 Monthly Target Analysis Note:**
+        This analysis uses **dynamic monthly targets** instead of a static target.
+        Each day's success is evaluated against its specific month's target.
+        Success rate reflects effectiveness against V2's monthly optimization strategy.
+        """)
+    else:
+        st.warning("⚠️ No MD peak period data found (weekdays 2-10 PM). Cannot calculate V2 MD-focused effectiveness.")
+        return
+    
+    # Categorize failure reasons with V2 context
+    def categorize_failure_reason(row):
+        if row['Success']:
+            return 'Success'
+        elif row['Min_SOC'] < 20:
+            return 'Low SOC (Battery Depleted)'
+        elif row['Max_Battery_Power'] < sizing['power_rating_kw'] * 0.9:
+            return 'Insufficient Battery Power'
+        elif row['Peak_Shortfall'] > sizing['power_rating_kw']:
+            return 'Demand Exceeds Battery Capacity'
+        else:
+            return 'Other (Algorithm/Timing)'
+    
+    daily_analysis['Failure_Reason'] = daily_analysis.apply(categorize_failure_reason, axis=1)
+    
+    # Create enhanced visualization with monthly target context
+    fig4 = go.Figure()
+    
+    # V2 Enhancement: Add monthly target reference lines instead of single target line
+    for month_period, target_value in monthly_targets.items():
+        month_start = max(month_period.start_time, df_sim.index.min())
+        month_end = min(month_period.end_time, df_sim.index.max())
+        
+        # Add horizontal line for this month's target
+        fig4.add_shape(
+            type="line",
+            x0=month_start, y0=target_value,
+            x1=month_end, y1=target_value,
+            line=dict(color="green", width=2, dash="dash"),
+        )
+        
+        # Add annotation for the target value
+        fig4.add_annotation(
+            x=month_start + (month_end - month_start) / 2,
+            y=target_value,
+            text=f"{target_value:.0f} kW",
+            showarrow=False,
+            yshift=10,
+            bgcolor="rgba(255,255,255,0.8)"
+        )
+    
+    # Color code bars based on success/failure
+    bar_colors = ['green' if success else 'red' for success in daily_analysis['Success']]
+    
+    # Original peaks (MD peak periods only)
+    fig4.add_trace(go.Bar(
+        x=daily_analysis['Date'], y=daily_analysis['Original_Peak_MD'],
+        name='Original Peak (MD Periods)', marker_color='lightcoral', opacity=0.6,
+        hovertemplate='Original MD Peak: %{y:.0f} kW<br>Date: %{x}<extra></extra>'
+    ))
+    
+    # Net peaks (after battery) - color coded by success
+    fig4.add_trace(go.Bar(
+        x=daily_analysis['Date'], y=daily_analysis['Net_Peak_MD'],
+        name='Net Peak (MD Periods with Battery)', 
+        marker_color=bar_colors, opacity=0.8,
+        hovertemplate='Net MD Peak: %{y:.0f} kW<br>Status: %{customdata}<br>Date: %{x}<extra></extra>',
+        customdata=['SUCCESS' if s else 'FAILED' for s in daily_analysis['Success']]
+    ))
+    
+    fig4.update_layout(
+        title='📊 V2 Daily Peak Shaving Effectiveness - MD Periods with Monthly Targets (Green=Success, Red=Failed)',
+        xaxis_title='Date',
+        yaxis_title='Peak Demand during MD Hours (kW)',
+        height=400,
+        barmode='group'
+    )
+    
+    st.plotly_chart(fig4, use_container_width=True)
+    
+    # Summary stats with V2 context
+    total_days = len(daily_analysis)
+    successful_days = sum(daily_analysis['Success'])
+    failed_days = total_days - successful_days
+    success_rate = (successful_days / total_days * 100) if total_days > 0 else 0
+    
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Total Days", f"{total_days}")
+    col2.metric("Successful Days", f"{successful_days}", delta=f"{success_rate:.1f}%")
+    col3.metric("Failed Days", f"{failed_days}", delta=f"{100-success_rate:.1f}%")
+    col4.metric("V2 Success Rate", f"{success_rate:.1f}%")
+    
+    # Panel 5: V2 Cumulative Energy Analysis with Monthly Target Context
+    st.markdown("##### 5️⃣ V2 Cumulative Energy Analysis: Energy Discharged vs Required (MD Peak Periods)")
+    st.info("🆕 **V2 Enhancement**: Energy requirements calculated using dynamic monthly targets")
+    
+    # Use the same daily analysis data but with V2 monthly target logic
+    if len(daily_analysis) > 0:
+        # Calculate energy requirements using V2 monthly target approach
+        daily_analysis_energy = daily_analysis.copy()
+        
+        # V2 Energy Required: Calculate based on daily peak reduction needs using monthly targets
+        daily_analysis_energy['Daily_Energy_Required_kWh'] = 0.0
+        
+        # For each day, calculate energy required based on monthly target instead of static target
+        for idx, row in daily_analysis_energy.iterrows():
+            original_peak = row['Original_Peak_MD']
+            net_peak = row['Net_Peak_MD']
+            monthly_target = row['Monthly_Target']
+            
+            if original_peak > monthly_target:
+                # Calculate energy required to shave this day's peak to monthly target
+                if net_peak <= monthly_target * 1.05:  # Successful day
+                    # Energy that was successfully shaved (based on actual peak reduction)
+                    energy_shaved = row['Peak_Reduction'] * 0.25  # Convert kW to kWh (15-min intervals)
+                else:  # Failed day
+                    # Energy that would be needed to reach monthly target
+                    energy_needed = (original_peak - monthly_target) * 0.25
+                    energy_shaved = energy_needed
+                
+                daily_analysis_energy.loc[idx, 'Daily_Energy_Required_kWh'] = energy_shaved
+        
+        # Calculate energy discharged from battery during MD peak periods for each day
+        daily_analysis_energy['Daily_Energy_Discharged_kWh'] = 0.0
+        
+        # Group simulation data by date and sum battery discharge during MD peak periods
+        df_sim_md_peak = df_sim[df_sim.index.to_series().apply(is_md_peak_period_for_effectiveness)]
+        if len(df_sim_md_peak) > 0:
+            daily_battery_discharge = df_sim_md_peak.groupby(df_sim_md_peak.index.date).agg({
+                'Battery_Power_kW': lambda x: (x.clip(lower=0) * 0.25).sum()  # Only positive (discharge) * 15-min intervals
+            }).reset_index()
+            daily_battery_discharge.columns = ['Date', 'Daily_Battery_Discharge_kWh']
+            
+            # Merge with daily analysis
+            daily_analysis_energy['Date'] = pd.to_datetime(daily_analysis_energy['Date'])
+            daily_battery_discharge['Date'] = pd.to_datetime(daily_battery_discharge['Date'])
+            daily_analysis_energy = daily_analysis_energy.merge(
+                daily_battery_discharge, on='Date', how='left'
+            ).fillna(0)
+            
+            daily_analysis_energy['Daily_Energy_Discharged_kWh'] = daily_analysis_energy['Daily_Battery_Discharge_kWh']
+        else:
+            st.warning("No MD peak period data available for V2 energy analysis.")
+            return
+    
+        # Sort by date for cumulative calculation
+        daily_analysis_energy = daily_analysis_energy.sort_values('Date').reset_index(drop=True)
+        
+        # Calculate cumulative values
+        daily_analysis_energy['Cumulative_Energy_Required'] = daily_analysis_energy['Daily_Energy_Required_kWh'].cumsum()
+        daily_analysis_energy['Cumulative_Energy_Discharged'] = daily_analysis_energy['Daily_Energy_Discharged_kWh'].cumsum()
+        daily_analysis_energy['Cumulative_Energy_Shortfall'] = daily_analysis_energy['Cumulative_Energy_Required'] - daily_analysis_energy['Cumulative_Energy_Discharged']
+        
+        # Create the chart using the daily aggregated data with V2 context
+        if len(daily_analysis_energy) > 0:
+            fig5 = go.Figure()
+            
+            # Energy Discharged line (from daily analysis)
+            fig5.add_trace(go.Scatter(
+                x=daily_analysis_energy['Date'],
+                y=daily_analysis_energy['Cumulative_Energy_Discharged'],
+                mode='lines+markers',
+                name='Cumulative Energy Discharged (MD Periods)',
+                line=dict(color='blue', width=2),
+                hovertemplate='Discharged: %{y:.1f} kWh<br>Date: %{x}<extra></extra>'
+            ))
+            
+            # Energy Required line (from daily analysis with V2 monthly targets)
+            fig5.add_trace(go.Scatter(
+                x=daily_analysis_energy['Date'],
+                y=daily_analysis_energy['Cumulative_Energy_Required'],
+                mode='lines+markers',
+                name='Cumulative Energy Required (V2 Monthly Targets)',
+                line=dict(color='red', width=2, dash='dot'),
+                hovertemplate='Required (V2): %{y:.1f} kWh<br>Date: %{x}<extra></extra>'
+            ))
+            
+            # Add area fill for energy shortfall
+            fig5.add_trace(go.Scatter(
+                x=daily_analysis_energy['Date'],
+                y=daily_analysis_energy['Cumulative_Energy_Shortfall'].clip(lower=0),
+                fill='tozeroy',
+                fillcolor='rgba(255,0,0,0.2)',
+                line=dict(color='rgba(255,0,0,0)'),
+                name='Cumulative Energy Shortfall (V2)',
+                hovertemplate='Shortfall: %{y:.1f} kWh<br>Date: %{x}<extra></extra>'
+            ))
+            
+            fig5.update_layout(
+                title='📈 V2 Cumulative Energy Analysis: Monthly Target-Based Daily Aggregation',
+                xaxis_title='Date',
+                yaxis_title='Cumulative Energy (kWh)',
+                height=500,
+                hovermode='x unified'
+            )
+            
+            st.plotly_chart(fig5, use_container_width=True)
+            
+            # Display metrics using V2 monthly target calculations
+            total_energy_required = daily_analysis_energy['Daily_Energy_Required_kWh'].sum()
+            total_energy_discharged = daily_analysis_energy['Daily_Energy_Discharged_kWh'].sum()
+            
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Total Energy Required (V2 MD)", f"{total_energy_required:.1f} kWh")
+            col2.metric("Total Energy Discharged (V2 MD)", f"{total_energy_discharged:.1f} kWh")
+            
+            if total_energy_required > 0:
+                fulfillment_rate = (total_energy_discharged / total_energy_required) * 100
+                col3.metric("V2 MD Energy Fulfillment", f"{fulfillment_rate:.1f}%")
+            else:
+                col3.metric("V2 MD Energy Fulfillment", "100%")
+            
+            # Add detailed breakdown table with V2 context
+            with st.expander("📊 V2 Daily Energy Breakdown (Monthly Target-Based Analysis)"):
+                display_columns = ['Date', 'Original_Peak_MD', 'Net_Peak_MD', 'Peak_Reduction', 'Monthly_Target',
+                                 'Daily_Energy_Required_kWh', 'Daily_Energy_Discharged_kWh', 'Success']
+                
+                if all(col in daily_analysis_energy.columns for col in display_columns):
+                    daily_display = daily_analysis_energy[display_columns].copy()
+                    daily_display.columns = ['Date', 'Original Peak (kW)', 'Net Peak (kW)', 'Peak Reduction (kW)', 
+                                           'Monthly Target (kW)', 'Energy Required (kWh)', 'Energy Discharged (kWh)', 'Success']
+                    
+                    formatted_daily = daily_display.style.format({
+                        'Original Peak (kW)': '{:.1f}',
+                        'Net Peak (kW)': '{:.1f}',
+                        'Peak Reduction (kW)': '{:.1f}',
+                        'Monthly Target (kW)': '{:.1f}',
+                        'Energy Required (kWh)': '{:.2f}',
+                        'Energy Discharged (kWh)': '{:.2f}'
+                    })
+                    
+                    st.dataframe(formatted_daily, use_container_width=True)
+                else:
+                    st.warning("Some columns missing from V2 daily analysis data.")
+            
+            # Add V2-specific information box
+            st.info(f"""
+            **📋 V2 Data Source Alignment Confirmation:**
+            - **Energy Required**: Calculated from daily peak reduction needs using **dynamic monthly targets**
+            - **Energy Discharged**: Sum of battery discharge energy during MD recording hours per day  
+            - **Calculation Method**: V2 monthly target-based approach vs V1 static target approach
+            - **Monthly Targets**: {len(monthly_targets)} different monthly targets used
+            - **Total Days Analyzed**: {len(daily_analysis_energy)} days with MD peak period data
+            - **Success Rate**: {(daily_analysis_energy['Success'].sum() / len(daily_analysis_energy) * 100):.1f}% (based on monthly targets)
+            
+            ✅ **V2 Innovation**: This chart uses dynamic monthly targets instead of static targets for more accurate analysis.
+            """)
+            
+        else:
+            st.warning("No daily analysis data available for V2 cumulative energy chart.")
+    else:
+        st.warning("No MD peak period data available for V2 energy analysis.")
+    
+    # V2 Key insights with monthly target context
+    st.markdown("##### 🔍 V2 Key Insights from Enhanced Monthly Target Analysis")
+    
+    insights = []
+    
+    # Use V2 energy efficiency calculation
+    if 'total_energy_required' in locals() and 'total_energy_discharged' in locals():
+        energy_efficiency = (total_energy_discharged / total_energy_required * 100) if total_energy_required > 0 else 100
+        
+        if energy_efficiency < 80:
+            insights.append("⚠️ **V2 MD Energy Shortfall**: Battery capacity may be insufficient for complete monthly target-based MD peak shaving")
+        elif energy_efficiency >= 95:
+            insights.append("✅ **Excellent V2 MD Coverage**: Battery effectively handles all monthly target energy requirements")
+    
+    # Check V2 success rate
+    if 'success_rate' in locals():
+        if success_rate > 90:
+            insights.append("✅ **High V2 Success Rate**: Battery effectively manages most peak events against dynamic monthly targets")
+        elif success_rate < 60:
+            insights.append("❌ **Low V2 Success Rate**: Consider increasing battery power rating or capacity for better monthly target management")
+    
+    # Check battery utilization if heatmap data is available
+    if 'df_heatmap' in locals() and len(df_heatmap) > 0:
+        avg_utilization = df_heatmap['Battery_Utilization_%'].mean()
+        if avg_utilization < 30:
+            insights.append("📊 **Under-utilized**: Battery power rating may be oversized for V2 monthly targets")
+        elif avg_utilization > 80:
+            insights.append("🔥 **High Utilization**: Battery operating near maximum capacity for V2 monthly targets")
+    
+    # Check for low SOC events
+    low_soc_events = len(df_sim[df_sim['Battery_SOC_Percent'] < 20])
+    if low_soc_events > 0:
+        insights.append(f"🔋 **Low SOC Warning**: {low_soc_events} intervals with SOC below 20% during V2 operation")
+    
+    # Add insight about V2 methodology
+    if len(monthly_targets) > 0:
+        insights.append(f"📊 **V2 Innovation**: Analysis uses {len(monthly_targets)} dynamic monthly targets vs traditional static targets for superior accuracy")
+    
+    if not insights:
+        insights.append("✅ **Optimal V2 Performance**: Battery system operating within acceptable parameters with monthly targets")
+    
+    for insight in insights:
+        st.info(insight)
+
+
+def _create_v2_dynamic_target_series(simulation_index, monthly_targets):
+    """
+    Create a dynamic target series that matches the simulation dataframe index
+    with stepped monthly targets from V2's monthly_targets.
+    
+    Args:
+        simulation_index: DatetimeIndex from the simulation dataframe
+        monthly_targets: V2's monthly targets (Series with Period index)
+        
+    Returns:
+        Series with same index as simulation_index, containing monthly target values
+    """
+    target_series = pd.Series(index=simulation_index, dtype=float)
+    
+    for timestamp in simulation_index:
+        # Get the month period for this timestamp
+        month_period = timestamp.to_period('M')
+        
+        # Find the corresponding monthly target
+        if month_period in monthly_targets.index:
+            target_series.loc[timestamp] = monthly_targets.loc[month_period]
+        else:
+            # Fallback: use the closest available monthly target
+            available_months = list(monthly_targets.index)
+            if available_months:
+                # Find the closest month
+                closest_month = min(available_months, 
+                                  key=lambda m: abs((timestamp.to_period('M') - m).n))
+                target_series.loc[timestamp] = monthly_targets.loc[closest_month]
+            else:
+                # Ultimate fallback
+                target_series.loc[timestamp] = 1000.0  # Safe default
+    
+    return target_series
+
+
+def _get_monthly_target_for_date(date, monthly_targets):
+    """
+    Get the monthly target value for a specific date from V2's monthly targets.
+    
+    Args:
+        date: Date to get target for
+        monthly_targets: V2's monthly targets (Series with Period index)
+        
+    Returns:
+        float: Monthly target value for the given date
+    """
+    # Convert date to period
+    if isinstance(date, pd.Timestamp):
+        month_period = date.to_period('M')
+    else:
+        month_period = pd.to_datetime(date).to_period('M')
+    
+    # Return the monthly target for this period
+    if month_period in monthly_targets.index:
+        return monthly_targets.loc[month_period]
+    else:
+        # Fallback: use the first available target
+        if len(monthly_targets) > 0:
+            return monthly_targets.iloc[0]
+        else:
+            return 1000.0  # Safe fallback
