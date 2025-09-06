@@ -802,13 +802,16 @@ def _render_battery_quantity_recommendation(max_power_shaving_required, recommen
             # Store the selected quantity in session state for use in sizing analysis
             st.session_state.tabled_analysis_battery_quantity = user_selected_qty
             
-            # Provide guidance on the selection
+            # Provide guidance on the selection and integration information
             if user_selected_qty == recommended_qty:
                 st.success(f"✅ **Optimal Configuration**: Using auto-recommended quantity of {recommended_qty} units based on your requirements.")
             elif user_selected_qty > recommended_qty:
                 st.info(f"ℹ️ **Oversized Configuration**: You've selected {user_selected_qty} units, which is {user_selected_qty - recommended_qty} units more than the recommended {recommended_qty} units. This provides extra capacity margin.")
             else:
                 st.warning(f"⚠️ **Undersized Configuration**: You've selected {user_selected_qty} units, which is {recommended_qty - user_selected_qty} units less than the recommended {recommended_qty} units. This may not fully meet your requirements.")
+            
+            # Integration feedback
+            st.info(f"🔄 **Integration Active**: The selected quantity ({user_selected_qty} units) will be automatically used in the '📊 Battery Operation Simulation' section below, replacing any auto-calculated values.")
             
         else:
             st.error("❌ Selected battery has invalid power or energy specifications")
@@ -2468,12 +2471,25 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
             
             if prerequisites_met:
                 
-                # Calculate optimal number of units based on the analysis
-                units_for_power = int(np.ceil(max_power_shaving_required / battery_power_kw)) if battery_power_kw > 0 else 1
-                units_for_excess = int(np.ceil(recommended_energy_capacity / battery_power_kw)) if battery_power_kw > 0 else 1
-                optimal_units = max(units_for_power, units_for_excess, 1)
+                # 🎛️ INTEGRATION: Use user-configured battery quantity from Battery Quantity Configuration
+                if hasattr(st.session_state, 'tabled_analysis_battery_quantity') and st.session_state.tabled_analysis_battery_quantity:
+                    # Use quantity configured by user in Battery Quantity Configuration section
+                    optimal_units = int(st.session_state.tabled_analysis_battery_quantity)
+                    quantity_source = "User-configured from Battery Quantity Configuration"
+                    
+                    # Display success message for configured quantity
+                    st.success(f"✅ **Using Battery Quantity Configuration**: {optimal_units} units as configured in '🎛️ Battery Quantity Configuration' section above.")
+                else:
+                    # Fallback: Calculate optimal number of units based on the analysis
+                    units_for_power = int(np.ceil(max_power_shaving_required / battery_power_kw)) if battery_power_kw > 0 else 1
+                    units_for_excess = int(np.ceil(recommended_energy_capacity / battery_power_kw)) if battery_power_kw > 0 else 1
+                    optimal_units = max(units_for_power, units_for_excess, 1)
+                    quantity_source = "Auto-calculated based on requirements"
+                    
+                    # Display info message about auto-calculation
+                    st.info(f"ℹ️ **Auto-calculating Battery Quantity**: {optimal_units} units. You can configure a specific quantity in the '🎛️ Battery Quantity Configuration' section above to override this calculation.")
                 
-                # Calculate total system specifications
+                # Calculate total system specifications using user-configured or calculated quantity
                 total_battery_capacity = optimal_units * battery_capacity_kwh
                 total_battery_power = optimal_units * battery_power_kw
                 
@@ -2482,7 +2498,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                 - **Selected Battery**: {selected_battery['label']}
                 - **Battery Model**: {battery_spec.get('model', 'Unknown')}
                 - **Unit Specifications**: {battery_capacity_kwh:.1f} kWh, {battery_power_kw:.1f} kW per unit
-                - **System Configuration**: {optimal_units} units
+                - **System Configuration**: {optimal_units} units ({quantity_source})
                 - **Total System Capacity**: {total_battery_capacity:.1f} kWh
                 - **Total System Power**: {total_battery_power:.1f} kW
                 - **Based on**: Selected Power Requirement ({max_power_shaving_required:.1f} kW) & Selected Energy Capacity ({recommended_energy_capacity:.1f} kWh)
