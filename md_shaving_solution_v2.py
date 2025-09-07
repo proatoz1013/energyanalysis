@@ -5975,6 +5975,7 @@ def _create_enhanced_battery_table(df_sim):
         'Battery_Action': df_sim['Battery_Power_kW'].apply(
             lambda x: f"Discharge {x:.1f}kW" if x > 0 else f"Charge {abs(x):.1f}kW" if x < 0 else "Standby"
         ),
+        'BESS_Balance_kWh': df_sim['Battery_SOC_kWh'].round(1),
         'SOC_%': df_sim['Battery_SOC_Percent'].round(1),
         'SOC_Status': df_sim['Battery_SOC_Percent'].apply(
             lambda x: '🔴 Critical' if x < 25 else '🟡 Low' if x < 40 else '🟢 Normal' if x < 80 else '🔵 High'
@@ -6115,29 +6116,32 @@ def _display_battery_simulation_tables(df_sim, simulation_results):
         st.markdown("**Complete Time-Series Battery Operation Data**")
         table_data = _create_enhanced_battery_table(df_sim)
         
-        # Add filters
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            show_discharge_only = st.checkbox("Show discharge events only", key="filter_discharge")
-        with col2:
-            show_violations_only = st.checkbox("Show target violations only", key="filter_violations")  
-        with col3:
-            min_peak_shaved = st.number_input("Min actual shave (kW)", 0.0, 1000.0, 0.0, key="filter_peak")
+        # Simple timestamp filter
+        if len(df_sim) > 0:
+            timestamp_filter = st.text_input("🕐 Filter by Timestamp (YYYY-MM-DD HH:MM or partial match)", 
+                                            placeholder="e.g., 2024-01-15 14:30 or just 14:30 for all 2:30pm entries",
+                                            key="timestamp_filter")
         
-        # Apply filters
+        # Apply timestamp filter
         filtered_data = table_data.copy()
-        if show_discharge_only:
-            filtered_data = filtered_data[filtered_data['Battery_Action'].str.contains('Discharge')]
-        if show_violations_only:
-            filtered_data = filtered_data[filtered_data['Target_Violation'] == '❌']
-        if min_peak_shaved > 0:
-            filtered_data = filtered_data[filtered_data['Actual_Shave_kW'] >= min_peak_shaved]
         
+        if timestamp_filter.strip():
+            # Filter based on timestamp partial match
+            filtered_data = filtered_data[filtered_data['Timestamp'].str.contains(timestamp_filter.strip(), case=False, na=False)]
+        
+        # Display filter results summary
+        if len(filtered_data) < len(table_data):
+            st.info(f"📊 **Filtered Results**: Showing {len(filtered_data):,} of {len(table_data):,} records ({len(filtered_data)/len(table_data)*100:.1f}%)")
+        else:
+            st.info(f"📊 **All Results**: Showing {len(filtered_data):,} records")
+        
+        # Display filtered data
         st.dataframe(filtered_data, use_container_width=True, height=400)
         
         # Download option
         csv = filtered_data.to_csv(index=False)
-        st.download_button("📥 Download Time Series Data", csv, "battery_timeseries.csv", "text/csv", key="download_ts")
+        filename = f"battery_timeseries_filtered_{len(filtered_data)}records.csv"
+        st.download_button("📥 Download Filtered Time Series Data", csv, filename, "text/csv", key="download_ts")
     
     with tab2:
         st.markdown("**Daily Performance Summary**")
