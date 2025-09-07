@@ -5919,7 +5919,16 @@ def _create_enhanced_battery_table(df_sim):
         'SOC_Status': df_sim['Battery_SOC_Percent'].apply(
             lambda x: '🔴 Critical' if x < 25 else '🟡 Low' if x < 40 else '🟢 Normal' if x < 80 else '🔵 High'
         ),
-        'Peak_Shaved_kW': df_sim['Peak_Shaved'].round(1),
+        # NEW COLUMN 1: Total Charge / Discharge (kW) - Positive for charging, negative for discharging
+        'Total_Charge_Discharge_kW': df_sim['Battery_Power_kW'].apply(
+            lambda x: f"+{abs(x):.1f}" if x < 0 else f"-{x:.1f}" if x > 0 else "0.0"
+        ),
+        # NEW COLUMN 2: Target Shave (kW) - Amount that needs to be shaved to reach monthly target
+        'Target_Shave_kW': (df_sim['Original_Demand'] - df_sim['Monthly_Target']).apply(
+            lambda x: max(0, x)
+        ).round(1),
+        # NEW COLUMN 3: Actual Shave (kW) - Renamed from Peak_Shaved_kW
+        'Actual_Shave_kW': df_sim['Peak_Shaved'].round(1),
         'Shaving_Success': df_sim.apply(
             lambda row: '✅ Success' if row['Original_Demand'] <= row['Monthly_Target'] or row['Net_Demand_kW'] <= row['Monthly_Target'] * 1.05 else '❌ Partial', axis=1
         ),
@@ -5957,11 +5966,14 @@ def _create_daily_summary_table(df_sim):
         'Monthly_Target_kW',
         'Max_Discharge_kW', 'Max_Charge_kW',
         'Min_SOC_%', 'Max_SOC_%', 'Avg_SOC_%',
-        'Max_Peak_Shaved_kW'
+        'Max_Actual_Shave_kW'  # Updated to match new column name
     ]
     
     # Add calculated columns
     daily_summary['Peak_Reduction_kW'] = daily_summary['Original_Peak_kW'] - daily_summary['Net_Peak_kW']
+    daily_summary['Daily_Target_Shave_kW'] = (daily_summary['Original_Peak_kW'] - daily_summary['Monthly_Target_kW']).apply(
+        lambda x: max(0, x)
+    ).round(1)
     daily_summary['Target_Success'] = (daily_summary['Net_Peak_kW'] <= daily_summary['Monthly_Target_kW'] * 1.05).map({True: '✅', False: '❌'})
     daily_summary['SOC_Health'] = daily_summary['Min_SOC_%'].apply(
         lambda x: '🔴 Critical' if x < 25 else '🟡 Low' if x < 40 else '🟢 Healthy'
@@ -6051,7 +6063,7 @@ def _display_battery_simulation_tables(df_sim, simulation_results):
         with col2:
             show_violations_only = st.checkbox("Show target violations only", key="filter_violations")  
         with col3:
-            min_peak_shaved = st.number_input("Min peak shaved (kW)", 0.0, 1000.0, 0.0, key="filter_peak")
+            min_peak_shaved = st.number_input("Min actual shave (kW)", 0.0, 1000.0, 0.0, key="filter_peak")
         
         # Apply filters
         filtered_data = table_data.copy()
@@ -6060,7 +6072,7 @@ def _display_battery_simulation_tables(df_sim, simulation_results):
         if show_violations_only:
             filtered_data = filtered_data[filtered_data['Target_Violation'] == '❌']
         if min_peak_shaved > 0:
-            filtered_data = filtered_data[filtered_data['Peak_Shaved_kW'] >= min_peak_shaved]
+            filtered_data = filtered_data[filtered_data['Actual_Shave_kW'] >= min_peak_shaved]
         
         st.dataframe(filtered_data, use_container_width=True, height=400)
         
