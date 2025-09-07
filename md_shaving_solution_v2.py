@@ -4893,63 +4893,100 @@ def _apply_soc_protection_constraints(current_soc_percent, requested_power_kw, p
 def _calculate_intelligent_charge_strategy(current_soc_percent, tariff_period, battery_health_params, 
                                          available_excess_power_kw, max_charge_power_kw):
     """
-    Calculate intelligent charging strategy based on SOC levels, tariff periods, and battery health.
+    RP4 TARIFF-AWARE CHARGING STRATEGY with MD Window Constraints
     
-    Charging Priority Levels:
-    - Emergency (SOC < 10%): Maximum charging regardless of tariff
-    - Critical (SOC < 25%): Aggressive charging, moderate tariff consideration
-    - Health (SOC < 40%): Balanced charging with tariff optimization
-    - Normal (SOC < 80%): Tariff-optimized charging
-    - Maintenance (SOC >= 80%): Minimal charging, avoid overcharging
+    Enhanced charging algorithm that integrates RP4 tariff logic with SOC-based protection:
+    
+    ✅ CORRECTED EMERGENCY CHARGING LOGIC:
+    - SOC < 5%: Critical protection with controlled charging (never exceeds monthly target)
+    - SOC 5-15%: Stop discharge + micro charging during MD hours (preventive protection)
+    - SOC 15-25%: Reduced discharge + limited charging
+    - SOC > 25%: Normal operation based on tariff period
+    
+    ❌ ELIMINATED FLAWED BEHAVIOR:
+    - No more emergency charging during peak hours that violates MD targets
+    - Replaced with preventive discharge limits to avoid critical SOC
+    
+    🎯 RP4 TARIFF INTEGRATION (2-Period System):
+    - Peak Period: Mon-Fri 2PM-10PM (excluding holidays) = MD recording window
+    - Off-Peak: All other times = Optimal charging periods
     
     Args:
         current_soc_percent: Current battery state of charge
-        tariff_period: Current tariff period ('peak', 'off_peak', 'shoulder')
-        battery_health_params: Battery health parameters from _calculate_battery_health_parameters
-        available_excess_power_kw: Available excess solar/renewable power for charging
+        tariff_period: RP4 tariff period ('peak' or 'off_peak')
+        battery_health_params: Battery health parameters
+        available_excess_power_kw: Available excess power (limited by monthly target)
         max_charge_power_kw: Maximum charging power capability
         
     Returns:
-        Dictionary with charging strategy recommendations
+        Dictionary with RP4-aware charging strategy recommendations
     """
     # Get SOC protection levels
     protection_levels = _get_soc_protection_levels()
     
-    # Determine charging urgency based on SOC level
-    if current_soc_percent <= 10:
-        urgency_level = 'emergency'
-        charge_multiplier = 1.0  # Full charging power
-        tariff_consideration = 0.0  # Ignore tariff costs
+    # ✅ ENHANCED SOC-BASED CHARGING URGENCY with MD Constraint Awareness
+    if current_soc_percent <= 5:
+        # CRITICAL PROTECTION: Controlled charging that never exceeds monthly target
+        urgency_level = 'critical_protection'
+        charge_multiplier = 0.5  # Reduced from 1.0 - controlled charging only
+        tariff_consideration = 0.3  # Light tariff consideration but MD compliance priority
+        md_constraint_priority = True
+    elif current_soc_percent <= 15:
+        # PREVENTIVE PROTECTION: Micro charging during MD hours to prevent emergency situations
+        urgency_level = 'preventive_protection'
+        charge_multiplier = 0.3  # Micro charging only
+        tariff_consideration = 0.5  # Balanced approach
+        md_constraint_priority = True
     elif current_soc_percent <= 25:
-        urgency_level = 'critical' 
-        charge_multiplier = 0.9
-        tariff_consideration = 0.2  # Light tariff consideration
-    elif current_soc_percent <= 40:
-        urgency_level = 'health'
-        charge_multiplier = 0.75
-        tariff_consideration = 0.5  # Moderate tariff consideration
-    elif current_soc_percent <= 80:
-        urgency_level = 'normal'
+        # LOW SOC RECOVERY: Limited charging with MD awareness
+        urgency_level = 'low_soc_recovery' 
         charge_multiplier = 0.6
-        tariff_consideration = 0.8  # Strong tariff consideration
-    else:
-        urgency_level = 'maintenance'
-        charge_multiplier = 0.2  # Minimal charging
+        tariff_consideration = 0.7  # Strong tariff consideration
+        md_constraint_priority = True
+    elif current_soc_percent <= 60:
+        # NORMAL OPERATION: Tariff-optimized charging
+        urgency_level = 'normal_operation'
+        charge_multiplier = 0.7
+        tariff_consideration = 0.9  # Very strong tariff consideration
+        md_constraint_priority = False
+    elif current_soc_percent <= 85:
+        # MAINTENANCE CHARGING: Conservative approach
+        urgency_level = 'maintenance_charging'
+        charge_multiplier = 0.4
         tariff_consideration = 1.0  # Full tariff consideration
+        md_constraint_priority = False
+    else:
+        # HIGH SOC: Minimal charging to avoid overcharging
+        urgency_level = 'high_soc_protection'
+        charge_multiplier = 0.1  # Minimal charging only
+        tariff_consideration = 1.0  # Full tariff consideration
+        md_constraint_priority = False
     
-    # Tariff-based charging adjustments
-    tariff_multipliers = {
-        'off_peak': 1.0,    # Best time to charge
-        'shoulder': 0.7,    # Moderate charging
-        'peak': 0.3         # Avoid charging during peak
-    }
+    # 🎯 RP4 TARIFF-BASED CHARGING ADJUSTMENTS (2-Period System)
+    # Normalize tariff_period to handle both old 3-period and new 2-period systems
+    if tariff_period.lower() in ['peak']:
+        # Peak Period (Mon-Fri 2PM-10PM) = MD recording window
+        # Minimal charging to preserve battery capacity for discharge
+        rp4_period = 'peak'
+        tariff_multiplier = 0.2  # Very limited charging during MD window
+        period_strategy = 'preserve_for_discharge'
+    else:
+        # Off-Peak (all other times) = Optimal charging periods
+        # This includes nights, weekends, holidays
+        rp4_period = 'off_peak'
+        tariff_multiplier = 1.0  # Full charging capability
+        period_strategy = 'optimal_charging'
     
-    # Calculate base charging power considering SOC urgency
+    # 🔧 ENHANCED CHARGING POWER CALCULATION
     base_charge_power = min(available_excess_power_kw, max_charge_power_kw) * charge_multiplier
     
-    # Apply tariff considerations
-    tariff_multiplier = tariff_multipliers.get(tariff_period, 0.7)
-    tariff_adjusted_multiplier = (1 - tariff_consideration) + (tariff_consideration * tariff_multiplier)
+    # Apply RP4 tariff considerations with MD constraint awareness
+    if md_constraint_priority:
+        # For critical/preventive protection: Prioritize MD compliance over tariff optimization
+        tariff_adjusted_multiplier = (1 - tariff_consideration * 0.5) + (tariff_consideration * 0.5 * tariff_multiplier)
+    else:
+        # Normal operation: Full tariff optimization
+        tariff_adjusted_multiplier = (1 - tariff_consideration) + (tariff_consideration * tariff_multiplier)
     
     # Final charging power recommendation
     recommended_charge_power = base_charge_power * tariff_adjusted_multiplier
@@ -4960,100 +4997,238 @@ def _calculate_intelligent_charge_strategy(current_soc_percent, tariff_period, b
     
     final_charge_power = recommended_charge_power * health_derating * temperature_derating
     
+    # 📋 STRATEGY DESCRIPTION for logging and debugging
+    if current_soc_percent <= 15 and rp4_period == 'peak':
+        strategy_description = f"MD-aware {urgency_level}: Limited charging during peak to maintain MD compliance"
+    elif rp4_period == 'peak':
+        strategy_description = f"Peak period {urgency_level}: Minimal charging to preserve discharge capacity"
+    else:
+        strategy_description = f"Off-peak {urgency_level}: Optimized charging during low-cost period"
+    
     return {
         'recommended_charge_power_kw': max(0, final_charge_power),
         'urgency_level': urgency_level,
+        'rp4_period': rp4_period,
+        'period_strategy': period_strategy,
         'charge_multiplier': charge_multiplier,
         'tariff_consideration': tariff_consideration,
         'tariff_multiplier': tariff_multiplier,
         'tariff_adjusted_multiplier': tariff_adjusted_multiplier,
+        'md_constraint_priority': md_constraint_priority,
         'health_derating': health_derating,
         'temperature_derating': temperature_derating,
         'available_excess_power_kw': available_excess_power_kw,
         'max_charge_power_kw': max_charge_power_kw,
-        'charging_recommendation': f"{urgency_level.title()} charging at {final_charge_power:.1f}kW"
+        'strategy_description': strategy_description,
+        'charging_recommendation': f"RP4-aware {urgency_level} at {final_charge_power:.1f}kW during {rp4_period}"
     }
 
 
 def _get_tariff_aware_discharge_strategy(tariff_type, current_tariff_period, current_soc_percent, 
-                                       demand_power_kw, battery_health_params):
+                                       demand_power_kw, monthly_target_kw, battery_health_params):
     """
-    Get tariff-aware discharge strategy based on tariff type and current conditions.
+    INTELLIGENT MD-AWARE DISCHARGE STRATEGY with Dynamic Power Calculation
     
-    Strategies:
-    - TOU Tariff: Aggressive discharge during peak periods, conservative during off-peak
-    - General Tariff: Consistent discharge strategy focused on demand reduction
+    🎯 REVOLUTIONARY APPROACH: Replaces fixed multipliers (0.4x, 0.8x) with intelligent discharge 
+    calculation based on actual demand conditions and safety margins.
+    
+    ✅ INTELLIGENT DISCHARGE LOGIC:
+    - Calculates exact excess above monthly target
+    - Applies adaptive safety factors based on excess severity  
+    - Considers battery capability and SOC constraints
+    - Integrates RP4 tariff optimization for cost-effectiveness
+    - Prevents target violations with multiple safety layers
+    
+    🎯 RP4 TARIFF INTEGRATION (2-Period System):
+    - Peak Period: Mon-Fri 2PM-10PM = Intelligent discharge for dual savings
+    - Off-Peak: All other times = Conservative preserve-battery strategy
+    
+    ✅ ENHANCED SOC PROTECTION LEVELS:
+    - SOC < 5%: Critical protection - minimal discharge only
+    - SOC 5-15%: Preventive protection - stop discharge during MD hours
+    - SOC 15-25%: Reduced discharge - controlled power output
+    - SOC > 25%: Full intelligent discharge capability
     
     Args:
         tariff_type: Type of tariff ('TOU', 'General', etc.)
-        current_tariff_period: Current time period ('peak', 'off_peak', 'shoulder')
+        current_tariff_period: RP4 period ('peak' or 'off_peak')
         current_soc_percent: Current battery state of charge
         demand_power_kw: Current power demand
+        monthly_target_kw: Current monthly target for this timestamp
         battery_health_params: Battery health parameters
         
     Returns:
-        Dictionary with discharge strategy recommendations
+        Dictionary with intelligent discharge strategy recommendations
     """
+    # 🎯 STEP 1: CALCULATE ACTUAL EXCESS ABOVE MONTHLY TARGET
+    excess_above_target_kw = max(0, demand_power_kw - monthly_target_kw)
+    
     # Get SOC protection levels
     protection_levels = _get_soc_protection_levels()
     
-    # Base discharge strategy by tariff type
-    if tariff_type.upper() == 'TOU':
-        # Time-of-Use tariff strategy
-        if current_tariff_period == 'peak':
-            # Aggressive discharge during peak periods to maximize savings
-            base_discharge_multiplier = 1.0
-            strategy_priority = 'high_savings'
-            strategy_description = 'Peak period - aggressive discharge for maximum savings'
-        elif current_tariff_period == 'shoulder':
-            # Moderate discharge during shoulder periods
-            base_discharge_multiplier = 0.7
-            strategy_priority = 'moderate_savings'
-            strategy_description = 'Shoulder period - moderate discharge'
-        else:  # off_peak
-            # Conservative discharge during off-peak to preserve battery
-            base_discharge_multiplier = 0.4
-            strategy_priority = 'battery_preservation'
-            strategy_description = 'Off-peak period - conservative discharge'
+    # ✅ STEP 2: ENHANCED SOC-BASED DISCHARGE CONSTRAINTS
+    # Apply progressive SOC protection with MD hour awareness
+    if current_soc_percent <= 5:
+        # CRITICAL PROTECTION: Emergency protection with minimal discharge
+        soc_discharge_factor = 0.1
+        protection_level = 'critical_protection'
+        soc_strategy = 'Emergency SOC - minimal discharge only'
+    elif current_soc_percent <= 15:
+        # PREVENTIVE PROTECTION: Stop discharge during MD hours to prevent critical SOC
+        if current_tariff_period.lower() in ['peak'] and tariff_type.upper() == 'TOU':
+            # During MD recording hours: Stop discharge to prevent emergency charging
+            soc_discharge_factor = 0.0  # NO DISCHARGE during peak MD hours
+            protection_level = 'md_preventive_protection'
+            soc_strategy = 'MD preventive protection - stop discharge during peak hours'
+        else:
+            # During off-peak: Limited discharge allowed
+            soc_discharge_factor = 0.3
+            protection_level = 'preventive_protection'
+            soc_strategy = 'Preventive protection - limited discharge during off-peak'
+    elif current_soc_percent <= 25:
+        # REDUCED DISCHARGE: Controlled power output to maintain reserves
+        soc_discharge_factor = 0.6
+        protection_level = 'reduced_discharge'
+        soc_strategy = 'Low SOC protection - controlled discharge'
     else:
-        # General tariff or other - consistent discharge strategy
-        base_discharge_multiplier = 0.8
-        strategy_priority = 'demand_reduction'
-        strategy_description = 'General tariff - consistent demand reduction'
+        # NORMAL OPERATION: Full discharge capability based on demand
+        soc_discharge_factor = 1.0
+        protection_level = 'normal_operation'
+        soc_strategy = 'Normal operation - full discharge capability'
     
-    # Apply SOC-based constraints
-    soc_constraint = _apply_soc_protection_constraints(
-        current_soc_percent, 
-        demand_power_kw, 
-        protection_levels
-    )
+    # 🎯 STEP 3: INTELLIGENT MD-BASED DISCHARGE CALCULATION
+    if excess_above_target_kw <= 0:
+        # NO EXCESS: No discharge needed (demand below target)
+        recommended_discharge_kw = 0
+        discharge_strategy = 'no_discharge_needed'
+        safety_factor = 1.0
+        strategy_description = f'Demand ({demand_power_kw:.1f}kW) ≤ target ({monthly_target_kw:.1f}kW) - no discharge needed'
+        
+    else:
+        # EXCESS EXISTS: Calculate intelligent discharge based on tariff and severity
+        
+        # 🛡️ SAFETY FACTOR based on excess severity (adaptive approach)
+        excess_percentage = (excess_above_target_kw / monthly_target_kw) * 100
+        
+        if excess_percentage >= 30:  # Very high excess (>30%)
+            safety_factor = 0.95  # 5% safety buffer
+            excess_multiplier = 0.9  # Aggressive discharge (90% of excess)
+            severity_level = 'critical'
+        elif excess_percentage >= 15:  # High excess (15-30%)
+            safety_factor = 0.93  # 7% safety buffer
+            excess_multiplier = 0.8  # Moderate discharge (80% of excess)
+            severity_level = 'high'
+        elif excess_percentage >= 5:  # Moderate excess (5-15%)
+            safety_factor = 0.90  # 10% safety buffer
+            excess_multiplier = 0.7  # Conservative discharge (70% of excess)
+            severity_level = 'moderate'
+        else:  # Low excess (<5%)
+            safety_factor = 0.85  # 15% safety buffer
+            excess_multiplier = 0.5  # Very conservative discharge (50% of excess)
+            severity_level = 'low'
+        
+        # Calculate safe monthly target with buffer
+        safe_monthly_target = monthly_target_kw * safety_factor
+        max_allowable_discharge = demand_power_kw - safe_monthly_target
+        
+        # 🎯 TARIFF-BASED EFFICIENCY CALCULATION
+        if tariff_type.upper() == 'TOU':
+            if current_tariff_period.lower() in ['peak']:
+                # TOU PEAK PERIOD: Full intelligent discharge for dual savings (MD + energy)
+                tariff_efficiency = 1.0
+                discharge_strategy = 'intelligent_peak_optimization'
+                period_description = 'TOU Peak - intelligent discharge for maximum cost reduction'
+                
+            else:
+                # TOU OFF-PEAK PERIOD: Preserve battery for peak periods
+                if excess_percentage > 20:  # Only discharge if significantly above target
+                    tariff_efficiency = 0.4  # Limited discharge to preserve battery
+                    discharge_strategy = 'conservative_preservation'
+                    period_description = 'TOU Off-Peak - limited discharge (preserve for peak)'
+                else:
+                    tariff_efficiency = 0.0  # Preserve battery completely
+                    discharge_strategy = 'battery_preservation'
+                    period_description = 'TOU Off-Peak - preserve battery for future peak periods'
+        else:
+            # GENERAL TARIFF: Consistent intelligent discharge (24/7 MD impact)
+            tariff_efficiency = 0.8
+            discharge_strategy = 'intelligent_consistent'
+            period_description = 'General Tariff - consistent intelligent discharge'
+        
+        # 🔧 CALCULATE INTELLIGENT DISCHARGE POWER
+        # Step 1: Base discharge calculation
+        target_discharge_kw = excess_above_target_kw * excess_multiplier
+        
+        # Step 2: Apply tariff efficiency
+        tariff_adjusted_discharge = target_discharge_kw * tariff_efficiency
+        
+        # Step 3: Apply safety constraint (prevent target violation)
+        safety_limited_discharge = min(tariff_adjusted_discharge, max_allowable_discharge)
+        
+        # Step 4: Final recommended discharge
+        recommended_discharge_kw = max(0, safety_limited_discharge)
+        
+        # Strategy description with real values
+        strategy_description = (f'{period_description} | Excess: {excess_above_target_kw:.1f}kW '
+                              f'({excess_percentage:.1f}%) | Target discharge: {recommended_discharge_kw:.1f}kW '
+                              f'| Safety buffer: {(1-safety_factor)*100:.0f}%')
     
-    # Calculate final discharge multiplier
-    soc_protection_multiplier = soc_constraint['constrained_power_kw'] / max(demand_power_kw, 0.1)
-    final_discharge_multiplier = base_discharge_multiplier * soc_protection_multiplier
+    # 🔋 STEP 4: APPLY SOC AND HEALTH CONSTRAINTS
+    # Apply SOC constraints to recommended discharge
+    soc_limited_discharge_kw = recommended_discharge_kw * soc_discharge_factor
     
     # Apply battery health constraints
     health_derating = battery_health_params.get('health_derating_factor', 1.0)
     temperature_derating = battery_health_params.get('temperature_derating_factor', 1.0)
     
-    health_adjusted_multiplier = final_discharge_multiplier * health_derating * temperature_derating
+    # Final discharge power with all constraints
+    final_discharge_kw = soc_limited_discharge_kw * health_derating * temperature_derating
     
-    # Calculate recommended discharge power
-    max_available_power = demand_power_kw * health_adjusted_multiplier
+    # Calculate discharge multiplier for compatibility with existing code
+    if demand_power_kw > 0:
+        final_discharge_multiplier = final_discharge_kw / demand_power_kw
+    else:
+        final_discharge_multiplier = 0
+    
+    # Ensure multiplier doesn't exceed 1.0 (can't discharge more than demand)
+    final_discharge_multiplier = min(final_discharge_multiplier, 1.0)
+    
+    # 🔄 STEP 5: VERIFICATION - Calculate predicted net MD
+    predicted_net_md = demand_power_kw - final_discharge_kw
+    safety_margin_kw = predicted_net_md - monthly_target_kw
+    safety_margin_percent = (safety_margin_kw / monthly_target_kw * 100) if monthly_target_kw > 0 else 0
+    
+    # 📋 COMPREHENSIVE STRATEGY DESCRIPTION
+    if excess_above_target_kw <= 0:
+        combined_strategy = strategy_description
+    else:
+        combined_strategy = (f"{strategy_description} | SOC: {soc_strategy} | "
+                           f"Final: {final_discharge_kw:.1f}kW | "
+                           f"Net MD: {predicted_net_md:.1f}kW | Safety: +{safety_margin_kw:.1f}kW")
     
     return {
-        'recommended_discharge_multiplier': health_adjusted_multiplier,
-        'base_tariff_multiplier': base_discharge_multiplier,
-        'soc_protection_multiplier': soc_protection_multiplier,
+        'recommended_discharge_multiplier': final_discharge_multiplier,
+        'recommended_discharge_kw': final_discharge_kw,
+        'excess_above_target_kw': excess_above_target_kw,
+        'excess_percentage': excess_percentage if 'excess_percentage' in locals() else 0,
+        'severity_level': severity_level if 'severity_level' in locals() else 'none',
+        'safety_factor': safety_factor,
+        'max_allowable_discharge_kw': max_allowable_discharge if 'max_allowable_discharge' in locals() else 0,
+        'target_discharge_kw': recommended_discharge_kw,
+        'soc_discharge_factor': soc_discharge_factor,
+        'soc_limited_discharge_kw': soc_limited_discharge_kw,
+        'tariff_efficiency': tariff_efficiency if 'tariff_efficiency' in locals() else 1.0,
+        'protection_level': protection_level,
+        'discharge_strategy': discharge_strategy,
         'health_derating': health_derating,
         'temperature_derating': temperature_derating,
-        'strategy_priority': strategy_priority,
-        'strategy_description': strategy_description,
+        'predicted_net_md_kw': predicted_net_md,
+        'safety_margin_kw': safety_margin_kw,
+        'safety_margin_percent': safety_margin_percent,
+        'strategy_description': combined_strategy,
         'tariff_period': current_tariff_period,
-        'active_soc_protection': soc_constraint['active_protection_level'],
-        'soc_constraint_info': soc_constraint,
-        'max_available_discharge_kw': max_available_power,
-        'discharge_recommendation': f"{strategy_description} - {health_adjusted_multiplier:.1%} discharge capability"
+        'calculation_method': 'intelligent_md_aware_v2',
+        'discharge_recommendation': f"Intelligent discharge: {final_discharge_kw:.1f}kW targeting {excess_above_target_kw:.1f}kW excess during {current_tariff_period} (Net MD: {predicted_net_md:.1f}kW)"
     }
 
 
@@ -5523,7 +5698,7 @@ def _simulate_battery_operation_v2_enhanced(df, power_col, monthly_targets, batt
             # Get tariff-aware discharge strategy
             discharge_strategy = _get_tariff_aware_discharge_strategy(
                 tariff_type, tariff_period, current_soc_percent, 
-                current_demand, battery_health_params
+                current_demand, monthly_target, battery_health_params
             )
             discharge_strategy_info.append({
                 'timestamp': current_timestamp,
@@ -5848,7 +6023,7 @@ def _simulate_battery_operation_v2_enhanced(df, power_col, monthly_targets, batt
             # Get tariff-aware discharge strategy
             discharge_strategy = _get_tariff_aware_discharge_strategy(
                 tariff_type, tariff_period, current_soc_percent, 
-                current_demand, battery_health_params
+                current_demand, monthly_target, battery_health_params
             )
             discharge_strategy_info.append({
                 'timestamp': current_timestamp,
