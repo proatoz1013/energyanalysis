@@ -3743,39 +3743,88 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
     if sizing is None:
         sizing = {'power_rating_kw': 100, 'capacity_kwh': 100}
     
-    # ===== V2 CHART TIMESTAMP FILTERING FEATURE =====
+    # ===== V2 CHART SUCCESS/FAILURE FILTERING =====
     st.markdown("##### 🎯 V2 Chart Filters")
     
-    # Timestamp filter for chart data
+    # Success/Failure dropdown filter instead of timestamp filter
     if len(df_sim) > 0:
-        timestamp_filter = st.text_input("🕐 Filter Chart by Timestamp (YYYY-MM-DD HH:MM or partial match)", 
-                                        placeholder="e.g., 2024-01-15 or 14:30 for 2:30pm entries",
-                                        key="chart_timestamp_filter",
-                                        help="Filter the chart data to focus on specific time periods. Supports partial matching.")
+        col1, col2 = st.columns([4, 1])
+        with col1:
+            # Calculate shaving success for each point if not already available
+            if 'Shaving_Success' not in df_sim.columns:
+                df_sim['Shaving_Success'] = df_sim.apply(_get_enhanced_shaving_success, axis=1)
+            
+            filter_options = [
+                "All Days",
+                "All Success Days", 
+                "All Partial Days",
+                "All Failed Days"
+            ]
+            
+            selected_filter = st.selectbox(
+                "🎯 Filter Chart by Day Type:",
+                options=filter_options,
+                index=0,
+                key="chart_success_filter",
+                help="Filter chart data to show complete days that contain specific event types"
+            )
+            
+        with col2:
+            if st.button("🔄 Reset Filter", key="reset_chart_success_filter"):
+                st.session_state.chart_success_filter = "All Days"
+                st.rerun()
         
-        # Apply timestamp filter to chart data
+        # Apply success/failure filter to chart data - FULL DAY filtering
         df_sim_filtered = df_sim.copy()
         
-        if timestamp_filter.strip():
-            # Convert index to string for timestamp matching
-            timestamp_strings = df_sim.index.strftime('%Y-%m-%d %H:%M')
-            filter_mask = timestamp_strings.str.contains(timestamp_filter.strip(), case=False, na=False)
-            df_sim_filtered = df_sim[filter_mask]
-            
-            # Display filter results summary
-            if len(df_sim_filtered) < len(df_sim):
-                st.info(f"📊 **Chart Filter Results**: Displaying {len(df_sim_filtered):,} of {len(df_sim):,} data points ({len(df_sim_filtered)/len(df_sim)*100:.1f}%)")
-            else:
-                st.info(f"📊 **No Filter Applied**: Displaying all {len(df_sim):,} data points")
+        if selected_filter == "All Success Days":
+            # Find all days that contain success events
+            success_days = df_sim[df_sim['Shaving_Success'].str.contains('✅ Complete Success|🟢 No Action Needed|🟢 Off-Peak Period', na=False)].index.date
+            success_days_set = set(success_days)
+            # Show all data for those days - use pd.Series.isin() instead of numpy array.isin()
+            df_sim_filtered = df_sim[pd.Series(df_sim.index.date).isin(success_days_set).values]
+        elif selected_filter == "All Partial Days":
+            # Find all days that contain partial events
+            partial_days = df_sim[df_sim['Shaving_Success'].str.contains('🟡 Good Partial|🟠 Fair Partial|🔶 Poor Partial', na=False)].index.date
+            partial_days_set = set(partial_days)
+            # Show all data for those days - use pd.Series.isin() instead of numpy array.isin()
+            df_sim_filtered = df_sim[pd.Series(df_sim.index.date).isin(partial_days_set).values]
+        elif selected_filter == "All Failed Days":
+            # Find all days that contain failed events
+            failed_days = df_sim[df_sim['Shaving_Success'].str.contains('🔴 Failed', na=False)].index.date
+            failed_days_set = set(failed_days)
+            # Show all data for those days - use pd.Series.isin() instead of numpy array.isin()
+            df_sim_filtered = df_sim[pd.Series(df_sim.index.date).isin(failed_days_set).values]
         else:
-            st.info(f"📊 **All Data**: Displaying {len(df_sim):,} data points")
+            # "All Events" - show everything
+            df_sim_filtered = df_sim
+        
+        # Display filter results summary
+        if len(df_sim_filtered) < len(df_sim):
+            success_days = len(set(df_sim[df_sim['Shaving_Success'].str.contains('✅ Complete Success', na=False)].index.date))
+            partial_days = len(set(df_sim[df_sim['Shaving_Success'].str.contains('🟡 Good Partial|🟠 Fair Partial|🔶 Poor Partial', na=False)].index.date))
+            failed_days = len(set(df_sim[df_sim['Shaving_Success'].str.contains('🔴 Failed', na=False)].index.date))
+            total_days = len(set(df_sim.index.date))
+            filtered_days = len(set(df_sim_filtered.index.date))
+            
+            st.info(f"""
+            📊 **Chart Filter Results**: Showing {len(df_sim_filtered):,} records from {filtered_days} days of {len(df_sim):,} total records ({filtered_days}/{total_days} days, {len(df_sim_filtered)/len(df_sim)*100:.1f}%)
+            
+            **Day Breakdown:**
+            - ✅ **Success Days**: {success_days} days
+            - 🟡🟠🔶 **Partial Days**: {partial_days} days
+            - 🔴 **Failed Days**: {failed_days} days
+            """)
+        else:
+            total_days = len(set(df_sim.index.date))
+            st.info(f"📊 **All Days**: Showing {len(df_sim_filtered):,} records from {total_days} days")
         
         # Use filtered data for the rest of the chart function
         df_sim = df_sim_filtered
         
         # Validation check after filtering
         if len(df_sim) == 0:
-            st.warning("⚠️ No data matches the timestamp filter. Please adjust your filter criteria.")
+            st.warning("⚠️ No days match the selected filter criteria. Please choose a different filter.")
             return
     
     # Resolve Net Demand column name flexibly
@@ -3796,16 +3845,16 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
     # Create V2 dynamic target series (stepped monthly targets) - filtered to match chart data
     target_series = _create_v2_dynamic_target_series(df_sim.index, monthly_targets)
     
-    # Ensure we only show relevant data if filtering resulted in a reduced dataset
-    if timestamp_filter.strip() and len(df_sim) > 0:
+    # Display filtered event range info
+    if selected_filter != "All Events" and len(df_sim) > 0:
         filter_start = df_sim.index.min()
         filter_end = df_sim.index.max()
-        st.info(f"📅 **Chart Date Range**: {filter_start.strftime('%Y-%m-%d %H:%M')} to {filter_end.strftime('%Y-%m-%d %H:%M')}")
+        st.info(f"📅 **Filtered Event Range**: {filter_start.strftime('%Y-%m-%d %H:%M')} to {filter_end.strftime('%Y-%m-%d %H:%M')}")
     
     # Panel 1: V2 Enhanced MD Shaving Effectiveness with Dynamic Monthly Targets
     st.markdown("##### 1️⃣ V2 MD Shaving Effectiveness: Demand vs Battery vs Dynamic Monthly Targets")
-    if timestamp_filter.strip():
-        st.info("🆕 **V2 Enhancement with Filtering**: Target line changes monthly based on V2 configuration, filtered to your selected time range")
+    if selected_filter != "All Events":
+        st.info(f"🆕 **V2 Enhancement with Filtering**: Target line changes monthly based on V2 configuration, showing only {selected_filter.lower()}")
     else:
         st.info("🆕 **V2 Enhancement**: Target line changes monthly based on your V2 target configuration")
     
@@ -6160,18 +6209,61 @@ def _display_battery_simulation_tables(df_sim, simulation_results):
         st.markdown("**Complete Time-Series Battery Operation Data**")
         table_data = _create_enhanced_battery_table(df_sim)
         
-        # Simple timestamp filter
+        # Success/Failure dropdown filter (matching chart filter)
         if len(df_sim) > 0:
-            timestamp_filter = st.text_input("🕐 Filter by Timestamp (YYYY-MM-DD HH:MM or partial match)", 
-                                            placeholder="e.g., 2024-01-15 14:30 or just 14:30 for all 2:30pm entries",
-                                            key="timestamp_filter")
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                # Calculate shaving success for each point if not already available
+                if 'Shaving_Success' not in df_sim.columns:
+                    df_sim['Shaving_Success'] = df_sim.apply(_get_enhanced_shaving_success, axis=1)
+                
+                filter_options = [
+                    "All Days",
+                    "All Success Days", 
+                    "All Partial Days",
+                    "All Failed Days"
+                ]
+                
+                selected_table_filter = st.selectbox(
+                    "🎯 Filter Table by Day Type:",
+                    options=filter_options,
+                    index=0,
+                    key="table_success_filter",
+                    help="Filter table data to show complete days that contain specific event types"
+                )
+                
+            with col2:
+                if st.button("🔄 Reset Filter", key="reset_table_success_filter"):
+                    st.session_state.table_success_filter = "All Days"
+                    st.rerun()
         
-        # Apply timestamp filter
-        filtered_data = table_data.copy()
+        # Apply success/failure filter to table data - FULL DAY filtering
+        df_sim_filtered_table = df_sim.copy()
         
-        if timestamp_filter.strip():
-            # Filter based on timestamp partial match
-            filtered_data = filtered_data[filtered_data['Timestamp'].str.contains(timestamp_filter.strip(), case=False, na=False)]
+        if selected_table_filter == "All Success Days":
+            # Find all days that contain success events
+            success_days = df_sim[df_sim['Shaving_Success'].str.contains('✅ Complete Success|🟢 No Action Needed|🟢 Off-Peak Period', na=False)].index.date
+            success_days_set = set(success_days)
+            # Show all data for those days - use pd.Series.isin() instead of numpy array.isin()
+            df_sim_filtered_table = df_sim[pd.Series(df_sim.index.date).isin(success_days_set).values]
+        elif selected_table_filter == "All Partial Days":
+            # Find all days that contain partial events
+            partial_days = df_sim[df_sim['Shaving_Success'].str.contains('🟡 Good Partial|🟠 Fair Partial|🔶 Poor Partial', na=False)].index.date
+            partial_days_set = set(partial_days)
+            # Show all data for those days - use pd.Series.isin() instead of numpy array.isin()
+            df_sim_filtered_table = df_sim[pd.Series(df_sim.index.date).isin(partial_days_set).values]
+        elif selected_table_filter == "All Failed Days":
+            # Find all days that contain failed events
+            failed_days = df_sim[df_sim['Shaving_Success'].str.contains('🔴 Failed', na=False)].index.date
+            failed_days_set = set(failed_days)
+            # Show all data for those days - use pd.Series.isin() instead of numpy array.isin()
+            df_sim_filtered_table = df_sim[pd.Series(df_sim.index.date).isin(failed_days_set).values]
+        else:
+            # "All Days" - show everything
+            df_sim_filtered_table = df_sim
+        
+        # Create filtered table data
+        filtered_data = _create_enhanced_battery_table(df_sim_filtered_table)
         
         # Display filter results summary
         if len(filtered_data) < len(table_data):
