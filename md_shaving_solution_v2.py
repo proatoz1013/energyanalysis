@@ -5920,12 +5920,13 @@ def _create_enhanced_battery_table(df_sim):
             lambda x: '🔴 Critical' if x < 25 else '🟡 Low' if x < 40 else '🟢 Normal' if x < 80 else '🔵 High'
         ),
         # NEW COLUMN 1: Total Charge / Discharge (kW) - Positive for charging, negative for discharging
-        'Total_Charge_Discharge_kW': df_sim['Battery_Power_kW'].apply(
+        'Charge (+ve)/Discharge (-ve) kW': df_sim['Battery_Power_kW'].apply(
             lambda x: f"+{abs(x):.1f}" if x < 0 else f"-{x:.1f}" if x > 0 else "0.0"
         ),
-        # NEW COLUMN 2: Target Shave (kW) - Amount that needs to be shaved to reach monthly target
-        'Target_Shave_kW': (df_sim['Original_Demand'] - df_sim['Monthly_Target']).apply(
-            lambda x: max(0, x)
+        # NEW COLUMN 2: Target Shave (kW) - Amount that needs to be shaved during MD window only
+        'Target_Shave_kW': df_sim.apply(
+            lambda row: max(0, row['Original_Demand'] - row['Monthly_Target']) if (row.name.weekday() < 5 and 14 <= row.name.hour < 22) else 0,
+            axis=1
         ).round(1),
         # NEW COLUMN 3: Actual Shave (kW) - Renamed from Peak_Shaved_kW
         'Actual_Shave_kW': df_sim['Peak_Shaved'].round(1),
