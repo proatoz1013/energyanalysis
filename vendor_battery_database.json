@@ -11,7 +11,10 @@
     "cycles_per_day": 1.0,
     "cooling": "Liquid (Battery), Air (PCS)",
     "weight_kg": 2700,
-    "dimensions_mm": [1400, 1350, 2100]
+    "dimensions_mm": [1400, 1350, 2100],
+    "depth_of_discharge": 90,
+    "round_trip_efficiency": 93.0,
+    "chemistry": "LFP"
   },
   "TIANWU-100-233-0.5C": {
     "company": "WEIHENG",
@@ -25,7 +28,10 @@
     "cycles_per_day": 1.0,
     "cooling": "Liquid (Battery + PCS)",
     "weight_kg": 2700,
-    "dimensions_mm": [1400, 1350, 2100]
+    "dimensions_mm": [1400, 1350, 2100],
+    "depth_of_discharge": 90,
+    "round_trip_efficiency": 93.0,
+    "chemistry": "LFP"
   },
   "TIANWU-250-233-1C": {
     "company": "WEIHENG",
@@ -39,7 +45,10 @@
     "cycles_per_day": 1.0,
     "cooling": "Liquid (Battery), Air (PCS)",
     "weight_kg": 2600,
-    "dimensions_mm": [1400, 1350, 2100]
+    "dimensions_mm": [1400, 1350, 2100],
+    "depth_of_discharge": 90,
+    "round_trip_efficiency": 93.0,
+    "chemistry": "LFP"
   },
   "LUNA2000-215-2S10": {
     "company": "Huawei",
@@ -61,7 +70,9 @@
     "voltage_range_V": [648, 864],
     "rated_current_A": 140,
     "max_cycle_efficiency": 91.3,
-    "depth_of_discharge": "0-100%",
+    "depth_of_discharge": 90,
+    "round_trip_efficiency": 93.0,
+    "chemistry": "LFP",
     "fire_protection": "Pack-level oxygen barrier, directional gas exhaust, top explosion vent, aerosol",
     "ip_rating": "IP55",
     "noise_dB": "≤65 dB(A)",
@@ -107,6 +118,7 @@
     "weight_kg": 3100,
     "dimensions_mm": [1150, 2450, 1610],
     "battery_type": "LFP",
+    "chemistry": "LFP",
     "cell_spec": "LFP 3.2V / 280Ah",
     "system_config": "256S1P",
     "voltage_range_dc_V": [691.2, 934.4],
@@ -114,7 +126,8 @@
     "frequency_nominal_Hz": [50, 60],
     "frequency_range_Hz": "45-55 Hz / 55-65 Hz",
     "power_factor_range": [-1, 1],
-    "depth_of_discharge": "0-100%",
+    "depth_of_discharge": 90,
+    "round_trip_efficiency": 93.0,
     "max_efficiency": 98.5,
     "operating_temp_C": [-30, 50],
     "humidity_range": "0-100%",

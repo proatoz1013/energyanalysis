@@ -3743,6 +3743,41 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
     if sizing is None:
         sizing = {'power_rating_kw': 100, 'capacity_kwh': 100}
     
+    # ===== V2 CHART TIMESTAMP FILTERING FEATURE =====
+    st.markdown("##### 🎯 V2 Chart Filters")
+    
+    # Timestamp filter for chart data
+    if len(df_sim) > 0:
+        timestamp_filter = st.text_input("🕐 Filter Chart by Timestamp (YYYY-MM-DD HH:MM or partial match)", 
+                                        placeholder="e.g., 2024-01-15 or 14:30 for 2:30pm entries",
+                                        key="chart_timestamp_filter",
+                                        help="Filter the chart data to focus on specific time periods. Supports partial matching.")
+        
+        # Apply timestamp filter to chart data
+        df_sim_filtered = df_sim.copy()
+        
+        if timestamp_filter.strip():
+            # Convert index to string for timestamp matching
+            timestamp_strings = df_sim.index.strftime('%Y-%m-%d %H:%M')
+            filter_mask = timestamp_strings.str.contains(timestamp_filter.strip(), case=False, na=False)
+            df_sim_filtered = df_sim[filter_mask]
+            
+            # Display filter results summary
+            if len(df_sim_filtered) < len(df_sim):
+                st.info(f"📊 **Chart Filter Results**: Displaying {len(df_sim_filtered):,} of {len(df_sim):,} data points ({len(df_sim_filtered)/len(df_sim)*100:.1f}%)")
+            else:
+                st.info(f"📊 **No Filter Applied**: Displaying all {len(df_sim):,} data points")
+        else:
+            st.info(f"📊 **All Data**: Displaying {len(df_sim):,} data points")
+        
+        # Use filtered data for the rest of the chart function
+        df_sim = df_sim_filtered
+        
+        # Validation check after filtering
+        if len(df_sim) == 0:
+            st.warning("⚠️ No data matches the timestamp filter. Please adjust your filter criteria.")
+            return
+    
     # Resolve Net Demand column name flexibly
     net_candidates = ['Net_Demand_kW', 'Net_Demand_KW', 'Net_Demand']
     net_col = next((c for c in net_candidates if c in df_sim.columns), None)
@@ -3758,12 +3793,21 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
         st.info("Available columns: " + ", ".join(df_sim.columns.tolist()))
         return
     
-    # Create V2 dynamic target series (stepped monthly targets)
+    # Create V2 dynamic target series (stepped monthly targets) - filtered to match chart data
     target_series = _create_v2_dynamic_target_series(df_sim.index, monthly_targets)
+    
+    # Ensure we only show relevant data if filtering resulted in a reduced dataset
+    if timestamp_filter.strip() and len(df_sim) > 0:
+        filter_start = df_sim.index.min()
+        filter_end = df_sim.index.max()
+        st.info(f"📅 **Chart Date Range**: {filter_start.strftime('%Y-%m-%d %H:%M')} to {filter_end.strftime('%Y-%m-%d %H:%M')}")
     
     # Panel 1: V2 Enhanced MD Shaving Effectiveness with Dynamic Monthly Targets
     st.markdown("##### 1️⃣ V2 MD Shaving Effectiveness: Demand vs Battery vs Dynamic Monthly Targets")
-    st.info("🆕 **V2 Enhancement**: Target line now changes monthly based on your V2 target configuration")
+    if timestamp_filter.strip():
+        st.info("🆕 **V2 Enhancement with Filtering**: Target line changes monthly based on V2 configuration, filtered to your selected time range")
+    else:
+        st.info("🆕 **V2 Enhancement**: Target line changes monthly based on your V2 target configuration")
     
     fig = go.Figure()
     
