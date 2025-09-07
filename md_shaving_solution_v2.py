@@ -6209,75 +6209,16 @@ def _display_battery_simulation_tables(df_sim, simulation_results):
         st.markdown("**Complete Time-Series Battery Operation Data**")
         table_data = _create_enhanced_battery_table(df_sim)
         
-        # Success/Failure dropdown filter (matching chart filter)
-        if len(df_sim) > 0:
-            col1, col2 = st.columns([4, 1])
-            with col1:
-                # Calculate shaving success for each point if not already available
-                if 'Shaving_Success' not in df_sim.columns:
-                    df_sim['Shaving_Success'] = df_sim.apply(_get_enhanced_shaving_success, axis=1)
-                
-                filter_options = [
-                    "All Days",
-                    "All Success Days", 
-                    "All Partial Days",
-                    "All Failed Days"
-                ]
-                
-                selected_table_filter = st.selectbox(
-                    "🎯 Filter Table by Day Type:",
-                    options=filter_options,
-                    index=0,
-                    key="table_success_filter",
-                    help="Filter table data to show complete days that contain specific event types"
-                )
-                
-            with col2:
-                if st.button("🔄 Reset Filter", key="reset_table_success_filter"):
-                    st.session_state.table_success_filter = "All Days"
-                    st.rerun()
+        # Display all data without filtering
+        st.info(f"📊 **All Results**: Showing {len(table_data):,} records")
         
-        # Apply success/failure filter to table data - FULL DAY filtering
-        df_sim_filtered_table = df_sim.copy()
-        
-        if selected_table_filter == "All Success Days":
-            # Find all days that contain success events
-            success_days = df_sim[df_sim['Shaving_Success'].str.contains('✅ Complete Success|🟢 No Action Needed|🟢 Off-Peak Period', na=False)].index.date
-            success_days_set = set(success_days)
-            # Show all data for those days - use pd.Series.isin() instead of numpy array.isin()
-            df_sim_filtered_table = df_sim[pd.Series(df_sim.index.date).isin(success_days_set).values]
-        elif selected_table_filter == "All Partial Days":
-            # Find all days that contain partial events
-            partial_days = df_sim[df_sim['Shaving_Success'].str.contains('🟡 Good Partial|🟠 Fair Partial|🔶 Poor Partial', na=False)].index.date
-            partial_days_set = set(partial_days)
-            # Show all data for those days - use pd.Series.isin() instead of numpy array.isin()
-            df_sim_filtered_table = df_sim[pd.Series(df_sim.index.date).isin(partial_days_set).values]
-        elif selected_table_filter == "All Failed Days":
-            # Find all days that contain failed events
-            failed_days = df_sim[df_sim['Shaving_Success'].str.contains('🔴 Failed', na=False)].index.date
-            failed_days_set = set(failed_days)
-            # Show all data for those days - use pd.Series.isin() instead of numpy array.isin()
-            df_sim_filtered_table = df_sim[pd.Series(df_sim.index.date).isin(failed_days_set).values]
-        else:
-            # "All Days" - show everything
-            df_sim_filtered_table = df_sim
-        
-        # Create filtered table data
-        filtered_data = _create_enhanced_battery_table(df_sim_filtered_table)
-        
-        # Display filter results summary
-        if len(filtered_data) < len(table_data):
-            st.info(f"📊 **Filtered Results**: Showing {len(filtered_data):,} of {len(table_data):,} records ({len(filtered_data)/len(table_data)*100:.1f}%)")
-        else:
-            st.info(f"📊 **All Results**: Showing {len(filtered_data):,} records")
-        
-        # Display filtered data
-        st.dataframe(filtered_data, use_container_width=True, height=400)
+        # Display data
+        st.dataframe(table_data, use_container_width=True, height=400)
         
         # Download option
-        csv = filtered_data.to_csv(index=False)
-        filename = f"battery_timeseries_filtered_{len(filtered_data)}records.csv"
-        st.download_button("📥 Download Filtered Time Series Data", csv, filename, "text/csv", key="download_ts")
+        csv = table_data.to_csv(index=False)
+        filename = f"battery_timeseries_{len(table_data)}records.csv"
+        st.download_button("📥 Download Time Series Data", csv, filename, "text/csv", key="download_ts")
     
     with tab2:
         st.markdown("**Daily Performance Summary**")
