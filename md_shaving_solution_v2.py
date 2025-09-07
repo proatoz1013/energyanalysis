@@ -5891,7 +5891,67 @@ def _simulate_battery_operation_v2_enhanced(df, power_col, monthly_targets, batt
     }
 
 
-# ...existing code...
+# ===================================================================================================
+# V2 ENHANCED SHAVING SUCCESS CLASSIFICATION
+# ===================================================================================================
+
+def _get_enhanced_shaving_success(row):
+    """
+    Enhanced 6-stage shaving success classification with detailed performance analysis.
+    
+    Provides granular insight into:
+    - When battery couldn't discharge (SOC/power constraints)
+    - How effective partial shaving was (percentage reduction achieved)
+    - Clear success metrics for performance analysis
+    
+    Args:
+        row: DataFrame row with simulation data
+        
+    Returns:
+        str: Enhanced success status with emoji and description
+    """
+    original_demand = row['Original_Demand']
+    net_demand = row['Net_Demand_kW'] 
+    monthly_target = row['Monthly_Target']
+    battery_power = row.get('Battery_Power_kW', 0)  # Positive = discharge
+    soc_percent = row.get('Battery_SOC_Percent', 100)
+    
+    # Stage 1: Check if MD window intervention was needed
+    is_md_window = (row.name.weekday() < 5 and 14 <= row.name.hour < 22)
+    if not is_md_window:
+        return '🟢 Off-Peak Period'
+    
+    # Stage 2: Check if intervention was needed during MD window
+    if original_demand <= monthly_target:
+        return '🟢 No Action Needed'
+    
+    # Stage 3: Check if battery attempted to discharge
+    if battery_power <= 0:
+        if soc_percent < 25:
+            return '🔴 Failed - SOC Too Low'
+        else:
+            return '🔴 Failed - No Discharge'
+    
+    # Stage 4-6: Evaluate shaving effectiveness
+    excess_before = original_demand - monthly_target
+    excess_after = max(0, net_demand - monthly_target)
+    reduction_achieved = excess_before - excess_after
+    reduction_percentage = (reduction_achieved / excess_before * 100) if excess_before > 0 else 0
+    
+    # Complete success - target achieved
+    if net_demand <= monthly_target * 1.02:  # 2% tolerance for rounding
+        return '✅ Complete Success'
+    
+    # Partial success levels based on reduction percentage
+    elif reduction_percentage >= 80:
+        return f'🟡 Good Partial ({reduction_percentage:.0f}%)'
+    elif reduction_percentage >= 50:
+        return f'🟠 Fair Partial ({reduction_percentage:.0f}%)'
+    elif reduction_percentage >= 20:
+        return f'🔶 Poor Partial ({reduction_percentage:.0f}%)'
+    else:
+        return '🔴 Failed - Minimal Impact'
+
 
 # ===================================================================================================
 # V2 TABLE VISUALIZATION FUNCTIONS - Enhanced Battery Simulation Tables
@@ -5930,9 +5990,7 @@ def _create_enhanced_battery_table(df_sim):
         ).round(1),
         # NEW COLUMN 3: Actual Shave (kW) - Renamed from Peak_Shaved_kW
         'Actual_Shave_kW': df_sim['Peak_Shaved'].round(1),
-        'Shaving_Success': df_sim.apply(
-            lambda row: '✅ Success' if row['Original_Demand'] <= row['Monthly_Target'] or row['Net_Demand_kW'] <= row['Monthly_Target'] * 1.05 else '❌ Partial', axis=1
-        ),
+        'Shaving_Success': df_sim.apply(_get_enhanced_shaving_success, axis=1),
         'MD_Period': df_sim.index.map(lambda x: '🔴 Peak' if (x.weekday() < 5 and 14 <= x.hour < 22) else '🟢 Off-Peak'),
         'Target_Violation': (df_sim['Net_Demand_kW'] > df_sim['Monthly_Target']).map({True: '❌', False: '✅'})
     }
