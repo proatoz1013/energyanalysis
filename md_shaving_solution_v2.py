@@ -719,8 +719,8 @@ def _render_battery_quantity_recommendation(max_power_shaving_required, recommen
             qty_for_power = max_power_shaving_required / battery_power_kw if battery_power_kw > 0 else 0
             qty_for_power_rounded = int(np.ceil(qty_for_power))
             
-            # Energy Capacity based quantity: roundup(Max Required Energy / Battery Energy Capacity) 
-            qty_for_energy = recommended_energy_capacity / battery_energy_kwh if battery_energy_kwh > 0 else 0
+            # Energy Capacity based quantity: roundup(Max Required Energy / Battery Energy Capacity / DOD / Efficiency) 
+            qty_for_energy = recommended_energy_capacity / battery_energy_kwh / 0.9 / 0.93 if battery_energy_kwh > 0 else 0
             qty_for_energy_rounded = int(np.ceil(qty_for_energy))
             
             # Recommended quantity: maximum of the two
@@ -741,9 +741,9 @@ def _render_battery_quantity_recommendation(max_power_shaving_required, recommen
                 st.metric(
                     "Energy-Based Qty", 
                     f"{qty_for_energy_rounded} units",
-                    help=f"Based on {recommended_energy_capacity:.1f} kWh ÷ {battery_energy_kwh} kWh"
+                    help=f"Based on {recommended_energy_capacity:.1f} kWh ÷ {battery_energy_kwh} kWh ÷ 0.9 ÷ 0.93"
                 )
-                st.caption(f"Calculation: ⌈{recommended_energy_capacity:.1f} ÷ {battery_energy_kwh}⌉")
+                st.caption(f"Calculation: ⌈{recommended_energy_capacity:.1f} ÷ {battery_energy_kwh} ÷ 0.9 ÷ 0.93⌉")
             
             with col3:
                 st.metric(
