@@ -6003,7 +6003,7 @@ def _create_monthly_summary_table(df_sim, selected_tariff=None):
     
     # Calculate MD excess and success shaved based on tariff-specific periods
     monthly_data['MD_Excess_kW'] = (monthly_data['Original_Demand'] - monthly_data['Monthly_Target']).apply(lambda x: max(0, x))
-    monthly_data['Success_Shaved_kW'] = (monthly_data['Original_Demand'] - monthly_data['Net_Demand_kW']).apply(lambda x: max(0, x))
+    monthly_data['Success_Shaved_kW'] = (monthly_data['Original_Demand'] - monthly_data['Net_Demand_kW']).apply(lambda x: max(0, x))  # Max Original - Max Net per month
     monthly_data['Cost_Saving_RM'] = monthly_data['Success_Shaved_kW'] * md_rate_rm_per_kw
     
     # Format the results
