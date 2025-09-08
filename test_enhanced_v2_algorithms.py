@@ -85,7 +85,7 @@ def test_enhanced_battery_algorithms():
         max_charge = 100  # 100kW max charge
         
         for soc in [10, 25, 40, 60, 85]:
-            for tariff_period in ['peak', 'shoulder', 'off_peak']:
+            for tariff_period in ['peak', 'off_peak']:  # RP4 2-period system
                 strategy = _calculate_intelligent_charge_strategy(
                     soc, tariff_period, health_params, available_excess, max_charge
                 )
@@ -101,7 +101,7 @@ def test_enhanced_battery_algorithms():
         demand_power = 120  # 120kW demand
         
         for tariff_type in ['TOU', 'General']:
-            for period in ['peak', 'shoulder', 'off_peak']:
+            for period in ['peak', 'off_peak']:  # RP4 2-period system
                 for soc in [30, 60]:
                     strategy = _get_tariff_aware_discharge_strategy(
                         tariff_type, period, soc, demand_power, health_params
@@ -158,7 +158,8 @@ def test_enhanced_algorithm_integration():
         for hour in range(24):
             # Simulate different conditions throughout the day
             if 6 <= hour <= 18:  # Daytime
-                tariff_period = 'peak' if 14 <= hour <= 22 else 'shoulder'
+                # Use RP4 2-period logic: peak if weekday 14:00-22:00, otherwise off-peak
+                tariff_period = 'peak' if 14 <= hour < 22 else 'off_peak'
                 demand = 90 + np.random.normal(0, 10)  # Higher demand
                 available_excess = max(0, 30 - np.random.normal(0, 15))  # Variable excess
             else:  # Nighttime
