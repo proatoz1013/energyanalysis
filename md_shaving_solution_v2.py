@@ -5755,6 +5755,36 @@ def _get_enhanced_shaving_success(row):
 
 
 # ===================================================================================================
+# NUMBER FORMATTING UTILITIES
+# ===================================================================================================
+
+def _format_rm_value(value):
+    """
+    Format RM values according to specified rules:
+    - >= RM1: RM1,000,000.00 (with thousands separators and 2 decimal places)
+    - < RM1: RM0.0000 (with 4 decimal places)
+    """
+    if value >= 1:
+        return f"RM{value:,.2f}"
+    else:
+        return f"RM{value:.4f}"
+
+def _format_number_value(value):
+    """
+    Format general numbers according to specified rules:
+    - >= 1: 1,000 (with thousands separators, no decimal places for integers)
+    - < 1: 0.00 (with 2 decimal places)
+    """
+    if value >= 1:
+        # Check if it's effectively an integer
+        if abs(value - round(value)) < 0.001:
+            return f"{int(round(value)):,}"
+        else:
+            return f"{value:,.1f}"
+    else:
+        return f"{value:.2f}"
+
+# ===================================================================================================
 # V2 TABLE VISUALIZATION FUNCTIONS - Enhanced Battery Simulation Tables
 # ===================================================================================================
 
@@ -5927,18 +5957,18 @@ def _create_daily_summary_table(df_sim, selected_tariff=None):
         total_energy_throughput_kwh = total_energy_charge_kwh + total_energy_discharge_kwh
         charging_cycles = total_energy_throughput_kwh / battery_usable_capacity_kwh if battery_usable_capacity_kwh > 0 else 0
         
-        # Append daily summary
+        # Append daily summary with proper formatting
         daily_summary.append({
             'Date': date_str,
-            'Total Peak Events': total_peak_events,
-            f'{tariff_label} MD Excess (kW)': round(md_excess_kw, 1),
-            'Total Energy Charge (kWh)': round(total_energy_charge_kwh, 2),
-            'Total Energy Discharge (kWh)': round(total_energy_discharge_kwh, 2),
-            'Target MD Shave (kW)': round(target_md_shave_kw, 1),
-            'Actual MD Shave (kW)': round(actual_md_shave_kw, 1),
-            'Variance MD Shave (kW)': round(variance_md_shave_kw, 1),
+            'Total Peak Events': _format_number_value(total_peak_events),
+            f'{tariff_label} MD Excess (kW)': _format_number_value(md_excess_kw),
+            'Total Energy Charge (kWh)': _format_number_value(total_energy_charge_kwh),
+            'Total Energy Discharge (kWh)': _format_number_value(total_energy_discharge_kwh),
+            'Target MD Shave (kW)': _format_number_value(target_md_shave_kw),
+            'Actual MD Shave (kW)': _format_number_value(actual_md_shave_kw),
+            'Variance MD Shave (kW)': _format_number_value(variance_md_shave_kw),
             'Target_Success': target_success,
-            'Charging Cycles': round(charging_cycles, 2)
+            'Charging Cycles': _format_number_value(charging_cycles)
         })
     
     return pd.DataFrame(daily_summary)
@@ -6049,13 +6079,13 @@ def _create_monthly_summary_table(df_sim, selected_tariff=None):
     monthly_data = monthly_data.join(cycles_df, how='left')
     monthly_data['charging_cycles'] = monthly_data['charging_cycles'].fillna(0)
     
-    # Format the results
+    # Format the results with proper number formatting
     result = pd.DataFrame({
         'Month': [str(period) for period in monthly_data.index],
-        f'{tariff_label} MD Excess (kW)': monthly_data['MD_Excess_kW'].round(1),
-        'Success Shaved (kW)': monthly_data['Success_Shaved_kW'].round(1),
-        'Cost Saving (RM)': monthly_data['Cost_Saving_RM'].round(2),
-        'Total Charging Cycles': monthly_data['charging_cycles'].round(2)
+        f'{tariff_label} MD Excess (kW)': [_format_number_value(x) for x in monthly_data['MD_Excess_kW']],
+        'Success Shaved (kW)': [_format_number_value(x) for x in monthly_data['Success_Shaved_kW']],
+        'Cost Saving (RM)': [_format_rm_value(x) for x in monthly_data['Cost_Saving_RM']],
+        'Total Charging Cycles': [_format_number_value(x) for x in monthly_data['charging_cycles']]
     })
     
     return result
@@ -6095,18 +6125,18 @@ def _create_kpi_summary_table(simulation_results, df_sim):
             'Battery Utilization (%)'
         ],
         'Value': [
-            f"{len(df_sim) * 0.25:.1f} hours",
-            f"{simulation_results.get('peak_reduction_kw', 0):.1f} kW",
-            f"{simulation_results.get('success_rate_percent', 0):.1f}%",
-            f"{simulation_results.get('total_energy_discharged', 0):.1f} kWh",
-            f"{simulation_results.get('total_energy_charged', 0):.1f} kWh",
-            f"{(simulation_results.get('total_energy_discharged', 0) / max(simulation_results.get('total_energy_charged', 1), 1) * 100):.1f}%",
-            f"{simulation_results.get('average_soc', 0):.1f}%",
-            f"{simulation_results.get('min_soc', 0):.1f}%",
-            f"{simulation_results.get('max_soc', 0):.1f}%",
-            f"{simulation_results.get('monthly_targets_count', 0)} months",
-            f"{simulation_results.get('v2_constraint_violations', 0)} intervals",
-            f"{(simulation_results.get('total_energy_discharged', 0) / max(len(df_sim) * 0.25 * battery_capacity_kwh, 1) * 100):.1f}%"
+            f"{_format_number_value(len(df_sim) * 0.25)} hours",
+            f"{_format_number_value(simulation_results.get('peak_reduction_kw', 0))} kW",
+            f"{_format_number_value(simulation_results.get('success_rate_percent', 0))}%",
+            f"{_format_number_value(simulation_results.get('total_energy_discharged', 0))} kWh",
+            f"{_format_number_value(simulation_results.get('total_energy_charged', 0))} kWh",
+            f"{_format_number_value(simulation_results.get('total_energy_discharged', 0) / max(simulation_results.get('total_energy_charged', 1), 1) * 100)}%",
+            f"{_format_number_value(simulation_results.get('average_soc', 0))}%",
+            f"{_format_number_value(simulation_results.get('min_soc', 0))}%",
+            f"{_format_number_value(simulation_results.get('max_soc', 0))}%",
+            f"{_format_number_value(simulation_results.get('monthly_targets_count', 0))} months",
+            f"{_format_number_value(simulation_results.get('v2_constraint_violations', 0))} intervals",
+            f"{_format_number_value(simulation_results.get('total_energy_discharged', 0) / max(len(df_sim) * 0.25 * battery_capacity_kwh, 1) * 100)}%"
         ]
     }
     
@@ -6191,19 +6221,23 @@ def _display_battery_simulation_tables(df_sim, simulation_results, selected_tari
         if len(daily_data) > 0:
             st.dataframe(daily_data, use_container_width=True)
             
-            # Add summary metrics
+            # Add summary metrics with proper formatting
             col1, col2, col3, col4 = st.columns(4)
             
-            total_peak_events = daily_data['Total Peak Events'].sum()
+            # Extract numeric values from formatted data for calculations
+            peak_events_values = daily_data['Total Peak Events'].apply(lambda x: float(x.replace(',', '')) if isinstance(x, str) else x)
+            charging_cycle_values = daily_data['Charging Cycles'].apply(lambda x: float(x.replace(',', '')) if isinstance(x, str) else x)
+            
+            total_peak_events = peak_events_values.sum()
             successful_days = len(daily_data[daily_data['Target_Success'] == '✅'])
             total_days = len(daily_data)
             success_rate = (successful_days / total_days * 100) if total_days > 0 else 0
-            total_charging_cycles = daily_data['Charging Cycles'].sum()
+            total_charging_cycles = charging_cycle_values.sum()
             
-            col1.metric("Total Peak Events", f"{total_peak_events}")
-            col2.metric("Success Rate", f"{success_rate:.1f}%", f"{successful_days}/{total_days} days")
-            col3.metric("Total Charging Cycles", f"{total_charging_cycles:.2f}")
-            col4.metric("Avg Cycles/Day", f"{total_charging_cycles/total_days:.2f}" if total_days > 0 else "0.00")
+            col1.metric("Total Peak Events", _format_number_value(total_peak_events))
+            col2.metric("Success Rate", f"{_format_number_value(success_rate)}%", f"{successful_days}/{total_days} days")
+            col3.metric("Total Charging Cycles", _format_number_value(total_charging_cycles))
+            col4.metric("Avg Cycles/Day", _format_number_value(total_charging_cycles/total_days) if total_days > 0 else "0.00")
             
             # Add explanation
             tariff_type = "TOU" if (selected_tariff and ('tou' in selected_tariff.get('Tariff', '').lower() or selected_tariff.get('Type', '').lower() == 'tou')) else "General"
@@ -6262,34 +6296,38 @@ def _display_battery_simulation_tables(df_sim, simulation_results, selected_tari
             
             # Display summary metrics including charging cycles
             if selected_tariff and 'Cost Saving (RM)' in monthly_data.columns:
-                total_cost_saving = monthly_data['Cost Saving (RM)'].sum()
-                avg_monthly_saving = monthly_data['Cost Saving (RM)'].mean()
-                total_charging_cycles = monthly_data['Total Charging Cycles'].sum() if 'Total Charging Cycles' in monthly_data.columns else 0
-                avg_monthly_cycles = monthly_data['Total Charging Cycles'].mean() if 'Total Charging Cycles' in monthly_data.columns else 0
+                # Extract numeric values from formatted data for calculations
+                cost_saving_values = monthly_data['Cost Saving (RM)'].apply(lambda x: float(x.replace('RM', '').replace(',', '')) if isinstance(x, str) else x)
+                charging_cycle_values = monthly_data['Total Charging Cycles'].apply(lambda x: float(x.replace(',', '')) if isinstance(x, str) else x) if 'Total Charging Cycles' in monthly_data.columns else pd.Series([0])
+                success_shaved_values = monthly_data['Success Shaved (kW)'].apply(lambda x: float(x.replace(',', '')) if isinstance(x, str) else x)
+                md_excess_values = monthly_data.iloc[:, 1].apply(lambda x: float(x.replace(',', '')) if isinstance(x, str) else x)  # Second column is MD Excess
+                
+                total_cost_saving = cost_saving_values.sum()
+                avg_monthly_saving = cost_saving_values.mean()
+                total_charging_cycles = charging_cycle_values.sum()
+                avg_monthly_cycles = charging_cycle_values.mean()
+                total_success_shaved = success_shaved_values.sum()
+                total_md_excess = md_excess_values.sum()
                 
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
-                    st.metric("Total Cost Saving", f"RM {total_cost_saving:.2f}")
+                    st.metric("Total Cost Saving", _format_rm_value(total_cost_saving))
                 with col2:
-                    st.metric("Average Monthly Saving", f"RM {avg_monthly_saving:.2f}")
+                    st.metric("Average Monthly Saving", _format_rm_value(avg_monthly_saving))
                 with col3:
-                    st.metric("Total Charging Cycles", f"{total_charging_cycles:.2f}")
+                    st.metric("Total Charging Cycles", _format_number_value(total_charging_cycles))
                 with col4:
                     st.metric("Analysis Period", f"{len(monthly_data)} months")
                     
                 # Additional metrics row
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    st.metric("Avg Cycles/Month", f"{avg_monthly_cycles:.2f}")
+                    st.metric("Avg Cycles/Month", _format_number_value(avg_monthly_cycles))
                 with col2:
-                    if len(monthly_data) > 0:
-                        total_success_shaved = monthly_data['Success Shaved (kW)'].sum()
-                        st.metric("Total Success Shaved", f"{total_success_shaved:.1f} kW")
+                    st.metric("Total Success Shaved", f"{_format_number_value(total_success_shaved)} kW")
                 with col3:
-                    if len(monthly_data) > 0:
-                        tariff_type = "TOU" if 'TOU' in monthly_data.columns[1] else "General"
-                        total_md_excess = monthly_data.iloc[:, 1].sum()  # Second column is MD Excess
-                        st.metric(f"Total {tariff_type} MD Excess", f"{total_md_excess:.1f} kW")
+                    tariff_type = "TOU" if 'TOU' in monthly_data.columns[1] else "General"
+                    st.metric(f"Total {tariff_type} MD Excess", f"{_format_number_value(total_md_excess)} kW")
         else:
             st.info("No monthly data available for analysis.")
     
