@@ -4236,7 +4236,7 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
         'max_soc': df_sim['Battery_SOC_Percent'].max(),
         'monthly_targets_count': len(monthly_targets) if monthly_targets is not None else 0,
         'v2_constraint_violations': len(df_sim[df_sim['Net_Demand_kW'] > df_sim['Monthly_Target']])
-    })
+    }, selected_tariff)
     
     # Panel 2: Combined SOC and Battery Power Chart (same as V1)
     st.markdown("##### 2️⃣ Combined SOC and Battery Power Chart")
@@ -5800,47 +5800,221 @@ def _create_enhanced_battery_table(df_sim):
     return pd.DataFrame(enhanced_columns)
 
 
-def _create_daily_summary_table(df_sim):
+def _create_daily_summary_table(df_sim, selected_tariff=None):
     """
-    Create daily summary of battery performance with key metrics aggregation.
+    Create revised daily summary of battery performance with RP4 tariff-aware peak events analysis.
     
     Args:
         df_sim: Simulation dataframe with battery operation data
+        selected_tariff: Selected tariff configuration for RP4 tariff-aware analysis
         
     Returns:
-        pd.DataFrame: Daily performance summary with success indicators
+        pd.DataFrame: Daily performance summary with RP4 tariff-aware peak events analysis
     """
-    # Group by date
-    daily_summary = df_sim.groupby(df_sim.index.date).agg({
-        'Original_Demand': ['max', 'mean'],
-        'Net_Demand_kW': ['max', 'mean'],
-        'Monthly_Target': 'first',
-        'Battery_Power_kW': ['max', 'min'],
-        'Battery_SOC_Percent': ['min', 'max', 'mean'],
-        'Peak_Shaved': 'max'
-    }).round(1)
+    if df_sim.empty:
+        return pd.DataFrame()
     
-    # Flatten column names
-    daily_summary.columns = [
-        'Original_Peak_kW', 'Original_Avg_kW',
-        'Net_Peak_kW', 'Net_Avg_kW', 
-        'Monthly_Target_kW',
-        'Max_Discharge_kW', 'Max_Charge_kW',
-        'Min_SOC_%', 'Max_SOC_%', 'Avg_SOC_%',
-        'Max_Actual_Shave_kW'  # Updated to match new column name
-    ]
+    # Determine tariff type for RP4 tariff-aware analysis
+    is_tou_tariff = False
+    if selected_tariff:
+        tariff_name = selected_tariff.get('Tariff', '').lower()
+        tariff_type_field = selected_tariff.get('Type', '').lower()
+        is_tou_tariff = 'tou' in tariff_name or 'tou' in tariff_type_field or tariff_type_field == 'tou'
     
-    # Add calculated columns
-    daily_summary['Peak_Reduction_kW'] = daily_summary['Original_Peak_kW'] - daily_summary['Net_Peak_kW']
-    daily_summary['Daily_Target_Shave_kW'] = (daily_summary['Original_Peak_kW'] - daily_summary['Monthly_Target_kW']).apply(
-        lambda x: max(0, x)
-    ).round(1)
-    daily_summary['Target_Success'] = (daily_summary['Net_Peak_kW'] <= daily_summary['Monthly_Target_kW'] * 1.05).map({True: '✅', False: '❌'})
-    daily_summary['SOC_Health'] = daily_summary['Min_SOC_%'].apply(
-        lambda x: '🔴 Critical' if x < 25 else '🟡 Low' if x < 40 else '🟢 Healthy'
+    # Get battery usable capacity for charging cycle calculation
+    battery_usable_capacity_kwh = 100  # Default fallback
+    if hasattr(st.session_state, 'tabled_analysis_selected_battery'):
+        selected_battery = st.session_state.tabled_analysis_selected_battery
+        quantity = getattr(st.session_state, 'tabled_analysis_battery_quantity', 1)
+        battery_spec = selected_battery['spec']
+        total_capacity = battery_spec.get('energy_kWh', 100) * quantity
+        depth_of_discharge = 80  # Default DoD
+        try:
+            # Try to get DoD from battery params if available
+            battery_params = getattr(st.session_state, 'battery_params', {})
+            depth_of_discharge = battery_params.get('depth_of_discharge', 80)
+        except:
+            pass
+        battery_usable_capacity_kwh = total_capacity * (depth_of_discharge / 100)
+    
+    # RP4 Tariff-Aware Peak Events Detection Logic
+    def is_peak_event_rp4(row):
+        """
+        Determine if this interval contains a peak event based on RP4 tariff logic:
+        - TOU Tariff: Peak events only during MD recording periods (2PM-10PM weekdays)
+        - General Tariff: Peak events anytime (24/7 MD recording)
+        """
+        timestamp = row.name
+        original_demand = row['Original_Demand']
+        monthly_target = row['Monthly_Target']
+        
+        # Check if demand exceeds monthly target
+        if original_demand <= monthly_target:
+            return False
+        
+        # Apply RP4 tariff-specific logic
+        if is_tou_tariff:
+            # TOU: Only count as peak event during MD recording window (2PM-10PM weekdays)
+            return (timestamp.weekday() < 5 and 14 <= timestamp.hour < 22)
+        else:
+            # General: Any time above target is a peak event (24/7 MD recording)
+            return True
+    
+    # Add peak event classification to dataframe
+    df_sim_analysis = df_sim.copy()
+    df_sim_analysis['Is_Peak_Event'] = df_sim_analysis.apply(is_peak_event_rp4, axis=1)
+    df_sim_analysis['Peak_Event_Excess'] = df_sim_analysis.apply(
+        lambda row: max(0, row['Original_Demand'] - row['Monthly_Target']) if row['Is_Peak_Event'] else 0, axis=1
     )
     
-    return daily_summary.reset_index()
+    # Group by date for daily analysis - Get unique dates only
+    daily_summary = []
+    unique_dates = sorted(set(df_sim_analysis.index.date))
+    
+    for date in unique_dates:
+        day_data = df_sim_analysis[df_sim_analysis.index.date == date].copy()
+        
+        if len(day_data) == 0:
+            continue
+            
+        # 1. Date (YYYY-MM-DD)
+        date_str = date.strftime('%Y-%m-%d')
+        
+        # 2. Total Peak Events (Count Peak Events by following tariff aware follow RP4 tariff selection)
+        total_peak_events = int(day_data['Is_Peak_Event'].sum())
+        
+        # 3. General or TOU MD Excess (MD kW) - Maximum MD excess during peak events
+        tariff_label = "TOU" if is_tou_tariff else "General"
+        if total_peak_events > 0:
+            md_excess_kw = day_data[day_data['Is_Peak_Event']]['Peak_Event_Excess'].max()
+        else:
+            md_excess_kw = 0.0
+        
+        # 4. Total Energy Charge (kWh)
+        charging_intervals = day_data[day_data['Battery_Power_kW'] < 0]
+        total_energy_charge_kwh = abs(charging_intervals['Battery_Power_kW']).sum() * 0.25  # Convert to kWh (15-min intervals)
+        
+        # 5. Total Energy Discharge (kWh)
+        discharging_intervals = day_data[day_data['Battery_Power_kW'] > 0]
+        total_energy_discharge_kwh = discharging_intervals['Battery_Power_kW'].sum() * 0.25  # Convert to kWh
+        
+        # 6. Target MD Shave (kW) - Maximum target shaving required during peak events
+        if total_peak_events > 0:
+            target_md_shave_kw = day_data[day_data['Is_Peak_Event']]['Peak_Event_Excess'].max()
+        else:
+            target_md_shave_kw = 0.0
+        
+        # 7. Actual MD Shave (kW) - Maximum actual shaving achieved during peak events
+        if total_peak_events > 0:
+            peak_event_data = day_data[day_data['Is_Peak_Event']]
+            actual_md_shave_kw = (peak_event_data['Original_Demand'] - peak_event_data['Net_Demand_kW']).max()
+        else:
+            actual_md_shave_kw = 0.0
+        
+        # 8. Variance MD Shave (kW) (6. - 7.)
+        variance_md_shave_kw = target_md_shave_kw - actual_md_shave_kw
+        
+        # 9. Target_Success - Check if maximum net demand during peak events is within monthly target
+        if total_peak_events > 0:
+            peak_event_data = day_data[day_data['Is_Peak_Event']]
+            max_net_demand_during_peaks = peak_event_data['Net_Demand_kW'].max()
+            monthly_target = day_data['Monthly_Target'].iloc[0]
+            target_success = '✅' if max_net_demand_during_peaks <= monthly_target * 1.05 else '❌'  # 5% tolerance
+        else:
+            target_success = '✅'  # No peak events means success by default
+        
+        # 10. Charging Cycles - Total energy throughput (charge + discharge) / usable battery capacity
+        total_energy_throughput_kwh = total_energy_charge_kwh + total_energy_discharge_kwh
+        charging_cycles = total_energy_throughput_kwh / battery_usable_capacity_kwh if battery_usable_capacity_kwh > 0 else 0
+        
+        # Append daily summary
+        daily_summary.append({
+            'Date': date_str,
+            'Total Peak Events': total_peak_events,
+            f'{tariff_label} MD Excess (kW)': round(md_excess_kw, 1),
+            'Total Energy Charge (kWh)': round(total_energy_charge_kwh, 2),
+            'Total Energy Discharge (kWh)': round(total_energy_discharge_kwh, 2),
+            'Target MD Shave (kW)': round(target_md_shave_kw, 1),
+            'Actual MD Shave (kW)': round(actual_md_shave_kw, 1),
+            'Variance MD Shave (kW)': round(variance_md_shave_kw, 1),
+            'Target_Success': target_success,
+            'Charging Cycles': round(charging_cycles, 2)
+        })
+    
+    return pd.DataFrame(daily_summary)
+
+
+def _create_monthly_summary_table(df_sim, selected_tariff=None):
+    """
+    Create monthly summary of battery performance with MD shaving effectiveness.
+    
+    Args:
+        df_sim: Simulation dataframe with battery operation data
+        selected_tariff: Selected tariff configuration for cost calculations
+        
+    Returns:
+        pd.DataFrame: Monthly performance summary with cost calculations
+    """
+    if df_sim.empty:
+        return pd.DataFrame()
+    
+    # Extract month-year from index
+    df_sim['YearMonth'] = df_sim.index.to_series().dt.to_period('M')
+    
+    # Determine tariff type for MD excess calculation
+    is_tou = False
+    md_rate_rm_per_kw = 97.06  # Default TOU rate
+    
+    if selected_tariff:
+        tariff_name = selected_tariff.get('Tariff', '').lower()
+        tariff_type = selected_tariff.get('Type', '').lower()
+        if 'tou' in tariff_name or 'tou' in tariff_type or tariff_type == 'tou':
+            is_tou = True
+        
+        # Get MD rate from tariff
+        rates = selected_tariff.get('Rates', {})
+        if rates:
+            md_rate_rm_per_kw = rates.get('Capacity Rate', 0) + rates.get('Network Rate', 0)
+            if md_rate_rm_per_kw == 0:
+                md_rate_rm_per_kw = 97.06  # Fallback to default
+    
+    # FIXED: Correctly filter data based on tariff type
+    if is_tou:
+        # TOU: Calculate MD excess from TOU periods only (2-10 PM weekdays)
+        tou_mask = (df_sim.index.weekday < 5) & (df_sim.index.hour >= 14) & (df_sim.index.hour < 22)
+        df_md = df_sim[tou_mask].copy()
+        tariff_label = "TOU"
+    else:
+        # General: Calculate MD excess from all periods (24/7)
+        df_md = df_sim.copy()
+        tariff_label = "General"
+    
+    if df_md.empty:
+        return pd.DataFrame()
+    
+    # Group by month and calculate tariff-specific MD values
+    monthly_data = df_md.groupby('YearMonth').agg({
+        'Original_Demand': 'max',  # Maximum demand in the tariff-specific periods
+        'Net_Demand_kW': 'max',    # Maximum net demand in the tariff-specific periods  
+        'Monthly_Target': 'first',
+        'Battery_Power_kW': lambda x: (x > 0).sum() * 0.25,  # Total discharge hours
+        'Battery_SOC_Percent': 'mean'
+    }).round(2)
+    
+    # Calculate MD excess and success shaved based on tariff-specific periods
+    monthly_data['MD_Excess_kW'] = (monthly_data['Original_Demand'] - monthly_data['Monthly_Target']).apply(lambda x: max(0, x))
+    monthly_data['Success_Shaved_kW'] = (monthly_data['Original_Demand'] - monthly_data['Net_Demand_kW']).apply(lambda x: max(0, x))
+    monthly_data['Cost_Saving_RM'] = monthly_data['Success_Shaved_kW'] * md_rate_rm_per_kw
+    
+    # Format the results
+    result = pd.DataFrame({
+        'Month': [str(period) for period in monthly_data.index],
+        f'{tariff_label} MD Excess (kW)': monthly_data['MD_Excess_kW'].round(1),
+        'Success Shaved (kW)': monthly_data['Success_Shaved_kW'].round(1),
+        'Cost Saving (RM)': monthly_data['Cost_Saving_RM'].round(2)
+    })
+    
+    return result
 
 
 def _create_kpi_summary_table(simulation_results, df_sim):
@@ -5895,20 +6069,22 @@ def _create_kpi_summary_table(simulation_results, df_sim):
     return pd.DataFrame(kpis)
 
 
-def _display_battery_simulation_tables(df_sim, simulation_results):
+def _display_battery_simulation_tables(df_sim, simulation_results, selected_tariff=None):
     """
     Display comprehensive battery simulation tables with tabbed interface.
     
     Args:
         df_sim: Simulation dataframe with battery operation data
         simulation_results: Dictionary containing simulation metrics
+        selected_tariff: Selected tariff configuration for cost calculations
     """
     st.markdown("##### 1️⃣.1 📋 Battery Simulation Data Tables")
     
     # Tab-based layout for different table views
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📊 Time Series Data (Chart Filtered)", 
-        "📅 Daily Summary", 
+        "📅 Daily Summary",
+        "📆 Monthly Summary", 
         "🎯 KPI Summary",
         "🔍 Filtered View"
     ])
@@ -5963,20 +6139,104 @@ def _display_battery_simulation_tables(df_sim, simulation_results):
         st.download_button("📥 Download Time Series Data", csv, filename, "text/csv", key="download_ts")
     
     with tab2:
-        st.markdown("**Daily Performance Summary**")
-        daily_data = _create_daily_summary_table(df_sim)
-        st.dataframe(daily_data, use_container_width=True)
+        st.markdown("**Daily Performance Summary with RP4 Tariff-Aware Peak Events**")
         
-        # Download option
-        csv = daily_data.to_csv(index=False)
-        st.download_button("📥 Download Daily Summary", csv, "battery_daily_summary.csv", "text/csv", key="download_daily")
+        # UPDATED: Pass selected_tariff to daily summary function
+        daily_data = _create_daily_summary_table(df_sim, selected_tariff)
+        
+        if len(daily_data) > 0:
+            st.dataframe(daily_data, use_container_width=True)
+            
+            # Add summary metrics
+            col1, col2, col3, col4 = st.columns(4)
+            
+            total_peak_events = daily_data['Total Peak Events'].sum()
+            successful_days = len(daily_data[daily_data['Target_Success'] == '✅'])
+            total_days = len(daily_data)
+            success_rate = (successful_days / total_days * 100) if total_days > 0 else 0
+            total_charging_cycles = daily_data['Charging Cycles'].sum()
+            
+            col1.metric("Total Peak Events", f"{total_peak_events}")
+            col2.metric("Success Rate", f"{success_rate:.1f}%", f"{successful_days}/{total_days} days")
+            col3.metric("Total Charging Cycles", f"{total_charging_cycles:.2f}")
+            col4.metric("Avg Cycles/Day", f"{total_charging_cycles/total_days:.2f}" if total_days > 0 else "0.00")
+            
+            # Add explanation
+            tariff_type = "TOU" if (selected_tariff and ('tou' in selected_tariff.get('Tariff', '').lower() or selected_tariff.get('Type', '').lower() == 'tou')) else "General"
+            
+            # Get battery info for explanation
+            battery_info = "100 kWh (80% DoD = 80 kWh usable)"  # Default
+            if hasattr(st.session_state, 'tabled_analysis_selected_battery'):
+                selected_battery = st.session_state.tabled_analysis_selected_battery
+                quantity = getattr(st.session_state, 'tabled_analysis_battery_quantity', 1)
+                battery_spec = selected_battery['spec']
+                total_capacity = battery_spec.get('energy_kWh', 100) * quantity
+                try:
+                    battery_params = getattr(st.session_state, 'battery_params', {})
+                    dod = battery_params.get('depth_of_discharge', 80)
+                except:
+                    dod = 80
+                usable_capacity = total_capacity * (dod / 100)
+                battery_info = f"{total_capacity} kWh ({dod}% DoD = {usable_capacity:.1f} kWh usable)"
+            
+            # Download option
+            csv = daily_data.to_csv(index=False)
+            st.download_button("📥 Download Daily Summary", csv, "battery_daily_summary.csv", "text/csv", key="download_daily_summary")
+            
+            st.info(f"""
+            **📊 RP4 Tariff-Aware Analysis ({tariff_type} Tariff):**
+            
+            **Peak Event Detection Logic:**
+            - **{tariff_type} Tariff**: {"Peak events only during MD recording periods (2PM-10PM weekdays)" if tariff_type == "TOU" else "Peak events anytime above monthly target (24/7 MD recording)"}
+            - **MD Excess**: Maximum demand above monthly target during peak events only
+            - **Target Success**: ✅ if maximum net demand during peak events ≤ monthly target (±5% tolerance)
+            
+            **Energy & Charging Cycle Calculations:**
+            - **Battery Configuration**: {battery_info}
+            - **Energy Conversion**: 15-minute intervals × 0.25 conversion factor
+            - **Charging Cycles**: (Total Charge kWh + Total Discharge kWh) ÷ Usable Battery Capacity
+            - **Fractional Cycles**: Values can be less than 1.0 (e.g., 0.25 = quarter cycle)
+            
+            **Daily Analysis Scope:**
+            - Charge/Discharge energies sum all intervals for the entire day (24/7)
+            - Peak events filtered by tariff-specific MD recording periods only
+            - Target/Actual shaving calculated only during peak events
+            """)
+        else:
+            st.info("No daily summary data available.")
     
     with tab3:
+        st.markdown("**Monthly Performance Summary**")
+        monthly_data = _create_monthly_summary_table(df_sim, selected_tariff)
+        
+        if len(monthly_data) > 0:
+            st.dataframe(monthly_data, use_container_width=True)
+            
+            # Download option
+            csv = monthly_data.to_csv(index=False)
+            st.download_button("📥 Download Monthly Summary", csv, "battery_monthly_summary.csv", "text/csv", key="download_monthly")
+            
+            # Display summary metrics if cost savings are available
+            if selected_tariff and 'Cost Saving (RM)' in monthly_data.columns:
+                total_cost_saving = monthly_data['Cost Saving (RM)'].sum()
+                avg_monthly_saving = monthly_data['Cost Saving (RM)'].mean()
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Cost Saving", f"RM {total_cost_saving:.2f}")
+                with col2:
+                    st.metric("Average Monthly Saving", f"RM {avg_monthly_saving:.2f}")
+                with col3:
+                    st.metric("Analysis Period", f"{len(monthly_data)} months")
+        else:
+            st.info("No monthly data available for analysis.")
+    
+    with tab4:
         st.markdown("**Key Performance Indicators**")
         kpi_data = _create_kpi_summary_table(simulation_results, df_sim)
         st.dataframe(kpi_data, use_container_width=True, hide_index=True)
     
-    with tab4:
+    with tab5:
         st.markdown("**Custom Filtered View**")
         
         # Advanced filters
