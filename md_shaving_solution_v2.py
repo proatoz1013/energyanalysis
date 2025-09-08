@@ -5961,6 +5961,21 @@ def _create_monthly_summary_table(df_sim, selected_tariff=None):
     # Extract month-year from index
     df_sim['YearMonth'] = df_sim.index.to_series().dt.to_period('M')
     
+    # Get battery usable capacity for charging cycle calculation
+    battery_usable_capacity_kwh = 100  # Default fallback
+    if hasattr(st.session_state, 'tabled_analysis_selected_battery'):
+        selected_battery = st.session_state.tabled_analysis_selected_battery
+        quantity = getattr(st.session_state, 'tabled_analysis_battery_quantity', 1)
+        battery_spec = selected_battery['spec']
+        total_capacity = battery_spec.get('energy_kWh', 100) * quantity
+        depth_of_discharge = 80  # Default DoD
+        try:
+            battery_params = getattr(st.session_state, 'battery_params', {})
+            depth_of_discharge = battery_params.get('depth_of_discharge', 80)
+        except:
+            depth_of_discharge = 80
+        battery_usable_capacity_kwh = total_capacity * (depth_of_discharge / 100)
+    
     # Determine tariff type for MD excess calculation
     is_tou = False
     md_rate_rm_per_kw = 97.06  # Default TOU rate
@@ -5992,6 +6007,30 @@ def _create_monthly_summary_table(df_sim, selected_tariff=None):
     if df_md.empty:
         return pd.DataFrame()
     
+    # Calculate monthly charging cycles using full dataset (not just tariff-filtered)
+    monthly_cycles_data = []
+    for period in df_sim.groupby('YearMonth').groups.keys():
+        month_data = df_sim[df_sim['YearMonth'] == period]
+        
+        # Calculate total energy charge and discharge for the month
+        charging_intervals = month_data[month_data['Battery_Power_kW'] < 0]
+        discharging_intervals = month_data[month_data['Battery_Power_kW'] > 0]
+        
+        total_energy_charge_kwh = abs(charging_intervals['Battery_Power_kW']).sum() * 0.25
+        total_energy_discharge_kwh = discharging_intervals['Battery_Power_kW'].sum() * 0.25
+        
+        # Calculate charging cycles for this month
+        total_energy_throughput_kwh = total_energy_charge_kwh + total_energy_discharge_kwh
+        charging_cycles = total_energy_throughput_kwh / battery_usable_capacity_kwh if battery_usable_capacity_kwh > 0 else 0
+        
+        monthly_cycles_data.append({
+            'period': period,
+            'charging_cycles': charging_cycles
+        })
+    
+    # Convert to DataFrame for easier merging
+    cycles_df = pd.DataFrame(monthly_cycles_data).set_index('period')
+    
     # Group by month and calculate tariff-specific MD values
     monthly_data = df_md.groupby('YearMonth').agg({
         'Original_Demand': 'max',  # Maximum demand in the tariff-specific periods
@@ -6006,12 +6045,17 @@ def _create_monthly_summary_table(df_sim, selected_tariff=None):
     monthly_data['Success_Shaved_kW'] = (monthly_data['Original_Demand'] - monthly_data['Net_Demand_kW']).apply(lambda x: max(0, x))  # Max Original - Max Net per month
     monthly_data['Cost_Saving_RM'] = monthly_data['Success_Shaved_kW'] * md_rate_rm_per_kw
     
+    # Merge charging cycles data
+    monthly_data = monthly_data.join(cycles_df, how='left')
+    monthly_data['charging_cycles'] = monthly_data['charging_cycles'].fillna(0)
+    
     # Format the results
     result = pd.DataFrame({
         'Month': [str(period) for period in monthly_data.index],
         f'{tariff_label} MD Excess (kW)': monthly_data['MD_Excess_kW'].round(1),
         'Success Shaved (kW)': monthly_data['Success_Shaved_kW'].round(1),
-        'Cost Saving (RM)': monthly_data['Cost_Saving_RM'].round(2)
+        'Cost Saving (RM)': monthly_data['Cost_Saving_RM'].round(2),
+        'Total Charging Cycles': monthly_data['charging_cycles'].round(2)
     })
     
     return result
@@ -6216,18 +6260,36 @@ def _display_battery_simulation_tables(df_sim, simulation_results, selected_tari
             csv = monthly_data.to_csv(index=False)
             st.download_button("📥 Download Monthly Summary", csv, "battery_monthly_summary.csv", "text/csv", key="download_monthly")
             
-            # Display summary metrics if cost savings are available
+            # Display summary metrics including charging cycles
             if selected_tariff and 'Cost Saving (RM)' in monthly_data.columns:
                 total_cost_saving = monthly_data['Cost Saving (RM)'].sum()
                 avg_monthly_saving = monthly_data['Cost Saving (RM)'].mean()
+                total_charging_cycles = monthly_data['Total Charging Cycles'].sum() if 'Total Charging Cycles' in monthly_data.columns else 0
+                avg_monthly_cycles = monthly_data['Total Charging Cycles'].mean() if 'Total Charging Cycles' in monthly_data.columns else 0
                 
-                col1, col2, col3 = st.columns(3)
+                col1, col2, col3, col4 = st.columns(4)
                 with col1:
                     st.metric("Total Cost Saving", f"RM {total_cost_saving:.2f}")
                 with col2:
                     st.metric("Average Monthly Saving", f"RM {avg_monthly_saving:.2f}")
                 with col3:
+                    st.metric("Total Charging Cycles", f"{total_charging_cycles:.2f}")
+                with col4:
                     st.metric("Analysis Period", f"{len(monthly_data)} months")
+                    
+                # Additional metrics row
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Avg Cycles/Month", f"{avg_monthly_cycles:.2f}")
+                with col2:
+                    if len(monthly_data) > 0:
+                        total_success_shaved = monthly_data['Success Shaved (kW)'].sum()
+                        st.metric("Total Success Shaved", f"{total_success_shaved:.1f} kW")
+                with col3:
+                    if len(monthly_data) > 0:
+                        tariff_type = "TOU" if 'TOU' in monthly_data.columns[1] else "General"
+                        total_md_excess = monthly_data.iloc[:, 1].sum()  # Second column is MD Excess
+                        st.metric(f"Total {tariff_type} MD Excess", f"{total_md_excess:.1f} kW")
         else:
             st.info("No monthly data available for analysis.")
     
