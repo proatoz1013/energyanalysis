@@ -2627,6 +2627,24 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                             holidays if 'holidays' in locals() else set()  # Holidays set
                         )
                         
+                        # === STEP 6.1: TOU PERFORMANCE ANALYSIS (Missing Integration Fixed) ===
+                        # Fix for "local variable 'st' referenced before assignment" error
+                        # These TOU display functions were orphaned and never called in the main workflow
+                        if selected_tariff:
+                            tariff_type = selected_tariff.get('Type', '').lower()
+                            tariff_name = selected_tariff.get('Tariff', '').lower()
+                            is_tou_tariff = tariff_type == 'tou' or 'tou' in tariff_name
+                            
+                            if is_tou_tariff:
+                                st.markdown("---")
+                                st.subheader("🌅 TOU Tariff Performance Analysis")
+                                
+                                # Display TOU performance summary
+                                _display_tou_performance_summary(simulation_results, selected_tariff)
+                                
+                                # Display TOU vs General comparison
+                                _display_tou_vs_general_comparison(simulation_results, selected_tariff)
+                        
                         # === STEP 7: Enhanced BESS Dispatch Simulation & Savings Analysis ===
                         st.markdown("---")
                         st.markdown("#### 6.7 🔋 BESS Dispatch Simulation & Comprehensive Analysis")
@@ -3166,111 +3184,155 @@ def show():
     render_md_shaving_v2()
 
 
-def _calculate_daily_proactive_charging(current_timestamp, current_soc_percent, battery_capacity_kwh, max_charge_power_kw):
+# ===================================================================================================
+# TOU PERFORMANCE DISPLAY FUNCTIONS
+# ===================================================================================================
+
+def _display_tou_performance_summary(results, selected_tariff=None):
     """
-    Daily proactive charging strategy to reach 95% SOC before 2PM MD window start.
-    
-    🎯 STRATEGY:
-    - Target: 95% SOC before next 2PM MD window
-    - Charging window: 10PM to 2PM next day (16 hours)
-    - Health protection: Slowest safe speed (0.1C-0.5C based on available time)
-    - Safety margins: 30-minute buffer before MD, 95% charging efficiency
+    Display TOU-specific performance metrics and readiness analysis.
     
     Args:
-        current_timestamp: Current datetime
-        current_soc_percent: Current SOC percentage
-        battery_capacity_kwh: Battery capacity in kWh
-        max_charge_power_kw: Maximum charging power in kW
-        
-    Returns:
-        Dictionary with proactive charging recommendations
+        results: Dictionary from battery simulation results
+        selected_tariff: Selected tariff configuration
     """
-    from datetime import datetime, timedelta
+    if not results.get('is_tou_tariff', False):
+        return
     
-    # Calculate SOC gap to 95% target
-    target_soc_percent = 95.0
-    soc_gap_percent = max(0, target_soc_percent - current_soc_percent)
+    st.markdown("---")
+    st.subheader("🔋 TOU Tariff Performance Summary")
+    st.caption("TOU-specific charging strategy and 95% SOC readiness analysis")
     
-    if soc_gap_percent <= 0:
-        return {
-            'recommended_charge_power_kw': 0,
-            'strategy': 'target_achieved',
-            'hours_to_next_md': 0,
-            'required_c_rate': 0,
-            'charging_urgency': 'none'
+    tou_stats = results.get('tou_readiness_stats', {})
+    
+    if tou_stats:
+        # TOU Readiness Metrics
+        col1, col2, col3, col4 = st.columns(4)
+        
+        col1.metric(
+            "TOU Readiness Rate", 
+            f"{tou_stats.get('readiness_rate_percent', 0):.1f}%",
+            delta=f"{tou_stats.get('ready_days', 0)}/{tou_stats.get('total_weekdays', 0)} days"
+        )
+        
+        col2.metric(
+            "Avg SOC at 2 PM", 
+            f"{tou_stats.get('avg_soc_at_2pm', 0):.1f}%",
+            delta=f"{tou_stats.get('avg_soc_at_2pm', 95) - 95:+.1f}% vs target"
+        )
+        
+        col3.metric(
+            "Min SOC at 2 PM", 
+            f"{tou_stats.get('min_soc_at_2pm', 0):.1f}%",
+            delta=f"{tou_stats.get('min_soc_at_2pm', 95) - 95:+.1f}% vs target"
+        )
+        
+        col4.metric(
+            "SOC Target", 
+            f"{tou_stats.get('target_soc', 95):.0f}%",
+            delta="MD Readiness"
+        )
+        
+        # Performance classification
+        readiness_rate = tou_stats.get('readiness_rate_percent', 0)
+        if readiness_rate >= 95:
+            st.success(f"✅ **Excellent TOU Performance**: {readiness_rate:.1f}% days meet 95% SOC target by 2 PM")
+        elif readiness_rate >= 85:
+            st.success(f"✅ **Good TOOU Performance**: {readiness_rate:.1f}% days meet 95% SOC target by 2 PM")
+        elif readiness_rate >= 70:
+            st.warning(f"⚠️ **Moderate TOU Performance**: {readiness_rate:.1f}% days meet 95% SOC target by 2 PM")
+        else:
+            st.error(f"🚨 **Poor TOU Performance**: {readiness_rate:.1f}% days meet 95% SOC target by 2 PM - Consider larger battery capacity")
+        
+        # Additional insights
+        if tou_stats.get('min_soc_at_2pm', 100) < 80:
+            st.warning(f"⚠️ **Risk Alert**: Minimum 2 PM SOC was {tou_stats.get('min_soc_at_2pm', 0):.1f}% - Potential inadequate MD preparation on some days")
+        
+    else:
+        st.warning("⚠️ No TOU readiness data available - Check if weekday 2 PM data exists")
+    
+    # TOU Strategy Summary
+    with st.expander("📋 TOU Charging Strategy Details"):
+        st.markdown("""
+        **TOU Charging Windows:**
+        - **Primary Charging**: 10 PM - 2 PM next day (overnight)
+        - **Target**: 95% SOC by 2 PM on weekdays
+        - **MD Window**: 2 PM - 10 PM weekdays (discharge period)
+        
+        **Charging Urgency Levels:**
+        - **🚨 CRITICAL**: < 4 hours to MD window, aggressive charging up to max power
+        - **⚡ HIGH**: 4-8 hours to MD window, enhanced charging rates
+        - **🔋 NORMAL**: > 8 hours to MD window, standard overnight charging
+        
+        **Benefits:**
+        - Ensures battery readiness for peak demand shaving
+        - Optimizes charging during off-peak periods
+        - Reduces risk of inadequate SOC during critical MD periods
+        """)
+
+def _display_tou_vs_general_comparison(results, selected_tariff=None):
+    """
+    Display comparison between TOU and General tariff performance.
+    
+    Args:
+        results: Dictionary from battery simulation results
+        selected_tariff: Selected tariff configuration
+    """
+    if not results.get('is_tou_tariff', False):
+        st.info("""
+        💡 **General Tariff Detected**: This analysis uses standard 24/7 MD recording logic.
+        
+        **To enable TOU-specific features:**
+        - Select a TOU tariff (e.g., "Medium Voltage TOU")
+        - Experience enhanced charging strategy with 95% SOC readiness
+        - Get TOU-specific performance metrics and insights
+        """)
+        return
+    
+    st.markdown("---")
+    st.subheader("📊 TOU vs General Tariff Comparison")
+    st.caption("How TOU tariff strategy differs from General tariff approach")
+    
+    comparison_data = [
+        {
+            "Aspect": "MD Recording Window",
+            "General Tariff": "24/7 (Continuous)",
+            "TOU Tariff": "2 PM - 10 PM (Weekdays only)",
+            "TOU Advantage": "More focused discharge strategy"
+        },
+        {
+            "Aspect": "Charging Strategy",
+            "General Tariff": "90% SOC target (Standard)",
+            "TOU Tariff": "95% SOC target (Enhanced)",
+            "TOU Advantage": "Higher readiness for peak periods"
+        },
+        {
+            "Aspect": "Charging Windows",
+            "General Tariff": "Based on SOC + demand thresholds",
+            "TOU Tariff": "10 PM - 2 PM (Optimized for MD readiness)",
+            "TOU Advantage": "Predictable overnight charging"
+        },
+        {
+            "Aspect": "Performance Monitoring",
+            "General Tariff": "Standard shaving metrics",
+            "TOU Tariff": "TOU readiness + standard metrics",
+            "TOU Advantage": "Additional 2 PM readiness validation"
         }
+    ]
     
-    # Calculate energy needed to reach 95% SOC
-    energy_needed_kwh = (soc_gap_percent / 100) * battery_capacity_kwh
+    import pandas as pd
+    df_comparison = pd.DataFrame(comparison_data)
     
-    # Find next 2PM MD window
-    current_time = current_timestamp
-    next_md_window = None
-    
-    # Look for next weekday 2PM (MD window start)
-    for days_ahead in range(1, 8):  # Check up to 7 days ahead
-        candidate = current_time + timedelta(days=days_ahead)
-        if candidate.weekday() < 5:  # Monday=0, Friday=4
-            # Set to 2PM (14:00) with 30-minute safety buffer
-            next_md_window = candidate.replace(hour=13, minute=30, second=0, microsecond=0)
-            break
-    
-    if next_md_window is None:
-        # Fallback: assume next weekday
-        days_to_add = 1 if current_time.weekday() < 4 else (7 - current_time.weekday())
-        next_md_window = (current_time + timedelta(days=days_to_add)).replace(hour=13, minute=30, second=0, microsecond=0)
-    
-    # Calculate available charging time
-    time_to_md = next_md_window - current_time
-    hours_available = max(0.5, time_to_md.total_seconds() / 3600)  # Minimum 30 minutes
-    
-    # Determine charging strategy based on available time
-    if hours_available >= 16:  # Plenty of time (>16 hours)
-        # Use slowest safe rate for battery health (0.1C)
-        recommended_c_rate = 0.1
-        charging_urgency = 'relaxed'
-    elif hours_available >= 8:  # Moderate time (8-16 hours)
-        # Use moderate rate (0.2C)
-        recommended_c_rate = 0.2
-        charging_urgency = 'normal'
-    elif hours_available >= 4:  # Limited time (4-8 hours)
-        # Use faster rate (0.3C)
-        recommended_c_rate = 0.3
-        charging_urgency = 'elevated'
-    elif hours_available >= 2:  # Very limited time (2-4 hours)
-        # Use high rate (0.4C)
-        recommended_c_rate = 0.4
-        charging_urgency = 'high'
-    else:  # Critical time (<2 hours)
-        # Use maximum safe rate (0.5C)
-        recommended_c_rate = 0.5
-        charging_urgency = 'critical'
-    
-    # Calculate required charging power with efficiency consideration
-    charging_efficiency = 0.95  # 95% charging efficiency
-    required_power_kw = (energy_needed_kwh / charging_efficiency) / hours_available
-    
-    # Apply C-rate limit for battery health
-    max_power_by_crate = battery_capacity_kwh * recommended_c_rate
-    
-    # Final charging power recommendation
-    recommended_power_kw = min(
-        required_power_kw,
-        max_power_by_crate,
-        max_charge_power_kw
+    st.dataframe(
+        df_comparison.style.apply(
+            lambda x: ['background-color: rgba(78, 205, 196, 0.1)' for _ in x], axis=0
+        ),
+        use_container_width=True,
+        hide_index=True
     )
-    
-    return {
-        'recommended_charge_power_kw': max(0, recommended_power_kw),
-        'strategy': 'daily_proactive',
-        'soc_gap_percent': soc_gap_percent,
-        'energy_needed_kwh': energy_needed_kwh,
-        'hours_to_next_md': hours_available,
-        'required_c_rate': recommended_c_rate,
-        'charging_urgency': charging_urgency,
-        'next_md_window': next_md_window,
-        'target_soc_percent': target_soc_percent
-    }
+
+
+# Complex daily proactive charging function removed - replaced with simple SOC-based charging in main algorithm
 
 
 def is_md_window(timestamp, holidays=None):
@@ -4808,243 +4870,51 @@ def _create_v2_conditional_demand_line_with_dynamic_targets(fig, df, power_col, 
 
 
 # ==========================================
-# V2 ENHANCED BATTERY ALGORITHMS
+# V2 SIMPLIFIED BATTERY ALGORITHMS
 # ==========================================
+# Complex health parameter system removed for cleaner, more maintainable code
 
-def _calculate_battery_health_parameters(battery_chemistry, temperature_celsius=25):
+# Removed functions for cleaner V2 algorithm:
+# - _calculate_battery_health_parameters() 
+# - _calculate_c_rate_limited_power()
+# - _get_soc_protection_levels()
+# - _apply_soc_protection_constraints()
+# - _calculate_intelligent_charge_strategy()
+
+# These were over-engineered for MD shaving use case. 
+# V2 now uses simplified approach with basic SOC limits and C-rate constraints.
+
+def _calculate_intelligent_charge_strategy_simple(current_soc_percent, tariff_period, battery_health_params, 
+                                               available_excess_power_kw, max_charge_power_kw):
     """
-    Calculate chemistry-specific battery health parameters with temperature derating.
-    
-    Args:
-        battery_chemistry: Battery chemistry type (LFP, NMC, etc.)
-        temperature_celsius: Operating temperature
-        
-    Returns:
-        Dictionary with health parameters
+    SIMPLIFIED CHARGING STRATEGY for MD Shaving - removed health factors and protection levels
     """
-    # Base parameters for different battery chemistries
-    chemistry_params = {
-        'LFP': {  # Lithium Iron Phosphate
-            'base_c_rate_continuous': 1.0,
-            'base_c_rate_peak': 2.0,
-            'optimal_temp_range': (20, 35),
-            'cycle_life_factor': 1.0,
-            'safety_factor': 0.95,
-            'voltage_stability': 0.98,
-            'soh_degradation_rate': 0.0002  # Per cycle
-        },
-        'NMC': {  # Lithium Nickel Manganese Cobalt
-            'base_c_rate_continuous': 1.2,
-            'base_c_rate_peak': 3.0,
-            'optimal_temp_range': (15, 30),
-            'cycle_life_factor': 0.9,
-            'safety_factor': 0.92,
-            'voltage_stability': 0.96,
-            'soh_degradation_rate': 0.0003
-        },
-        'NCA': {  # Lithium Nickel Cobalt Aluminum
-            'base_c_rate_continuous': 1.5,
-            'base_c_rate_peak': 4.0,
-            'optimal_temp_range': (10, 25),
-            'cycle_life_factor': 0.85,
-            'safety_factor': 0.90,
-            'voltage_stability': 0.94,
-            'soh_degradation_rate': 0.0004
-        }
-    }
-    
-    # Default to LFP if chemistry not recognized
-    params = chemistry_params.get(battery_chemistry, chemistry_params['LFP'])
-    
-    # Calculate temperature derating factor
-    optimal_min, optimal_max = params['optimal_temp_range']
-    if optimal_min <= temperature_celsius <= optimal_max:
-        temp_factor = 1.0  # No derating in optimal range
-    elif temperature_celsius < optimal_min:
-        # Cold temperature derating (linear reduction)
-        temp_factor = max(0.6, 0.8 + 0.2 * (temperature_celsius - optimal_min) / (optimal_min - 0))
+    # Simple SOC-based charging levels (no complex protection levels)
+    if current_soc_percent <= 10:
+        urgency_level = 'low'
+        charge_multiplier = 0.8
+        tariff_consideration = 0.3
+    elif current_soc_percent <= 50:
+        urgency_level = 'normal'
+        charge_multiplier = 0.6
+        tariff_consideration = 0.7
     else:
-        # Hot temperature derating (exponential reduction)
-        temp_factor = max(0.7, 1.0 - 0.02 * (temperature_celsius - optimal_max))
+        urgency_level = 'maintenance'
+        charge_multiplier = 0.3
+        tariff_consideration = 1.0
     
-    # Apply temperature derating
-    return {
-        'continuous_c_rate': params['base_c_rate_continuous'] * temp_factor,
-        'peak_c_rate': params['base_c_rate_peak'] * temp_factor,
-        'cycle_life_factor': params['cycle_life_factor'] * temp_factor,
-        'safety_factor': params['safety_factor'],
-        'voltage_stability': params['voltage_stability'],
-        'temperature_factor': temp_factor,
-        'soh_degradation_rate': params['soh_degradation_rate'],
-        'chemistry': battery_chemistry,
-        'operating_temperature': temperature_celsius
-    }
-
-def _calculate_c_rate_limited_power(available_energy_kwh, max_power_rating_kw, 
-                                  continuous_c_rate, peak_c_rate, duration_hours,
-                                  current_soc_percent, battery_health_params):
-    """
-    Calculate power limit based on C-rate constraints with temperature and health derating.
-    
-    Args:
-        available_energy_kwh: Current available energy
-        max_power_rating_kw: Rated power capacity
-        continuous_c_rate: Continuous C-rate limit
-        peak_c_rate: Peak C-rate limit (for short duration)
-        duration_hours: Expected duration of operation
-        current_soc_percent: Current state of charge
-        battery_health_params: Health parameters from _calculate_battery_health_parameters
-        
-    Returns:
-        Dictionary with power limits and constraints
-    """
-    # Calculate C-rate based power limits
-    continuous_power_limit = available_energy_kwh * continuous_c_rate
-    peak_power_limit = available_energy_kwh * peak_c_rate
-    
-    # Apply SOC-based derating (power reduces at low/high SOC)
-    if current_soc_percent > 90:
-        soc_factor = 0.9 - (current_soc_percent - 90) * 0.02  # Reduce power at high SOC
-    elif current_soc_percent < 20:
-        soc_factor = 0.7 + (current_soc_percent - 10) * 0.02  # Reduce power at low SOC
-    else:
-        soc_factor = 1.0  # Full power in normal SOC range
-    
-    soc_factor = max(0.5, min(1.0, soc_factor))  # Limit between 50%-100%
-    
-    # Apply health and temperature derating
-    health_factor = battery_health_params['safety_factor'] * battery_health_params['temperature_factor']
-    
-    # Determine power limit based on duration
-    if duration_hours <= 0.25:  # 15 minutes or less - can use peak power
-        c_rate_power_limit = peak_power_limit * soc_factor * health_factor
-    elif duration_hours <= 1.0:  # Up to 1 hour - blend between peak and continuous
-        blend_factor = 1.0 - (duration_hours - 0.25) / 0.75  # Linear blend
-        blended_c_rate = continuous_c_rate + (peak_c_rate - continuous_c_rate) * blend_factor
-        c_rate_power_limit = available_energy_kwh * blended_c_rate * soc_factor * health_factor
-    else:  # Longer than 1 hour - use continuous power
-        c_rate_power_limit = continuous_power_limit * soc_factor * health_factor
-    
-    # Final power limit is minimum of C-rate limit and rated power
-    effective_power_limit = min(c_rate_power_limit, max_power_rating_kw)
+    # Calculate recommended charge power (no health factors)
+    base_charge_power = available_excess_power_kw * charge_multiplier
+    recommended_charge_power_kw = min(base_charge_power, max_charge_power_kw)
     
     return {
-        'effective_power_limit_kw': effective_power_limit,
-        'c_rate_power_limit_kw': c_rate_power_limit,
-        'continuous_power_limit_kw': continuous_power_limit,
-        'peak_power_limit_kw': peak_power_limit,
-        'soc_derating_factor': soc_factor,
-        'health_derating_factor': health_factor,
-        'duration_hours': duration_hours,
-        'limiting_factor': 'C-rate' if c_rate_power_limit < max_power_rating_kw else 'Power Rating'
+        'urgency_level': urgency_level,
+        'recommended_charge_power_kw': recommended_charge_power_kw,
+        'charge_multiplier': charge_multiplier,
+        'tariff_consideration': tariff_consideration,
+        'strategy_description': f"Simplified {urgency_level} charging strategy",
+        'period_strategy': f"RP4 {tariff_period} period"
     }
-
-def _get_soc_protection_levels():
-    """
-    Define multi-level SOC protection thresholds and discharge limits.
-    
-    Returns:
-        Dictionary with SOC protection levels
-    """
-    return {
-        'emergency': {
-            'threshold_percent': 10,
-            'max_discharge_percent': 0,  # No discharge allowed
-            'charge_priority': 'critical',
-            'description': 'Emergency - No discharge allowed'
-        },
-        'critical': {
-            'threshold_percent': 25,
-            'max_discharge_percent': 25,  # Very limited discharge
-            'charge_priority': 'high',
-            'description': 'Critical - Limited discharge only'
-        },
-        'health': {
-            'threshold_percent': 40,
-            'max_discharge_percent': 60,  # Moderate discharge allowed
-            'charge_priority': 'medium',
-            'description': 'Health protection - Moderate discharge'
-        },
-        'normal': {
-            'threshold_percent': 80,
-            'max_discharge_percent': 100,  # Full discharge allowed
-            'charge_priority': 'normal',
-            'description': 'Normal operation - Full discharge'
-        },
-        'maintenance': {
-            'threshold_percent': 95,
-            'max_discharge_percent': 100,  # Full operation
-            'charge_priority': 'low',
-            'description': 'Maintenance level - Reduce charging'
-        }
-    }
-
-def _apply_soc_protection_constraints(current_soc_percent, requested_power_kw, protection_levels):
-    """
-    Apply multi-level SOC protection constraints to discharge power.
-    
-    Args:
-        current_soc_percent: Current battery SOC
-        requested_power_kw: Requested discharge power
-        protection_levels: SOC protection levels from _get_soc_protection_levels
-        
-    Returns:
-        Constrained power and protection info
-    """
-    # Determine current protection level
-    active_level = 'normal'
-    for level_name, level_config in protection_levels.items():
-        if current_soc_percent <= level_config['threshold_percent']:
-            active_level = level_name
-            break
-    
-    # Apply discharge constraint
-    max_allowed_percent = protection_levels[active_level]['max_discharge_percent']
-    constrained_power = requested_power_kw * (max_allowed_percent / 100)
-    
-    return {
-        'constrained_power_kw': constrained_power,
-        'original_power_kw': requested_power_kw,
-        'active_protection_level': active_level,
-        'protection_description': protection_levels[active_level]['description'],
-        'discharge_reduction_percent': 100 - max_allowed_percent,
-        'charge_priority': protection_levels[active_level]['charge_priority']
-    }
-
-
-def _calculate_intelligent_charge_strategy(current_soc_percent, tariff_period, battery_health_params, 
-                                         available_excess_power_kw, max_charge_power_kw):
-    """
-    RP4 TARIFF-AWARE CHARGING STRATEGY with MD Window Constraints
-    
-    Enhanced charging algorithm that integrates RP4 tariff logic with SOC-based protection:
-    
-    ✅ CORRECTED EMERGENCY CHARGING LOGIC:
-    - SOC < 5%: Critical protection with controlled charging (never exceeds monthly target)
-    - SOC 5-15%: Stop discharge + micro charging during MD hours (preventive protection)
-    - SOC 15-25%: Reduced discharge + limited charging
-    - SOC > 25%: Normal operation based on tariff period
-    
-    ❌ ELIMINATED FLAWED BEHAVIOR:
-    - No more emergency charging during peak hours that violates MD targets
-    - Replaced with preventive discharge limits to avoid critical SOC
-    
-    🎯 RP4 TARIFF INTEGRATION (2-Period System):
-    - Peak Period: Mon-Fri 2PM-10PM (excluding holidays) = MD recording window
-    - Off-Peak: All other times = Optimal charging periods
-    
-    Args:
-        current_soc_percent: Current battery state of charge
-        tariff_period: RP4 tariff period ('peak' or 'off_peak')
-        battery_health_params: Battery health parameters
-        available_excess_power_kw: Available excess power (limited by monthly target)
-        max_charge_power_kw: Maximum charging power capability
-        
-    Returns:
-        Dictionary with RP4-aware charging strategy recommendations
-    """
-    # Get SOC protection levels
-    protection_levels = _get_soc_protection_levels()
     
     # ✅ ENHANCED SOC-BASED CHARGING URGENCY with MD Constraint Awareness
     if current_soc_percent <= 5:
@@ -5149,27 +5019,7 @@ def _calculate_intelligent_charge_strategy(current_soc_percent, tariff_period, b
 def _get_tariff_aware_discharge_strategy(tariff_type, current_tariff_period, current_soc_percent, 
                                        demand_power_kw, monthly_target_kw, battery_health_params):
     """
-    INTELLIGENT MD-AWARE DISCHARGE STRATEGY with Dynamic Power Calculation
-    
-    🎯 REVOLUTIONARY APPROACH: Replaces fixed multipliers (0.4x, 0.8x) with intelligent discharge 
-    calculation based on actual demand conditions and safety margins.
-    
-    ✅ INTELLIGENT DISCHARGE LOGIC:
-    - Calculates exact excess above monthly target
-    - Applies adaptive safety factors based on excess severity  
-    - Considers battery capability and SOC constraints
-    - Integrates RP4 tariff optimization for cost-effectiveness
-    - Prevents target violations with multiple safety layers
-    
-    🎯 RP4 TARIFF INTEGRATION (2-Period System):
-    - Peak Period: Mon-Fri 2PM-10PM = Intelligent discharge for dual savings
-    - Off-Peak: All other times = Conservative preserve-battery strategy
-    
-    ✅ ENHANCED SOC PROTECTION LEVELS:
-    - SOC < 5%: Critical protection - minimal discharge only
-    - SOC 5-15%: Preventive protection - stop discharge during MD hours
-    - SOC 15-25%: Reduced discharge - controlled power output
-    - SOC > 25%: Full intelligent discharge capability
+    Simple MD discharge strategy - calculates discharge power to reduce demand below monthly target.
     
     Args:
         tariff_type: Type of tariff ('TOU', 'General', etc.)
@@ -5180,177 +5030,54 @@ def _get_tariff_aware_discharge_strategy(tariff_type, current_tariff_period, cur
         battery_health_params: Battery health parameters
         
     Returns:
-        Dictionary with intelligent discharge strategy recommendations
+        Dictionary with discharge strategy recommendations
     """
-    # 🎯 STEP 1: CALCULATE ACTUAL EXCESS ABOVE MONTHLY TARGET
+    # Calculate excess above target
     excess_above_target_kw = max(0, demand_power_kw - monthly_target_kw)
     
-    # Get SOC protection levels
-    protection_levels = _get_soc_protection_levels()
-    
-    # ✅ STEP 2: ENHANCED SOC-BASED DISCHARGE CONSTRAINTS
-    # Apply progressive SOC protection with MD hour awareness
-    if current_soc_percent <= 5:
-        # CRITICAL PROTECTION: Emergency protection with minimal discharge
-        soc_discharge_factor = 0.1
-        protection_level = 'critical_protection'
-        soc_strategy = 'Emergency SOC - minimal discharge only'
-    elif current_soc_percent <= 15:
-        # PREVENTIVE PROTECTION: Stop discharge during MD hours to prevent critical SOC
-        if current_tariff_period.lower() in ['peak'] and tariff_type.upper() == 'TOU':
-            # During MD recording hours: Stop discharge to prevent emergency charging
-            soc_discharge_factor = 0.0  # NO DISCHARGE during peak MD hours
-            protection_level = 'md_preventive_protection'
-            soc_strategy = 'MD preventive protection - stop discharge during peak hours'
-        else:
-            # During off-peak: Limited discharge allowed
-            soc_discharge_factor = 0.3
-            protection_level = 'preventive_protection'
-            soc_strategy = 'Preventive protection - limited discharge during off-peak'
+    # Simple SOC-based discharge limits
+    if current_soc_percent <= 10:
+        soc_factor = 0.0  # No discharge at very low SOC
     elif current_soc_percent <= 25:
-        # REDUCED DISCHARGE: Controlled power output to maintain reserves
-        soc_discharge_factor = 0.6
-        protection_level = 'reduced_discharge'
-        soc_strategy = 'Low SOC protection - controlled discharge'
+        soc_factor = 0.5  # Limited discharge at low SOC
     else:
-        # NORMAL OPERATION: Full discharge capability based on demand
-        soc_discharge_factor = 1.0
-        protection_level = 'normal_operation'
-        soc_strategy = 'Normal operation - full discharge capability'
+        soc_factor = 1.0  # Full discharge capability
     
-    # 🎯 STEP 3: INTELLIGENT MD-BASED DISCHARGE CALCULATION
-    if excess_above_target_kw <= 0:
-        # NO EXCESS: No discharge needed (demand below target)
-        recommended_discharge_kw = 0
-        discharge_strategy = 'no_discharge_needed'
-        safety_factor = 1.0
-        strategy_description = f'Demand ({demand_power_kw:.1f}kW) ≤ target ({monthly_target_kw:.1f}kW) - no discharge needed'
-        
-    else:
-        # EXCESS EXISTS: Calculate intelligent discharge based on tariff and severity
-        
-        # 🛡️ SAFETY FACTOR based on excess severity (adaptive approach)
-        excess_percentage = (excess_above_target_kw / monthly_target_kw) * 100
-        
-        if excess_percentage >= 30:  # Very high excess (>30%)
-            safety_factor = 0.95  # 5% safety buffer
-            excess_multiplier = 0.9  # Aggressive discharge (90% of excess)
-            severity_level = 'critical'
-        elif excess_percentage >= 15:  # High excess (15-30%)
-            safety_factor = 0.93  # 7% safety buffer
-            excess_multiplier = 0.8  # Moderate discharge (80% of excess)
-            severity_level = 'high'
-        elif excess_percentage >= 5:  # Moderate excess (5-15%)
-            safety_factor = 0.90  # 10% safety buffer
-            excess_multiplier = 0.7  # Conservative discharge (70% of excess)
-            severity_level = 'moderate'
-        else:  # Low excess (<5%)
-            safety_factor = 0.85  # 15% safety buffer
-            excess_multiplier = 0.5  # Very conservative discharge (50% of excess)
-            severity_level = 'low'
-        
-        # Calculate safe monthly target with buffer
-        safe_monthly_target = monthly_target_kw * safety_factor
-        max_allowable_discharge = demand_power_kw - safe_monthly_target
-        
-        # 🎯 TARIFF-BASED EFFICIENCY CALCULATION
-        if tariff_type.upper() == 'TOU':
-            if current_tariff_period.lower() in ['peak']:
-                # TOU PEAK PERIOD: Full intelligent discharge for dual savings (MD + energy)
-                tariff_efficiency = 1.0
-                discharge_strategy = 'intelligent_peak_optimization'
-                period_description = 'TOU Peak - intelligent discharge for maximum cost reduction'
-                
-            else:
-                # TOU OFF-PEAK PERIOD: Preserve battery for peak periods
-                if excess_percentage > 20:  # Only discharge if significantly above target
-                    tariff_efficiency = 0.4  # Limited discharge to preserve battery
-                    discharge_strategy = 'conservative_preservation'
-                    period_description = 'TOU Off-Peak - limited discharge (preserve for peak)'
-                else:
-                    tariff_efficiency = 0.0  # Preserve battery completely
-                    discharge_strategy = 'battery_preservation'
-                    period_description = 'TOU Off-Peak - preserve battery for future peak periods'
+    # Simple tariff-based strategy
+    if tariff_type.upper() == 'TOU':
+        if current_tariff_period.lower() == 'peak':
+            tariff_factor = 1.0  # Full discharge during peak for cost savings
         else:
-            # GENERAL TARIFF: Consistent intelligent discharge (24/7 MD impact)
-            tariff_efficiency = 0.8
-            discharge_strategy = 'intelligent_consistent'
-            period_description = 'General Tariff - consistent intelligent discharge'
-        
-        # 🔧 CALCULATE INTELLIGENT DISCHARGE POWER
-        # Step 1: Base discharge calculation
-        target_discharge_kw = excess_above_target_kw * excess_multiplier
-        
-        # Step 2: Apply tariff efficiency
-        tariff_adjusted_discharge = target_discharge_kw * tariff_efficiency
-        
-        # Step 3: Apply safety constraint (prevent target violation)
-        safety_limited_discharge = min(tariff_adjusted_discharge, max_allowable_discharge)
-        
-        # Step 4: Final recommended discharge
-        recommended_discharge_kw = max(0, safety_limited_discharge)
-        
-        # Strategy description with real values
-        strategy_description = (f'{period_description} | Excess: {excess_above_target_kw:.1f}kW '
-                              f'({excess_percentage:.1f}%) | Target discharge: {recommended_discharge_kw:.1f}kW '
-                              f'| Safety buffer: {(1-safety_factor)*100:.0f}%')
+            tariff_factor = 0.3  # Limited discharge during off-peak
+    else:
+        tariff_factor = 0.8  # General tariff - consistent discharge
     
-    # 🔋 STEP 4: APPLY SOC AND HEALTH CONSTRAINTS
-    # Apply SOC constraints to recommended discharge
-    soc_limited_discharge_kw = recommended_discharge_kw * soc_discharge_factor
+    # Calculate recommended discharge
+    if excess_above_target_kw > 0:
+        # Target 80% of excess with 10% safety buffer
+        target_discharge = excess_above_target_kw * 0.8
+        recommended_discharge_kw = target_discharge * soc_factor * tariff_factor
+    else:
+        recommended_discharge_kw = 0
     
-    # Apply battery health constraints
-    health_derating = battery_health_params.get('health_derating_factor', 1.0)
-    temperature_derating = battery_health_params.get('temperature_derating_factor', 1.0)
-    
-    # Final discharge power with all constraints
-    final_discharge_kw = soc_limited_discharge_kw * health_derating * temperature_derating
-    
-    # Calculate discharge multiplier for compatibility with existing code
+    # Calculate discharge multiplier
     if demand_power_kw > 0:
-        final_discharge_multiplier = final_discharge_kw / demand_power_kw
+        discharge_multiplier = min(recommended_discharge_kw / demand_power_kw, 1.0)
     else:
-        final_discharge_multiplier = 0
+        discharge_multiplier = 0
     
-    # Ensure multiplier doesn't exceed 1.0 (can't discharge more than demand)
-    final_discharge_multiplier = min(final_discharge_multiplier, 1.0)
-    
-    # 🔄 STEP 5: VERIFICATION - Calculate predicted net MD
-    predicted_net_md = demand_power_kw - final_discharge_kw
+    # Predicted results
+    predicted_net_md = demand_power_kw - recommended_discharge_kw
     safety_margin_kw = predicted_net_md - monthly_target_kw
-    safety_margin_percent = (safety_margin_kw / monthly_target_kw * 100) if monthly_target_kw > 0 else 0
-    
-    # 📋 COMPREHENSIVE STRATEGY DESCRIPTION
-    if excess_above_target_kw <= 0:
-        combined_strategy = strategy_description
-    else:
-        combined_strategy = (f"{strategy_description} | SOC: {soc_strategy} | "
-                           f"Final: {final_discharge_kw:.1f}kW | "
-                           f"Net MD: {predicted_net_md:.1f}kW | Safety: +{safety_margin_kw:.1f}kW")
     
     return {
-        'recommended_discharge_multiplier': final_discharge_multiplier,
-        'recommended_discharge_kw': final_discharge_kw,
+        'recommended_discharge_multiplier': discharge_multiplier,
+        'recommended_discharge_kw': recommended_discharge_kw,
         'excess_above_target_kw': excess_above_target_kw,
-        'excess_percentage': excess_percentage if 'excess_percentage' in locals() else 0,
-        'severity_level': severity_level if 'severity_level' in locals() else 'none',
-        'safety_factor': safety_factor,
-        'max_allowable_discharge_kw': max_allowable_discharge if 'max_allowable_discharge' in locals() else 0,
-        'target_discharge_kw': recommended_discharge_kw,
-        'soc_discharge_factor': soc_discharge_factor,
-        'soc_limited_discharge_kw': soc_limited_discharge_kw,
-        'tariff_efficiency': tariff_efficiency if 'tariff_efficiency' in locals() else 1.0,
-        'protection_level': protection_level,
-        'discharge_strategy': discharge_strategy,
-        'health_derating': health_derating,
-        'temperature_derating': temperature_derating,
         'predicted_net_md_kw': predicted_net_md,
         'safety_margin_kw': safety_margin_kw,
-        'safety_margin_percent': safety_margin_percent,
-        'strategy_description': combined_strategy,
-        'tariff_period': current_tariff_period,
-        'calculation_method': 'intelligent_md_aware_v2',
-        'discharge_recommendation': f"Intelligent discharge: {final_discharge_kw:.1f}kW targeting {excess_above_target_kw:.1f}kW excess during {current_tariff_period} (Net MD: {predicted_net_md:.1f}kW)"
+        'strategy_description': f'Simple MD discharge: {recommended_discharge_kw:.1f}kW (Net MD: {predicted_net_md:.1f}kW)',
+        'discharge_strategy': 'simple_md_shaving'
     }
 
 
@@ -5391,6 +5118,78 @@ def _calculate_c_rate_limited_power_simple(current_soc_percent, max_power_rating
     }
 
 
+def _get_tou_charging_urgency(current_timestamp, soc_percent, holidays=None):
+    """
+    Determine TOU charging urgency based on time until MD window and current SOC.
+    
+    TOU charging windows:
+    - Primary: 10 PM - 2 PM next day (overnight charging)
+    - Target: 95% SOC by 2 PM on weekdays for MD readiness
+    
+    Args:
+        current_timestamp: Current datetime
+        soc_percent: Current battery SOC percentage
+        holidays: Set of holiday dates
+    
+    Returns:
+        dict: Charging urgency information
+    """
+    from datetime import datetime, timedelta
+    
+    # Check if it's a charging window (10 PM - 2 PM next day)
+    hour = current_timestamp.hour
+    is_weekday = current_timestamp.weekday() < 5
+    is_holiday = holidays and current_timestamp.date() in holidays
+    
+    # TOU charging window: 10 PM to 2 PM next day
+    is_charging_window = hour >= 22 or hour < 14
+    
+    # Calculate time until next MD window (2 PM)
+    current_date = current_timestamp.date()
+    if hour < 14:
+        # Same day 2 PM
+        next_md_start = datetime.combine(current_date, datetime.min.time().replace(hour=14))
+    else:
+        # Next day 2 PM
+        next_day = current_date + timedelta(days=1)
+        next_md_start = datetime.combine(next_day, datetime.min.time().replace(hour=14))
+    
+    # Only consider weekday MD windows
+    while next_md_start.weekday() >= 5 or (holidays and next_md_start.date() in holidays):
+        next_md_start += timedelta(days=1)
+        next_md_start = next_md_start.replace(hour=14, minute=0, second=0, microsecond=0)
+    
+    time_until_md = next_md_start - current_timestamp
+    hours_until_md = time_until_md.total_seconds() / 3600
+    
+    # Determine charging urgency
+    urgency_level = 'normal'
+    charge_rate_multiplier = 1.0
+    
+    if hours_until_md <= 4:  # Less than 4 hours until MD window
+        if soc_percent < 95:
+            urgency_level = 'critical'
+            charge_rate_multiplier = 1.5  # Aggressive charging
+    elif hours_until_md <= 8:  # 4-8 hours until MD window
+        if soc_percent < 90:
+            urgency_level = 'high'
+            charge_rate_multiplier = 1.2  # Enhanced charging
+    elif hours_until_md <= 16:  # 8-16 hours until MD window
+        if soc_percent < 80:
+            urgency_level = 'normal'
+            charge_rate_multiplier = 1.0  # Standard charging
+    
+    return {
+        'is_charging_window': is_charging_window,
+        'hours_until_md': hours_until_md,
+        'urgency_level': urgency_level,
+        'charge_rate_multiplier': charge_rate_multiplier,
+        'target_soc': 95,
+        'is_weekday': is_weekday and not is_holiday,
+        'next_md_start': next_md_start
+    }
+
+
 def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizing, battery_params, interval_hours, selected_tariff=None, holidays=None):
     """
     V2-specific battery simulation that ensures Net Demand NEVER goes below monthly targets.
@@ -5399,6 +5198,7 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
     - Net Demand must stay ABOVE or EQUAL to the monthly target at all times
     - Battery discharge is limited to keep Net Demand >= Monthly Target
     - Uses dynamic monthly targets instead of static target
+    - TOU ENHANCEMENT: Special charging precondition for TOU tariffs (95% SOC by 2PM)
     
     Args:
         df: Energy data DataFrame with datetime index
@@ -5415,6 +5215,19 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
     """
     import numpy as np
     import pandas as pd
+    
+    # 🔋 TOU PRECONDITION DETECTION
+    is_tou_tariff = False
+    tou_feedback_messages = []
+    
+    if selected_tariff:
+        tariff_type = selected_tariff.get('Type', '').lower()
+        tariff_name = selected_tariff.get('Tariff', '').lower()
+        is_tou_tariff = tariff_type == 'tou' or 'tou' in tariff_name
+        
+        if is_tou_tariff:
+            tou_feedback_messages.append("🔋 TOU Tariff Detected - Implementing 95% SOC readiness requirement")
+            tou_feedback_messages.append("⚡ Charging Window: 10 PM - 2 PM for MD readiness (2 PM - 10 PM)")
     
     # Create simulation dataframe
     df_sim = df[[power_col]].copy()
@@ -5505,7 +5318,7 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
             else:
                 soc[i] = usable_capacity * 0.8
             
-            # Enhanced charging logic with better conditions and SOC awareness
+            # Enhanced charging logic with TOU precondition support
             current_time = df_sim.index[i]
             hour = current_time.hour
             soc_percentage = (soc[i] / usable_capacity) * 100
@@ -5522,36 +5335,107 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
                 avg_demand = df_sim[power_col].mean()
                 demand_25th = avg_demand * 0.6
             
-            # Determine charging conditions based on SOC level and time
+            # 🔋 TOU PRECONDITION LOGIC
             should_charge = False
             charge_rate_factor = 0.3  # Default conservative rate
+            tou_charging_active = False
             
-            # Critical SOC - charge aggressively
-            if soc_percentage < 30:
-                should_charge = current_demand < avg_demand * 0.9  # Lenient threshold
-                charge_rate_factor = 0.8  # Higher charge rate
-            # Low SOC - moderate charging
-            elif soc_percentage < 60:
-                if hour >= 22 or hour < 8:  # Off-peak hours
-                    should_charge = current_demand < avg_demand * 0.8
-                    charge_rate_factor = 0.6
-                else:  # Peak hours - more selective
-                    should_charge = current_demand < demand_25th * 1.2
-                    charge_rate_factor = 0.4
-            # Normal SOC - conservative charging
-            elif soc_percentage < 90:  # Increased from 90% (was implicit at 95%)
-                if hour >= 22 or hour < 8:  # Off-peak hours
-                    should_charge = current_demand < avg_demand * 0.7
-                    charge_rate_factor = 0.5
-                else:  # Peak hours - very selective
-                    should_charge = current_demand < demand_25th
-                    charge_rate_factor = 0.3
+            if is_tou_tariff:
+                # Get TOU charging urgency
+                tou_info = _get_tou_charging_urgency(current_time, soc_percentage, holidays)
+                
+                # TOU SPECIAL CHARGING LOGIC
+                if tou_info['is_charging_window'] and tou_info['is_weekday']:
+                    tou_charging_active = True
+                    
+                    # TOU charging conditions based on urgency
+                    if tou_info['urgency_level'] == 'critical':
+                        # CRITICAL: Must charge aggressively - less than 4 hours to MD window
+                        should_charge = (soc_percentage < 95) and (current_demand < avg_demand * 1.2)
+                        charge_rate_factor = min(1.0, 0.8 * tou_info['charge_rate_multiplier'])  # Up to 1.0x (max power)
+                        
+                        if i % 4 == 0:  # Log every 4 intervals (1 hour for 15-min data)
+                            tou_feedback_messages.append(f"🚨 CRITICAL TOU Charging: {tou_info['hours_until_md']:.1f}h until MD window, SOC: {soc_percentage:.1f}%")
+                            
+                    elif tou_info['urgency_level'] == 'high':
+                        # HIGH: Enhanced charging - 4-8 hours to MD window
+                        should_charge = (soc_percentage < 92) and (current_demand < avg_demand * 1.0)
+                        charge_rate_factor = 0.6 * tou_info['charge_rate_multiplier']
+                        
+                        if i % 8 == 0:  # Log every 8 intervals
+                            tou_feedback_messages.append(f"⚡ HIGH TOU Charging: {tou_info['hours_until_md']:.1f}h until MD window, SOC: {soc_percentage:.1f}%")
+                            
+                    else:
+                        # NORMAL: Standard overnight charging
+                        should_charge = (soc_percentage < 85) and (current_demand < avg_demand * 0.8)
+                        charge_rate_factor = 0.5
+                        
+                        if i % 16 == 0:  # Log every 16 intervals
+                            tou_feedback_messages.append(f"🔋 Standard TOU Charging: {tou_info['hours_until_md']:.1f}h until MD window, SOC: {soc_percentage:.1f}%")
+                
+                # Outside TOU charging window - use standard tariff-aware logic
+                if not tou_charging_active:
+                    monthly_target = df_sim['Monthly_Target'].iloc[i]
+                    is_md_period = is_md_window(current_time, holidays)
+                    
+                    # Standard SOC-based charging with tariff awareness
+                    if soc_percentage < 30:  # Critical SOC
+                        should_charge = current_demand < avg_demand * 0.9
+                        charge_rate_factor = 0.8
+                    elif soc_percentage < 60:  # Low SOC
+                        if not is_md_period:
+                            should_charge = current_demand < avg_demand * 0.8
+                            charge_rate_factor = 0.6
+                        else:
+                            should_charge = current_demand < demand_25th * 1.2
+                            charge_rate_factor = 0.4
+                    elif soc_percentage < 75:  # Reduced target for TOU (was 90% for general tariffs)
+                        if not is_md_period:
+                            should_charge = current_demand < avg_demand * 0.7
+                            charge_rate_factor = 0.5
+                        else:
+                            should_charge = current_demand < demand_25th
+                            charge_rate_factor = 0.3
             
-            # Execute charging if conditions are met AND it won't violate MD target
-            if should_charge and soc[i] < usable_capacity * 0.95:
-                # V2 CRITICAL CONSTRAINT: Maximum allowable charging that keeps Net Demand <= Monthly Target
+            else:
+                # 🔌 STANDARD GENERAL TARIFF LOGIC (24/7 MD recording)
                 monthly_target = df_sim['Monthly_Target'].iloc[i]
-                max_allowable_charging_for_md = max(0, monthly_target - current_demand)
+                is_md_period = is_md_window(current_time, holidays)
+                
+                # Critical SOC - charge aggressively regardless of period
+                if soc_percentage < 30:
+                    should_charge = current_demand < avg_demand * 0.9  # Lenient threshold
+                    charge_rate_factor = 0.8  # Higher charge rate
+                # Low SOC - moderate charging with tariff awareness
+                elif soc_percentage < 60:
+                    if not is_md_period:  # ✅ RP4 Off-peak (all times except 2PM-10PM weekdays)
+                        should_charge = current_demand < avg_demand * 0.8
+                        charge_rate_factor = 0.6
+                    else:  # ✅ RP4 Peak (2PM-10PM weekdays) - MD recording window
+                        should_charge = current_demand < demand_25th * 1.2
+                        charge_rate_factor = 0.4
+                # Normal SOC - conservative charging with full tariff awareness
+                elif soc_percentage < 90:  # Standard 90% target for general tariffs
+                    if not is_md_period:  # ✅ RP4 Off-peak periods
+                        should_charge = current_demand < avg_demand * 0.7
+                        charge_rate_factor = 0.5
+                    else:  # ✅ RP4 Peak periods - very selective
+                        should_charge = current_demand < demand_25th
+                        charge_rate_factor = 0.3
+            
+            # Execute charging if conditions are met
+            max_soc_target = 0.95 if is_tou_tariff else 0.95  # Both use 95% now, but TOU is more aggressive
+            
+            if should_charge and soc[i] < usable_capacity * max_soc_target:
+                # V2 SMART MD CONSTRAINT: Only apply MD target constraint during MD recording periods
+                is_md_recording_period = is_md_window(current_time, holidays)
+                
+                if is_md_recording_period:
+                    # During MD periods: Limit charging to keep Net Demand <= Monthly Target
+                    max_allowable_charging_for_md = max(0, monthly_target - current_demand)
+                else:
+                    # During OFF-PEAK periods: Allow unrestricted charging (essential for nighttime charging)
+                    max_allowable_charging_for_md = max_power  # No MD constraint during off-peak
                 
                 # Get battery specifications with C-rate constraints
                 if hasattr(st.session_state, 'tabled_analysis_selected_battery'):
@@ -5587,16 +5471,35 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
                 final_charge_power = max(0, md_constrained_charge_power)
                 
                 if final_charge_power > 0:
-                    # Apply charging with MD constraint
+                    # Apply charging
                     battery_power[i] = -final_charge_power  # Negative for charging
                     soc[i] = soc[i] + final_charge_power * interval_hours * efficiency
                     
-                    # V2 GUARANTEE: Net Demand = Current Demand + Charging, but NEVER above Monthly Target
-                    net_demand_candidate = current_demand + final_charge_power
-                    net_demand.iloc[i] = min(net_demand_candidate, monthly_target)
+                    # V2 SMART NET DEMAND CALCULATION: Different logic for MD vs Off-Peak periods
+                    if is_md_recording_period:
+                        # During MD periods: Net Demand = Current Demand + Charging, but NEVER above Monthly Target
+                        net_demand_candidate = current_demand + final_charge_power
+                        net_demand.iloc[i] = min(net_demand_candidate, monthly_target)
+                    else:
+                        # During Off-Peak periods: Net Demand = Current Demand + Charging (no MD constraint)
+                        net_demand.iloc[i] = current_demand + final_charge_power
+                        
+                    # Add debug feedback for significant charging events
+                    if final_charge_power > 50 and i % 8 == 0:  # Log every 8 intervals for large charging
+                        period_type = "MD" if is_md_recording_period else "Off-Peak"
+                        tou_feedback_messages.append(f"🔋 Charging {final_charge_power:.1f}kW during {period_type} period, SOC: {soc_percentage:.1f}% → {(soc[i]/usable_capacity)*100:.1f}%")
+                        
                 else:
-                    # No charging possible due to MD constraint
+                    # No charging possible
                     net_demand.iloc[i] = current_demand
+                    
+                    # Debug feedback for why charging didn't occur (only for low SOC)
+                    if soc_percentage < 50 and i % 16 == 0:  # Log every 16 intervals
+                        period_type = "MD" if is_md_recording_period else "Off-Peak" 
+                        if not should_charge:
+                            tou_feedback_messages.append(f"⏸️ No charging: demand too high ({current_demand:.0f}kW > threshold) during {period_type}, SOC: {soc_percentage:.1f}%")
+                        elif max_allowable_charging_for_md <= 0:
+                            tou_feedback_messages.append(f"⏸️ No charging: MD constraint ({current_demand:.0f}kW > {monthly_target:.0f}kW target) during {period_type}, SOC: {soc_percentage:.1f}%")
             else:
                 # No charging conditions met
                 net_demand.iloc[i] = current_demand
@@ -5620,6 +5523,63 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
     # Calculate V2 performance metrics
     total_energy_discharged = sum([p * interval_hours for p in battery_power if p > 0])
     total_energy_charged = sum([abs(p) * interval_hours for p in battery_power if p < 0])
+    
+    # 🔋 TOU READINESS VALIDATION
+    tou_readiness_stats = {}
+    
+    if is_tou_tariff:
+        # Check 2 PM readiness on weekdays
+        weekday_2pm_data = df_sim[
+            (df_sim.index.hour == 14) & 
+            (df_sim.index.minute == 0) &
+            (df_sim.index.to_series().apply(lambda ts: ts.weekday() < 5 and (not holidays or ts.date() not in holidays)))
+        ]
+        
+        if len(weekday_2pm_data) > 0:
+            ready_days = len(weekday_2pm_data[weekday_2pm_data['Battery_SOC_Percent'] >= 95])
+            total_weekdays = len(weekday_2pm_data)
+            readiness_rate = (ready_days / total_weekdays * 100) if total_weekdays > 0 else 0
+            
+            avg_soc_at_2pm = weekday_2pm_data['Battery_SOC_Percent'].mean()
+            min_soc_at_2pm = weekday_2pm_data['Battery_SOC_Percent'].min()
+            
+            tou_readiness_stats = {
+                'ready_days': ready_days,
+                'total_weekdays': total_weekdays,
+                'readiness_rate_percent': readiness_rate,
+                'avg_soc_at_2pm': avg_soc_at_2pm,
+                'min_soc_at_2pm': min_soc_at_2pm,
+                'target_soc': 95
+            }
+            
+            # Add success/warning messages
+            if readiness_rate >= 95:
+                tou_feedback_messages.append(f"✅ Excellent TOU Readiness: {readiness_rate:.1f}% days ready at 2 PM")
+            elif readiness_rate >= 85:
+                tou_feedback_messages.append(f"✅ Good TOU Readiness: {readiness_rate:.1f}% days ready at 2 PM")
+            elif readiness_rate >= 70:
+                tou_feedback_messages.append(f"⚠️ Moderate TOU Readiness: {readiness_rate:.1f}% days ready at 2 PM")
+            else:
+                tou_feedback_messages.append(f"🚨 Poor TOU Readiness: {readiness_rate:.1f}% days ready at 2 PM - Consider larger battery")
+                
+            if min_soc_at_2pm < 80:
+                tou_feedback_messages.append(f"⚠️ Minimum 2 PM SOC: {min_soc_at_2pm:.1f}% - Risk of inadequate MD preparation")
+        else:
+            tou_feedback_messages.append("⚠️ No weekday 2 PM data available for readiness analysis")
+    
+    # Store TOU feedback for display
+    if len(tou_feedback_messages) > 0:
+        # Display TOU messages using streamlit if available
+        try:
+            for msg in tou_feedback_messages[-5:]:  # Show last 5 messages to avoid clutter
+                if "🚨" in msg or "⚠️" in msg:
+                    st.warning(msg)
+                elif "✅" in msg:
+                    st.success(msg)
+                else:
+                    st.info(msg)
+        except ImportError:
+            pass  # Streamlit not available
     
     # V2 Peak reduction using monthly targets (not static)
     df_md_peak_for_reduction = df_sim[df_sim.index.to_series().apply(lambda ts: ts.weekday() < 5 and 14 <= ts.hour < 22)]
@@ -5695,8 +5655,8 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
             'calculation_method': 'V2 Fallback with monthly targets'
         }
     
-    # V2 RETURN RESULTS with monthly target context
-    return {
+    # V2 RETURN RESULTS with monthly target context and TOU readiness
+    results = {
         'df_simulation': df_sim,
         'total_energy_discharged': total_energy_discharged,
         'total_energy_charged': total_energy_charged,
@@ -5712,337 +5672,24 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
         'monthly_targets_count': len(monthly_targets),
         'debug_info': debug_info
     }
+    
+    # Add TOU-specific results if TOU tariff is detected
+    if is_tou_tariff:
+        results.update({
+            'is_tou_tariff': True,
+            'tou_readiness_stats': tou_readiness_stats,
+            'tou_feedback_messages': tou_feedback_messages
+        })
+    else:
+        results['is_tou_tariff'] = False
+    
+    return results
 
 
 # ===================================================================================================
-# SINGLE SOURCE OF TRUTH: V2 Enhanced Battery Simulation Function
-# DUPLICATE FUNCTION REMOVED - This is the definitive implementation
+# SINGLE SOURCE OF TRUTH: V2 Battery Simulation Function
+# ENHANCED VERSION REMOVED - Using simplified approach for maintainability
 # ===================================================================================================
-
-def _simulate_battery_operation_v2_enhanced(df, power_col, monthly_targets, battery_sizing, battery_params, 
-                                          interval_hours, selected_tariff=None, holidays=None, 
-                                          battery_chemistry='LFP', operating_temperature=25):
-    """
-    V2 Enhanced battery simulation with advanced health management, C-rate constraints, 
-    and intelligent charge/discharge algorithms.
-    
-    Key V2 Enhancements:
-    - Multi-level SOC protection (Emergency/Critical/Health/Normal/Maintenance)
-    - Chemistry-specific battery health parameters with temperature derating
-    - C-rate limited power calculations with SOC and health derating
-    - Intelligent charging strategy based on SOC levels and tariff periods
-    - Tariff-aware discharge strategy (TOU vs General tariff optimization)
-    - Monthly targets as FLOOR values for Net Demand (V2 core constraint)
-    
-    Args:
-        df: Energy data DataFrame with datetime index
-        power_col: Name of power demand column
-        monthly_targets: Series with Period index containing monthly targets
-        battery_sizing: Dictionary with capacity_kwh, power_rating_kw
-        battery_params: Dictionary with efficiency, depth_of_discharge
-        interval_hours: Time interval in hours (e.g., 0.25 for 15-min)
-        selected_tariff: Tariff configuration
-        holidays: Set of holiday dates
-        battery_chemistry: Battery chemistry type ('LFP', 'NMC', 'NCA')
-        operating_temperature: Operating temperature in Celsius
-        
-    Returns:
-        Dictionary with enhanced simulation results and V2-specific metrics
-    """
-    import numpy as np
-    import pandas as pd
-    
-    # Create simulation dataframe
-    df_sim = df[[power_col]].copy()
-    df_sim['Original_Demand'] = df_sim[power_col]
-    
-    # V2 ENHANCEMENT: Create dynamic monthly target series for each timestamp
-    target_series = _create_v2_dynamic_target_series(df_sim.index, monthly_targets)
-    df_sim['Monthly_Target'] = target_series
-    df_sim['Excess_Demand'] = (df_sim[power_col] - df_sim['Monthly_Target']).clip(lower=0)
-    
-    # Enhanced battery parameters with health modeling
-    battery_capacity = battery_sizing['capacity_kwh']
-    usable_capacity = battery_capacity * (battery_params['depth_of_discharge'] / 100)
-    max_power = battery_sizing['power_rating_kw']
-    base_efficiency = battery_params['round_trip_efficiency'] / 100
-    
-    # Calculate battery health parameters
-    battery_health_params = _calculate_battery_health_parameters(battery_chemistry, operating_temperature)
-    
-    # Initialize enhanced battery state tracking
-    soc = np.zeros(len(df_sim))  # State of Charge in kWh
-    soc_percent = np.zeros(len(df_sim))  # SOC as percentage
-    battery_power = np.zeros(len(df_sim))  # Positive = discharge, Negative = charge
-    net_demand = df_sim[power_col].copy()
-    
-    # Enhanced tracking arrays
-    health_derating = np.zeros(len(df_sim))
-    c_rate_limited_power = np.zeros(len(df_sim))
-    active_protection_level = ['normal'] * len(df_sim)
-    charge_strategy_info = []
-    discharge_strategy_info = []
-    
-    # V2 ENHANCED SIMULATION LOOP - Advanced Battery Management
-    for i in range(len(df_sim)):
-        current_demand = df_sim[power_col].iloc[i]
-        monthly_target = df_sim['Monthly_Target'].iloc[i]
-        excess = max(0, current_demand - monthly_target)
-        current_timestamp = df_sim.index[i]
-        
-        # Initialize SOC for first iteration
-        if i == 0:
-            soc[i] = usable_capacity * 0.8  # Start at 80% SOC
-        else:
-            soc[i] = soc[i-1]  # Carry forward from previous iteration
-        
-        # Calculate current SOC percentage
-        current_soc_percent = (soc[i] / usable_capacity) * 100
-        soc_percent[i] = current_soc_percent
-        
-        # Get current MD window status for intelligent strategies
-        if selected_tariff:
-            is_in_md_window = is_md_window(current_timestamp, holidays)
-            tariff_period = 'peak' if is_in_md_window else 'off_peak'
-            tariff_type = selected_tariff.get('Type', 'General')
-        else:
-            is_in_md_window = True  # Default to MD window for General tariff
-            tariff_period = 'peak'
-            tariff_type = 'General'
-        
-        # Calculate C-rate limited power for this interval
-        c_rate_power_limits = _calculate_c_rate_limited_power(
-            current_soc_percent, max_power, battery_health_params, interval_hours
-        )
-        c_rate_limited_power[i] = min(c_rate_power_limits['max_discharge_power_kw'], 
-                                    c_rate_power_limits['max_charge_power_kw'])
-        health_derating[i] = battery_health_params['health_derating_factor']
-        
-        # Determine if discharge is allowed based on V2 logic and tariff
-        should_discharge = excess > 0
-        
-        if selected_tariff and should_discharge:
-            # Get tariff-aware discharge strategy
-            discharge_strategy = _get_tariff_aware_discharge_strategy(
-                tariff_type, tariff_period, current_soc_percent, 
-                current_demand, monthly_target, battery_health_params
-            )
-            discharge_strategy_info.append({
-                'timestamp': current_timestamp,
-                'strategy': discharge_strategy['strategy_description'],
-                'multiplier': discharge_strategy['recommended_discharge_multiplier'],
-                'soc_protection': discharge_strategy['active_soc_protection']
-            })
-            
-            # Apply tariff-specific discharge logic
-            if tariff_type.upper() == 'TOU':
-                # TOU tariffs: Only discharge during peak periods
-                should_discharge = (excess > 0) and (tariff_period == 'peak')
-                discharge_multiplier = discharge_strategy['recommended_discharge_multiplier']
-            else:
-                # General tariffs: Discharge anytime above target with strategy
-                discharge_multiplier = discharge_strategy['recommended_discharge_multiplier']
-        else:
-            discharge_multiplier = 0.8  # Default conservative discharge
-            discharge_strategy_info.append({
-                'timestamp': current_timestamp,
-                'strategy': 'Default conservative discharge',
-                'multiplier': discharge_multiplier,
-                'soc_protection': 'normal'
-            })
-        
-        if should_discharge:  # V2 ENHANCED DISCHARGE LOGIC
-            # V2 CRITICAL CONSTRAINT: Calculate maximum discharge that keeps Net Demand >= Monthly Target
-            max_allowable_discharge = current_demand - monthly_target
-            
-            # Apply enhanced power limitations
-            max_discharge_by_crate = c_rate_power_limits['max_discharge_power_kw']
-            max_discharge_by_health = max_power * discharge_multiplier
-            
-            # Calculate required discharge power with all constraints
-            required_discharge = min(
-                max_allowable_discharge,
-                max_discharge_by_crate,
-                max_discharge_by_health
-            )
-            
-            # Check if battery has enough energy with SOC protection
-            available_energy = soc[i]
-            max_discharge_energy = available_energy * discharge_multiplier  # Apply health/SOC constraints
-            max_discharge_power = min(max_discharge_energy / interval_hours, required_discharge)
-            
-            actual_discharge = max(0, max_discharge_power)
-            battery_power[i] = actual_discharge
-            
-            # Update SOC with efficiency losses
-            efficiency = base_efficiency * battery_health_params['temperature_derating_factor']
-            soc[i] = soc[i] - actual_discharge * interval_hours / efficiency
-            
-            # V2 GUARANTEE: Net Demand = Original Demand - Discharge, but NEVER below Monthly Target
-            net_demand_candidate = current_demand - actual_discharge
-            net_demand.iloc[i] = max(net_demand_candidate, monthly_target)
-            
-            # Track active protection level
-            protection_levels = _get_soc_protection_levels()
-            for level_name, level_config in protection_levels.items():
-                if current_soc_percent <= level_config['threshold_percent']:
-                    active_protection_level[i] = level_name
-                    break
-            
-        else:  # ENHANCED CHARGING LOGIC
-            # Get intelligent charge strategy
-            available_excess_power = max(0, monthly_target - current_demand) * 0.5  # Conservative excess estimation
-            max_charge_power_available = c_rate_power_limits['max_charge_power_kw']
-            
-            charge_strategy = _calculate_intelligent_charge_strategy(
-                current_soc_percent, tariff_period, battery_health_params,
-                available_excess_power, max_charge_power_available
-            )
-            
-            charge_strategy_info.append({
-                'timestamp': current_timestamp,
-                'urgency': charge_strategy['urgency_level'],
-                'recommended_power': charge_strategy['recommended_charge_power_kw'],
-                'tariff_consideration': charge_strategy['tariff_consideration']
-            })
-            
-            # Enhanced charging decision logic
-            should_charge = False
-            charge_power = 0
-            
-            # Determine if charging conditions are met
-            if charge_strategy['urgency_level'] in ['emergency', 'critical']:
-                should_charge = True  # Always charge in emergency/critical
-                charge_power = charge_strategy['recommended_charge_power_kw']
-            elif charge_strategy['urgency_level'] == 'health':
-                should_charge = available_excess_power > 0 or tariff_period == 'off_peak'
-                charge_power = charge_strategy['recommended_charge_power_kw'] * 0.8
-            elif charge_strategy['urgency_level'] == 'normal':
-                should_charge = tariff_period == 'off_peak' and available_excess_power > 0
-                charge_power = charge_strategy['recommended_charge_power_kw'] * 0.6
-            elif charge_strategy['urgency_level'] == 'maintenance':
-                should_charge = tariff_period == 'off_peak' and current_soc_percent < 85
-                charge_power = charge_strategy['recommended_charge_power_kw'] * 0.3
-            
-            # Execute charging if conditions are met
-            if should_charge and soc[i] < usable_capacity * 0.95:
-                # Calculate charge power with enhanced constraints
-                remaining_capacity = usable_capacity * 0.95 - soc[i]
-                efficiency = base_efficiency * battery_health_params['temperature_derating_factor']
-                
-                max_charge_energy = remaining_capacity
-                charge_power = min(
-                    charge_power,  # Strategy-recommended power
-                    max_charge_energy / interval_hours,  # Energy constraint
-                    max_charge_power_available  # C-rate constraint
-                )
-                
-                # Apply charging
-                battery_power[i] = -charge_power  # Negative for charging
-                soc[i] = soc[i] + charge_power * interval_hours * efficiency
-                net_demand.iloc[i] = current_demand + charge_power
-            else:
-                net_demand.iloc[i] = current_demand
-        
-        # Ensure SOC stays within limits
-        soc[i] = max(0, min(soc[i], usable_capacity))
-        soc_percent[i] = (soc[i] / usable_capacity) * 100
-    
-    # Add V2 enhanced simulation results to dataframe
-    df_sim['Battery_Power_kW'] = battery_power
-    df_sim['Battery_SOC_kWh'] = soc
-    df_sim['Battery_SOC_Percent'] = soc_percent
-    df_sim['Net_Demand_kW'] = net_demand
-    df_sim['Peak_Shaved'] = df_sim['Original_Demand'] - df_sim['Net_Demand_kW']
-    df_sim['Health_Derating'] = health_derating
-    df_sim['CRate_Limited_Power'] = c_rate_limited_power
-    df_sim['Active_Protection_Level'] = active_protection_level
-    
-    # V2 VALIDATION: Ensure Net Demand never goes below monthly targets
-    violations = df_sim[df_sim['Net_Demand_kW'] < df_sim['Monthly_Target']]
-    
-    # Calculate enhanced performance metrics
-    total_energy_discharged = sum([p * interval_hours for p in battery_power if p > 0])
-    total_energy_charged = sum([abs(p) * interval_hours for p in battery_power if p < 0])
-    
-    # Enhanced battery health metrics
-    avg_health_derating = np.mean(health_derating)
-    min_soc_reached = np.min(soc_percent)
-    max_soc_reached = np.max(soc_percent)
-    
-    # V2 Peak reduction analysis
-    df_md_peak_for_reduction = df_sim[df_sim.index.to_series().apply(lambda ts: ts.weekday() < 5 and 14 <= ts.hour < 22)]
-    
-    if len(df_md_peak_for_reduction) > 0:
-        daily_reduction_analysis = df_md_peak_for_reduction.groupby(df_md_peak_for_reduction.index.date).agg({
-            'Original_Demand': 'max',
-            'Net_Demand_kW': 'max',
-            'Monthly_Target': 'first'
-        }).reset_index()
-        daily_reduction_analysis.columns = ['Date', 'Original_Peak_MD', 'Net_Peak_MD', 'Monthly_Target']
-        daily_reduction_analysis['Peak_Reduction'] = daily_reduction_analysis['Original_Peak_MD'] - daily_reduction_analysis['Net_Peak_MD']
-        peak_reduction = daily_reduction_analysis['Peak_Reduction'].max()
-    else:
-        peak_reduction = df_sim['Original_Demand'].max() - df_sim['Net_Demand_kW'].max()
-    
-    # Enhanced success rate calculation with V2 constraints
-    df_md_peak = df_sim[df_sim.index.to_series().apply(lambda ts: ts.weekday() < 5 and 14 <= ts.hour < 22)]
-    
-    if len(df_md_peak) > 0:
-        daily_md_analysis = df_md_peak.groupby(df_md_peak.index.date).agg({
-            'Original_Demand': 'max',
-            'Net_Demand_kW': 'max',
-            'Monthly_Target': 'first'
-        }).reset_index()
-        daily_md_analysis.columns = ['Date', 'Original_Peak_MD', 'Net_Peak_MD', 'Monthly_Target']
-        
-        # Enhanced success criteria with health considerations
-        daily_md_analysis['Success'] = daily_md_analysis['Net_Peak_MD'] <= daily_md_analysis['Monthly_Target'] * 1.03  # Tighter tolerance
-        successful_days = sum(daily_md_analysis['Success'])
-        total_days = len(daily_md_analysis)
-        success_rate = (successful_days / total_days * 100) if total_days > 0 else 0
-    else:
-        successful_days = 0
-        total_days = 0
-        success_rate = 0
-    
-    # Enhanced debug and performance information
-    enhanced_debug_info = {
-        'total_points': len(df_sim),
-        'md_peak_points': len(df_md_peak),
-        'monthly_targets_used': len(monthly_targets),
-        'constraint_violations': len(violations),
-        'battery_chemistry': battery_chemistry,
-        'operating_temperature': operating_temperature,
-        'avg_health_derating': avg_health_derating,
-        'min_soc_reached': min_soc_reached,
-        'max_soc_reached': max_soc_reached,
-        'charge_strategies_applied': len([cs for cs in charge_strategy_info if cs['recommended_power'] > 0]),
-        'discharge_strategies_applied': len([ds for ds in discharge_strategy_info if ds['multiplier'] < 1.0]),
-        'v2_methodology': 'Enhanced V2 with health management and intelligent strategies'
-    }
-    
-    # V2 ENHANCED RETURN RESULTS
-    return {
-        'df_simulation': df_sim,
-        'total_energy_discharged': total_energy_discharged,
-        'total_energy_charged': total_energy_charged,
-        'peak_reduction_kw': peak_reduction,
-        'success_rate_percent': success_rate,
-        'successful_shaves': successful_days,
-        'total_peak_events': total_days,
-        'average_soc': np.mean(soc_percent),
-        'min_soc': np.min(soc_percent),
-        'max_soc': np.max(soc_percent),
-        'md_focused_calculation': True,
-        'v2_constraint_violations': len(violations),
-        'monthly_targets_count': len(monthly_targets),
-        'battery_health_params': battery_health_params,
-        'avg_health_derating': avg_health_derating,
-        'charge_strategy_log': charge_strategy_info,
-        'discharge_strategy_log': discharge_strategy_info,
-        'enhanced_debug_info': enhanced_debug_info
-    }
 
 
 # ===================================================================================================
