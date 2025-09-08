@@ -10,9 +10,8 @@ import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from md_shaving_solution_v2 import (
-    _calculate_intelligent_charge_strategy,
-    _get_tariff_aware_discharge_strategy,
-    _calculate_battery_health_parameters
+    _calculate_intelligent_charge_strategy_simple,
+    _get_tariff_aware_discharge_strategy
 )
 
 def test_enhanced_rp4_charging_algorithm():
@@ -21,8 +20,12 @@ def test_enhanced_rp4_charging_algorithm():
     print("🧪 TESTING ENHANCED V2 BATTERY ALGORITHM WITH RP4 TARIFF AWARENESS")
     print("=" * 80)
     
-    # Mock battery health parameters
-    health_params = _calculate_battery_health_parameters('LFP', 25, {})
+    # Simplified battery health parameters
+    health_params = {
+        'health_derating_factor': 1.0,
+        'temperature_derating_factor': 1.0,
+        'max_c_rate': 1.0
+    }
     
     # Test charging strategy across different SOC levels and tariff periods
     print("\n🔋 TEST 1: ENHANCED CHARGING STRATEGY - SOC vs RP4 Tariff Periods")
@@ -36,7 +39,7 @@ def test_enhanced_rp4_charging_algorithm():
     for soc in test_soc_levels:
         print(f"\n📊 SOC Level: {soc}%")
         for period in tariff_periods:
-            strategy = _calculate_intelligent_charge_strategy(
+            strategy = _calculate_intelligent_charge_strategy_simple(
                 soc, period, health_params, available_power, max_charge
             )
             
@@ -56,7 +59,7 @@ def test_enhanced_rp4_charging_algorithm():
         print(f"\n🔋 SOC Level: {soc}%")
         for period in tariff_periods:
             strategy = _get_tariff_aware_discharge_strategy(
-                'TOU', period, soc, demand_power, health_params
+                'TOU', period, soc, demand_power, 100, health_params
             )
             
             discharge_multiplier = strategy['recommended_discharge_multiplier']
@@ -71,29 +74,29 @@ def test_enhanced_rp4_charging_algorithm():
     print("-" * 60)
     
     print("✅ SCENARIO 1: Critical SOC (8%) during RP4 Peak Period")
-    strategy = _calculate_intelligent_charge_strategy(8, 'peak', health_params, 30, 80)
+    strategy = _calculate_intelligent_charge_strategy_simple(8, 'peak', health_params, 30, 80)
     print(f"   Charging: {strategy['urgency_level']} - {strategy['recommended_charge_power_kw']:.1f}kW")
     print(f"   Strategy: {strategy['strategy_description']}")
     
-    discharge = _get_tariff_aware_discharge_strategy('TOU', 'peak', 8, 120, health_params)
+    discharge = _get_tariff_aware_discharge_strategy('TOU', 'peak', 8, 120, 100, health_params)
     print(f"   Discharge: {discharge['protection_level']} - {discharge['recommended_discharge_multiplier']:.1%}")
     print(f"   Behavior: {discharge['strategy_description']}")
     
     print("\n✅ SCENARIO 2: Low SOC (12%) during RP4 Peak Period (MD Recording)")
-    strategy = _calculate_intelligent_charge_strategy(12, 'peak', health_params, 30, 80)
+    strategy = _calculate_intelligent_charge_strategy_simple(12, 'peak', health_params, 30, 80)
     print(f"   Charging: {strategy['urgency_level']} - {strategy['recommended_charge_power_kw']:.1f}kW")
     print(f"   MD Priority: {strategy['md_constraint_priority']}")
     
-    discharge = _get_tariff_aware_discharge_strategy('TOU', 'peak', 12, 120, health_params)
+    discharge = _get_tariff_aware_discharge_strategy('TOU', 'peak', 12, 120, 100, health_params)
     print(f"   Discharge: {discharge['soc_discharge_factor']:.1%} factor")
     print(f"   Protection: {discharge['strategy_description']}")
     
     print("\n✅ SCENARIO 3: Normal SOC (50%) during RP4 Off-Peak Period")
-    strategy = _calculate_intelligent_charge_strategy(50, 'off_peak', health_params, 30, 80)
+    strategy = _calculate_intelligent_charge_strategy_simple(50, 'off_peak', health_params, 30, 80)
     print(f"   Charging: {strategy['urgency_level']} - {strategy['recommended_charge_power_kw']:.1f}kW")
     print(f"   Period Strategy: {strategy['period_strategy']}")
     
-    discharge = _get_tariff_aware_discharge_strategy('TOU', 'off_peak', 50, 120, health_params)
+    discharge = _get_tariff_aware_discharge_strategy('TOU', 'off_peak', 50, 120, 100, health_params)
     print(f"   Discharge: {discharge['protection_level']} - {discharge['recommended_discharge_multiplier']:.1%}")
     print(f"   Strategy: {discharge['strategy_description']}")
     
