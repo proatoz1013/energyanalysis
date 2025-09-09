@@ -565,42 +565,29 @@ def show():
         holidays = MALAYSIA_HOLIDAYS_2025 if use_default_holidays else []
     
     with col2:
-        st.markdown("**⚡ AFA (Actual Fuel Adjustment) Rates**")
+        st.markdown("**⚡ AFA (Actual Fuel Adjustment) Rate**")
         
-        afa_high = st.number_input(
-            "AFA High (sen/kWh)",
-            min_value=0.0,
-            max_value=100.0,
-            value=5.0,
-            step=0.1,
-            help="AFA rate for high voltage consumption"
+        afa_rate = st.number_input(
+            "Actual AFA Rate (sen/kWh)",
+            min_value=-10.0,
+            max_value=10.0,
+            value=-1.10,
+            step=0.01,
+            help="Current AFA rate applicable to all voltage levels (can be negative)"
         )
         
-        afa_medium = st.number_input(
-            "AFA Medium (sen/kWh)",
-            min_value=0.0,
-            max_value=100.0,
-            value=3.0,
-            step=0.1,
-            help="AFA rate for medium voltage consumption"
-        )
-        
-        afa_low = st.number_input(
-            "AFA Low (sen/kWh)",
-            min_value=0.0,
-            max_value=100.0,
-            value=2.0,
-            step=0.1,
-            help="AFA rate for low voltage consumption"
+        st.markdown(
+            """
+            💡 **Check current rates:** [TNB Official AFA Rates →](https://www.mytnb.com.my/tariff/index.html?v=1.1.43#afa)
+            """,
+            help="Click to view the latest AFA rates from TNB official website"
         )
     
     # Store configuration in session state
     st.session_state.analysis_config = {
         'months': selected_months if selected_months else None,
         'holidays': holidays,
-        'afa_high': afa_high / 100,  # Convert sen to RM
-        'afa_medium': afa_medium / 100,
-        'afa_low': afa_low / 100
+        'afa_rate': afa_rate / 100  # Convert sen to RM
     }
     
     st.markdown("---")
@@ -623,37 +610,108 @@ def show():
         st.info("Complete the above steps to view cost comparison results.")
     
     else:
-        if st.button("🔄 Calculate Cost Comparison", type="primary"):
-            # Perform cost analysis
-            with st.spinner("🔄 Calculating costs for selected tariffs..."):
-                results = {}
-                
-                for tariff_key in st.session_state.selected_tariffs:
-                    tariff_info = all_tariffs[tariff_key]
-                    try:
-                        # Get the actual tariff data object
-                        tariff_data = tariff_info['data']
-                        
-                        # Create a proper DataFrame with 'Parsed Timestamp' column for the cost calculator
-                        calc_df = st.session_state.uploaded_data.copy()
-                        calc_df['Parsed Timestamp'] = calc_df['datetime']
-                        
-                        # Use existing cost calculator with correct parameters
-                        result = calculate_cost(
-                            df=calc_df,
-                            tariff=tariff_data,
-                            power_col='power_demand',
-                            holidays=set(st.session_state.analysis_config['holidays']),
-                            afa_kwh=0,  # Can be customized later if needed
-                            afa_rate=st.session_state.analysis_config.get('afa_medium', 0.03)  # Use medium voltage AFA as default
-                        )
-                        results[tariff_info['name']] = result
-                    except Exception as e:
-                        st.error(f"Error calculating cost for {tariff_info['name']}: {str(e)}")
-                        results[tariff_info['name']] = {}
+        # Auto-calculate when conditions are met
+        st.markdown("🔄 **Automatically calculating costs for selected tariffs...**")
+        
+        # Perform cost analysis
+        with st.spinner("🔄 Calculating costs for selected tariffs..."):
+            results = {}
+            
+            for tariff_key in st.session_state.selected_tariffs:
+                tariff_info = all_tariffs[tariff_key]
+                try:
+                    # Get the actual tariff data object
+                    tariff_data = tariff_info['data']
+                    
+                    # Create a proper DataFrame with 'Parsed Timestamp' column for the cost calculator
+                    calc_df = st.session_state.uploaded_data.copy()
+                    calc_df['Parsed Timestamp'] = calc_df['datetime']
+                    
+                    # Use existing cost calculator with correct parameters
+                    result = calculate_cost(
+                        df=calc_df,
+                        tariff=tariff_data,
+                        power_col='power_demand',
+                        holidays=set(st.session_state.analysis_config['holidays']),
+                        afa_kwh=0,  # Can be customized later if needed
+                        afa_rate=st.session_state.analysis_config.get('afa_rate', -0.011)  # Use configured AFA rate
+                    )
+                    results[tariff_info['name']] = result
+                except Exception as e:
+                    st.error(f"Error calculating cost for {tariff_info['name']}: {str(e)}")
+                    results[tariff_info['name']] = {}
             
             if any(results.values()):
                 st.success("✅ Cost analysis complete! Here are your results:")
+                
+                # Create detailed monthly breakdown table first
+                st.subheader("📅 Monthly Breakdown Analysis")
+                
+                # Prepare monthly breakdown data
+                monthly_breakdown_data = []
+                calc_df = st.session_state.uploaded_data.copy()
+                calc_df['month'] = calc_df['datetime'].dt.strftime('%Y-%m')
+                calc_df['hour'] = calc_df['datetime'].dt.hour
+                calc_df['is_peak'] = (calc_df['hour'] >= 8) & (calc_df['hour'] < 22)
+                
+                # Group by month and calculate metrics
+                for month in sorted(calc_df['month'].unique()):
+                    month_data = calc_df[calc_df['month'] == month].copy()
+                    
+                    # Peak and Off-Peak energy consumption
+                    peak_energy = month_data[month_data['is_peak'] == True]['energy_consumption'].sum()
+                    offpeak_energy = month_data[month_data['is_peak'] == False]['energy_consumption'].sum()
+                    
+                    # Maximum demand for the month
+                    max_demand_month = month_data['power_demand'].max()
+                    
+                    # Calculate MD excess for different tariff types
+                    # General tariff MD excess (assuming 100kW threshold as example - this should be configurable)
+                    general_md_threshold = 100.0  # kW - this could be made configurable
+                    general_md_excess = max(0, max_demand_month - general_md_threshold)
+                    
+                    # TOU tariff MD excess (different threshold, typically higher)
+                    tou_md_threshold = 132.0  # kW - this could be made configurable  
+                    tou_md_excess = max(0, max_demand_month - tou_md_threshold)
+                    
+                    monthly_breakdown_data.append({
+                        'Month': month,
+                        'Peak (kWh)': peak_energy,
+                        'Off-Peak (kWh)': offpeak_energy,
+                        'Max Demand (kW)': max_demand_month,
+                        'General MD Excess (kW)': general_md_excess,
+                        'TOU MD Excess (kW)': tou_md_excess
+                    })
+                
+                if monthly_breakdown_data:
+                    breakdown_df = pd.DataFrame(monthly_breakdown_data)
+                    
+                    # Format for display
+                    display_breakdown_df = breakdown_df.copy()
+                    display_breakdown_df['Peak (kWh)'] = display_breakdown_df['Peak (kWh)'].apply(lambda x: f"{x:,.0f}")
+                    display_breakdown_df['Off-Peak (kWh)'] = display_breakdown_df['Off-Peak (kWh)'].apply(lambda x: f"{x:,.0f}")
+                    display_breakdown_df['Max Demand (kW)'] = display_breakdown_df['Max Demand (kW)'].apply(lambda x: f"{x:.1f}")
+                    display_breakdown_df['General MD Excess (kW)'] = display_breakdown_df['General MD Excess (kW)'].apply(lambda x: f"{x:.1f}" if x > 0 else "0.0")
+                    display_breakdown_df['TOU MD Excess (kW)'] = display_breakdown_df['TOU MD Excess (kW)'].apply(lambda x: f"{x:.1f}" if x > 0 else "0.0")
+                    
+                    st.dataframe(display_breakdown_df, use_container_width=True, hide_index=True)
+                    
+                    # Summary metrics
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        total_peak = breakdown_df['Peak (kWh)'].sum()
+                        st.metric("Total Peak Energy", f"{total_peak:,.0f} kWh")
+                    with col2:
+                        total_offpeak = breakdown_df['Off-Peak (kWh)'].sum()
+                        st.metric("Total Off-Peak Energy", f"{total_offpeak:,.0f} kWh")
+                    with col3:
+                        overall_max_demand = breakdown_df['Max Demand (kW)'].max()
+                        st.metric("Overall Max Demand", f"{overall_max_demand:.1f} kW")
+                    with col4:
+                        peak_ratio = (total_peak / (total_peak + total_offpeak) * 100) if (total_peak + total_offpeak) > 0 else 0
+                        st.metric("Peak Energy Ratio", f"{peak_ratio:.1f}%")
+                
+                st.markdown("---")
                 
                 # Create summary comparison table
                 st.subheader("📊 Cost Comparison Summary")
@@ -861,9 +919,6 @@ def show():
             
             else:
                 st.error("❌ Unable to calculate costs. Please check your data and tariff selections.")
-        
-        else:
-            st.info("📊 Click the button above to start the cost calculation analysis.")
 
 
 if __name__ == "__main__":
