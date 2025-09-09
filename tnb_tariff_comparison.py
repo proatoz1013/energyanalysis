@@ -2,438 +2,869 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-from tariffs.rp4_tariffs import get_tariff_data
-from tariffs.peak_logic import is_peak_rp4
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from datetime import datetime, time, timedelta
+import io
+import xlsxwriter
+from typing import Dict, List, Tuple, Optional, Any
 
+# Import existing modules
+from tariffs.rp4_tariffs import TARIFF_DATA
+from tariffs.peak_logic import MALAYSIA_HOLIDAYS_2025
+from utils.cost_calculator import calculate_cost
 
-# Helper function to read different file formats
-def read_uploaded_file(file):
-    """Read uploaded file based on its extension"""
-    if file.name.endswith('.csv'):
-        return pd.read_csv(file)
-    elif file.name.endswith(('.xls', '.xlsx')):
-        return pd.read_excel(file)
+def _format_rm_value(value: float) -> str:
+    """Format RM values with appropriate decimal places and thousand separators."""
+    if pd.isna(value) or value is None:
+        return "RM0.00"
+    if abs(value) >= 1:
+        return f"RM{value:,.2f}"
     else:
-        raise ValueError("Unsupported file format. Please upload CSV, XLS, or XLSX files.")
+        return f"RM{value:.4f}"
 
+def _format_number_value(value: float) -> str:
+    """Format number values with appropriate decimal places and thousand separators."""
+    if pd.isna(value) or value is None:
+        return "0"
+    if abs(value) >= 1:
+        return f"{value:,.0f}"
+    else:
+        return f"{value:.2f}"
 
-# Ensure the `fmt` function is defined at the top level for accessibility
-def fmt(val):
-    if val is None or val == "":
-        return ""
-    if isinstance(val, (int, float)):
-        if val < 1:
-            return f"{val:,.4f}"  # Format numbers with 4 decimal places if less than RM1.
-        return f"{val:,.2f}"  # Format numbers with 2 decimal places if RM1 or greater.
-    return val
+def read_uploaded_file(uploaded_file):
+    """Read uploaded CSV or Excel file."""
+    if uploaded_file is None:
+        return None
+    
+    try:
+        file_extension = uploaded_file.name.split('.')[-1].lower()
+        
+        if file_extension == 'csv':
+            df = pd.read_csv(uploaded_file)
+        elif file_extension in ['xlsx', 'xls']:
+            df = pd.read_excel(uploaded_file)
+        else:
+            st.error("Unsupported file format. Please upload CSV or Excel files.")
+            return None
+        
+        return df
+    except Exception as e:
+        st.error(f"Error reading file: {str(e)}")
+        return None
 
+def extract_all_tariffs() -> Dict[str, Dict]:
+    """Extract all available tariffs from the existing TARIFF_DATA."""
+    all_tariffs = {}
+    
+    # Process the hierarchical TARIFF_DATA structure
+    for sector, sector_data in TARIFF_DATA.items():
+        if isinstance(sector_data, dict) and "Tariff Groups" in sector_data:
+            tariff_groups = sector_data["Tariff Groups"]
+            for group_name, group_data in tariff_groups.items():
+                if "Tariffs" in group_data:
+                    for tariff in group_data["Tariffs"]:
+                        tariff_name = tariff.get("Tariff", "Unknown")
+                        tariff_key = f"{sector}_{group_name}_{tariff_name}".replace(" ", "_")
+                        
+                        all_tariffs[tariff_key] = {
+                            'name': f"{sector} - {group_name} - {tariff_name}",
+                            'type': sector,
+                            'category': group_name,
+                            'data': tariff
+                        }
+    
+    return all_tariffs
 
 def show():
-    st.title("TNB New Tariff Comparison")
-    # Inject custom CSS for table styling at the very top
-    with open("assets/style.css") as f:
-        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
-
-    st.markdown("")
-    st.markdown("")
-    st.markdown("")
-    st.markdown("")
-
+    """Main function to display the TNB New Tariff Comparison tool with 5-step process."""
+    
+    st.title("🏢 TNB New Tariff Comparison")
+    st.markdown("---")
+    
     st.markdown("""
-    This tool allows you to compare the new TNB tariffs for different consumer categories. Select your industry and tariff schedule to see a breakdown and comparison of costs under the new tariff structure.
+    **Compare TNB tariffs with comprehensive peak/off-peak analysis** to find the most cost-effective option.
+    
+    **Follow these 4 steps:**
+    1. 📁 Upload your energy consumption data
+    2. 🔍 Map columns and process data  
+    3. 📈 Compare peak and off-peak consumption by months
+    4. 📋 Select tariffs for comparison and view results
     """)
-
-    # Step 1: Select User Type
-    # This sets the top-level category of the tariff structure.
-    # Options:
-    # - "Business"    # (also known as Non-Domestic)
-    # - "Residential" # (tariff data may be added later)
-    tariff_data = get_tariff_data()
-    user_types = list(tariff_data.keys())
-    # Robust default: 'Business' if present, else user_types[0]
-    default_user_type = 'Business' if 'Business' in user_types else user_types[0]
-    user_type_index = user_types.index(default_user_type)
-    selected_user_type = st.selectbox(
-        "Select User Type",
-        user_types,
-        index=user_type_index
+    
+    # Initialize session state for data persistence
+    if 'uploaded_data' not in st.session_state:
+        st.session_state.uploaded_data = pd.DataFrame()
+    if 'selected_tariffs' not in st.session_state:
+        st.session_state.selected_tariffs = []
+    
+    # Progress tracking
+    st.markdown("### 📊 Progress Overview")
+    
+    progress_steps = [
+        ("Upload Data", not st.session_state.uploaded_data.empty),
+        ("Map Columns", not st.session_state.uploaded_data.empty),
+        ("Peak Analysis", not st.session_state.uploaded_data.empty),
+        ("Tariff Comparison", len(st.session_state.selected_tariffs) >= 2 and not st.session_state.uploaded_data.empty)
+    ]
+    
+    progress_cols = st.columns(4)
+    for i, (step_name, completed) in enumerate(progress_steps):
+        with progress_cols[i]:
+            if completed:
+                st.markdown(f"✅ **{step_name}**")
+            else:
+                st.markdown(f"⏳ {step_name}")
+    
+    # Overall progress bar
+    completed_steps = sum(1 for _, completed in progress_steps if completed)
+    st.progress(completed_steps / len(progress_steps))
+    
+    st.markdown("---")
+    
+    # STEP 1: Upload Data
+    st.header("📁 Step 1: Upload Data")
+    
+    st.markdown("""
+    **Upload your energy consumption data files** (CSV or Excel format).
+    
+    📋 **What you need:**
+    - ✅ Any file with **date/time** information 
+    - ✅ Any file with **energy consumption** data 
+    - 🔄 **Demand/Power** data is optional
+    
+    💡 **Column names don't matter** - you'll map them in the next step!
+    
+    📁 **Supported formats:** CSV, Excel (.xlsx, .xls)
+    """)
+    
+    uploaded_files = st.file_uploader(
+        "Choose CSV or Excel files",
+        type=['csv', 'xlsx', 'xls'],
+        accept_multiple_files=True,
+        help="You can upload multiple files. They will be combined for analysis."
     )
     
-    # Ensure selected_user_type is a string, not an index
-    if isinstance(selected_user_type, int):
-        selected_user_type = user_types[selected_user_type]
-
-    # Step 2: Select Tariff Group (under selected User Type)
-    # These are specific industry or supply categories within the User Type.
-    # Available options under "Business":
-    # - "Non Domestic"
-    # - "Specific Agriculture"
-    # - "Water & Sewerage Operator"
-    # - "Street Lighting"
-    # - "Co-Generation"
-    # - "Traction"
-    # - "Bulk"
-    # - "Thermal Energy Storage (TES)"
-    # - "Backfeed"
-    tariff_groups = list(tariff_data.get(selected_user_type, {}).get("Tariff Groups", {}).keys())
-    # Robust default: 'Non Domestic' if present, else tariff_groups[0]
-    default_tariff_group = 'Non Domestic' if 'Non Domestic' in tariff_groups else tariff_groups[0]
-    tariff_group_index = tariff_groups.index(default_tariff_group)
-    selected_tariff_group = st.selectbox(
-        "Select Tariff Group",
-        tariff_groups,
-        index=tariff_group_index
-    )
+    # Process uploaded files
+    raw_files_data = []
     
-    # Ensure selected_tariff_group is a string, not an index
-    if isinstance(selected_tariff_group, int):
-        selected_tariff_group = tariff_groups[selected_tariff_group]
-
-    # Step 3: Select Voltage and Tariff Type
-    # These are full tariff definitions under the selected Tariff Group.
-    # Format: "<Voltage> <Tariff Type>"
-    # Example options under "Business" → "Non Domestic":
-    # - "Low Voltage General"
-    # - "Low Voltage TOU"
-    # - "Medium Voltage General"
-    # - "Medium Voltage TOU"
-    # - "High Voltage General"
-    # - "High Voltage TOU"
-    # These dropdowns map to: tariff_data[user_type]["Tariff Groups"][group]["Tariffs"]
-    tariffs = tariff_data.get(selected_user_type, {}).get("Tariff Groups", {}).get(selected_tariff_group, {}).get("Tariffs", [])
-    tariff_types = [t["Tariff"] for t in tariffs]
-    # Robust default: 'Medium Voltage TOU' if present, else first
-    default_tariff_type = 'Medium Voltage TOU' if 'Medium Voltage TOU' in tariff_types else tariff_types[0]
-    tariff_type_index = tariff_types.index(default_tariff_type)
-    selected_tariff_type = st.selectbox(
-        "Select Voltage and Tariff Type",
-        tariff_types,
-        index=tariff_type_index
-    )
-    
-
-    # Find the selected tariff object
-    selected_tariff_obj = next((t for t in tariffs if t["Tariff"] == selected_tariff_type), None)
-    if not selected_tariff_obj:
-        st.error("Selected tariff details not found.")
-        return
-
-    # --- File uploader and column selection ---
-    uploaded_file = st.file_uploader("Upload your data file", type=["csv", "xls", "xlsx"], key="tariff_file_uploader")
-    if uploaded_file:
-        df = read_uploaded_file(uploaded_file)
-        st.success("File uploaded and read successfully!")
-        st.subheader("Raw Data Preview")
-        st.dataframe(df.head(), use_container_width=True)
-        st.subheader("Column Selection")
-        timestamp_col = st.selectbox("Select timestamp column", df.columns, key="timestamp_col_selector")
-        power_col = st.selectbox("Select power (kW) column", df.select_dtypes(include='number').columns, key="power_col_selector")
-       # --- Manual input for public holidays using a multi-select dropdown ---
-        st.subheader("Manual Public Holiday Selection")
-        st.caption("Select any combination of days as public holidays. The dropdown supports non-consecutive dates.")
-        # Suggest a default range based on the data
-        if not df.empty:
-            min_date = df[timestamp_col].min().date() if pd.api.types.is_datetime64_any_dtype(df[timestamp_col]) else pd.to_datetime(df[timestamp_col], errors="coerce").min().date()
-            max_date = df[timestamp_col].max().date() if pd.api.types.is_datetime64_any_dtype(df[timestamp_col]) else pd.to_datetime(df[timestamp_col], errors="coerce").max().date()
-            unique_dates = pd.date_range(min_date, max_date).date
-        else:
-            unique_dates = []
-        holiday_options = [d.strftime('%A, %d %B %Y') for d in unique_dates]
-        selected_labels = st.multiselect(
-            "Select public holidays in the period:",
-            options=holiday_options,
-            default=[],
-            help="Pick all public holidays in the data period. You can select multiple, non-consecutive days."
-        )
-        # Map back to date objects
-        label_to_date = {d.strftime('%A, %d %B %Y'): d for d in unique_dates}
-        selected_holidays = [label_to_date[label] for label in selected_labels]
-        holidays = set(selected_holidays)
-        manual_holiday_count = len(holidays)
-        # --- Calculate period of start time and end time ---
-        df["Parsed Timestamp"] = pd.to_datetime(df[timestamp_col], errors="coerce")
-        df = df.dropna(subset=["Parsed Timestamp"])
-        if not df.empty:
-            col1, col2, col3 = st.columns(3)
-            start_time = df["Parsed Timestamp"].min()
-            end_time = df["Parsed Timestamp"].max()
-            col1.metric("Start Time", start_time.strftime("%Y-%m-%d %H:%M"))
-            col2.metric("End Time", end_time.strftime("%Y-%m-%d %H:%M"))
-            # Calculate total kWh using proper interval detection
-            # Detect data interval from the entire dataset using mode (most common interval)
-            df = df.sort_values("Parsed Timestamp")
-            if len(df) > 1:
-                time_diffs = df["Parsed Timestamp"].diff().dropna()
-                if len(time_diffs) > 0:
-                    # Get the most common time interval (mode)
-                    most_common_interval = time_diffs.mode()[0] if not time_diffs.mode().empty else pd.Timedelta(minutes=15)
-                    interval_hours = most_common_interval.total_seconds() / 3600
-                else:
-                    # Fallback to 15 minutes if we can't determine interval
-                    interval_hours = 0.25
+    if uploaded_files:
+        for uploaded_file in uploaded_files:
+            df = read_uploaded_file(uploaded_file)
+            if df is not None:
+                st.success(f"✅ Successfully loaded '{uploaded_file.name}' ({len(df):,} records)")
                 
-                # Energy per interval = kW * consistent interval hours
-                interval_kwh = df[power_col] * interval_hours
-                total_kwh = interval_kwh.sum()
-            else:
-                total_kwh = 0
-            col3.metric("Total Energy (kWh)", f"{total_kwh:,.2f}")
-            col3.metric("Maximum Demand kW", f"{df[power_col].max():,.2f}")
-            # Show Peak Demand (maximum demand during peak periods only)
-            peak_demand = get_peak_demand(df, power_col, holidays)
-            if peak_demand is not None:
-                col3.metric("Peak Demand (kW, Peak Period Only)", f"{peak_demand:,.2f}")
-            else:
-                col3.metric("Peak Demand (kW, Peak Period Only)", "N/A")
-        # --- Calculate % of peak and off-peak period and show as bar chart ---
-        is_peak = df["Parsed Timestamp"].apply(lambda ts: is_peak_rp4(ts, holidays))
-        # Calculate kWh for peak and off-peak using consistent interval detection
-        df = df.sort_values("Parsed Timestamp")
+                # Show data preview first
+                with st.expander(f"📋 Raw Data Preview - '{uploaded_file.name}'", expanded=True):
+                    st.markdown(f"**Available columns:** {', '.join(df.columns)}")
+                    st.dataframe(df.head(10), use_container_width=True)
+                    
+                    # Data statistics
+                    st.markdown("**📊 Data Statistics:**")
+                    stats_col1, stats_col2, stats_col3 = st.columns(3)
+                    with stats_col1:
+                        st.metric("Total Rows", f"{len(df):,}")
+                    with stats_col2:
+                        st.metric("Total Columns", len(df.columns))
+                    with stats_col3:
+                        numeric_cols = df.select_dtypes(include=['number']).columns
+                        st.metric("Numeric Columns", len(numeric_cols))
+                
+                # Store raw file data for Step 2
+                raw_files_data.append({
+                    'name': uploaded_file.name,
+                    'data': df
+                })
         
-        # Use the same interval detection as above for consistency
-        if len(df) > 1:
-            time_diffs = df["Parsed Timestamp"].diff().dropna()
-            if len(time_diffs) > 0:
-                # Get the most common time interval (mode)
-                most_common_interval = time_diffs.mode()[0] if not time_diffs.mode().empty else pd.Timedelta(minutes=15)
-                interval_hours = most_common_interval.total_seconds() / 3600
+        # Store raw files data in session state for Step 2
+        if raw_files_data:
+            st.session_state.raw_files_data = raw_files_data
+            st.success(f"✅ Successfully uploaded {len(raw_files_data)} file(s). Proceed to Step 2 for column mapping.")
+        
+    # Use raw files data from session state if available
+    if 'raw_files_data' not in st.session_state:
+        st.session_state.raw_files_data = []
+    
+    if not st.session_state.raw_files_data:
+        st.info("📂 Please upload your energy consumption data files to proceed.")
+    
+    # Clear any previous processed data when new files are uploaded
+    if uploaded_files and raw_files_data:
+        st.session_state.uploaded_data = pd.DataFrame()
+    
+    st.markdown("---")
+    
+    # STEP 2: Column Mapping and Data Processing
+    st.header("🔍 Step 2: Map Columns and Process Data")
+    
+    if st.session_state.raw_files_data:
+        st.markdown("**Map your data columns to required fields for analysis:**")
+        
+        st.info("""
+        📋 **Required mappings:**
+        - **DateTime Column**: Column containing date and time information
+        - **kW Import (MD) Column**: Column containing power/demand data (kW) - used for Maximum Demand analysis
+        - **Energy Consumption Column** (optional): Column containing energy consumption data (kWh)
+        """)
+        
+        # Column mapping for each file
+        processed_files_data = []
+        
+        for file_info in st.session_state.raw_files_data:
+            file_name = file_info['name']
+            df = file_info['data']
+            
+            st.subheader(f"📄 Map Columns for '{file_name}'")
+            
+            # Get available columns
+            available_columns = ['-- Select Column --'] + list(df.columns)
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                datetime_col = st.selectbox(
+                    "📅 DateTime Column",
+                    available_columns,
+                    key=f"datetime_{file_name}",
+                    help="Select the column containing date/time information"
+                )
+            
+            with col2:
+                power_col = st.selectbox(
+                    "🔋 kW Import (MD) Column",
+                    available_columns,
+                    key=f"power_{file_name}",
+                    help="Select the column containing kW import/demand data (MD)"
+                )
+            
+            with col3:
+                energy_col = st.selectbox(
+                    "⚡ Energy Consumption Column (Optional)",
+                    available_columns,
+                    key=f"energy_{file_name}",
+                    help="Select the column containing energy consumption data (kWh) - optional"
+                )
+            
+            # Show preview of selected columns
+            if datetime_col != '-- Select Column --' and power_col != '-- Select Column --':
+                st.markdown("**🔍 Selected Columns Preview:**")
+                preview_cols = [datetime_col, power_col]
+                if energy_col != '-- Select Column --':
+                    preview_cols.append(energy_col)
+                
+                preview_df = df[preview_cols].head(5)
+                st.dataframe(preview_df, use_container_width=True)
+                
+                # Store mapping info
+                processed_files_data.append({
+                    'name': file_name,
+                    'data': df,
+                    'datetime_col': datetime_col,
+                    'power_col': power_col,
+                    'energy_col': energy_col if energy_col != '-- Select Column --' else None
+                })
+        
+        # Process and combine data automatically
+        if processed_files_data:
+            all_mapped = all(
+                info['datetime_col'] != '-- Select Column --' and 
+                info['power_col'] != '-- Select Column --' 
+                for info in processed_files_data
+            )
+            
+            if all_mapped:
+                # Auto-process when all columns are mapped
+                combined_data = []
+                
+                with st.spinner("🔄 Processing and combining data..."):
+                    for file_info in processed_files_data:
+                        df = file_info['data'].copy()
+                        datetime_col = file_info['datetime_col']
+                        energy_col = file_info['energy_col']
+                        power_col = file_info['power_col']
+                        
+                        try:
+                            # Create standardized columns
+                            processed_df = pd.DataFrame()
+                            
+                            # Process datetime column
+                            processed_df['datetime'] = pd.to_datetime(df[datetime_col])
+                            
+                            # Process power/demand (required)
+                            processed_df['power_demand'] = pd.to_numeric(df[power_col], errors='coerce')
+                            
+                            # Calculate energy consumption from power demand (kW to kWh)
+                            # Assume interval between readings (default to 1 hour if not specified)
+                            processed_df = processed_df.sort_values('datetime')
+                            time_diff = processed_df['datetime'].diff().dt.total_seconds() / 3600  # Convert to hours
+                            time_diff = time_diff.fillna(1.0)  # Default to 1 hour for first row
+                            processed_df['energy_consumption'] = processed_df['power_demand'] * time_diff
+                            
+                            # If energy column is provided, use it instead of calculated
+                            if energy_col:
+                                energy_data = pd.to_numeric(df[energy_col], errors='coerce')
+                                processed_df['energy_consumption'] = energy_data
+                            
+                            # Add file source
+                            processed_df['source_file'] = file_info['name']
+                            
+                            # Remove rows with invalid data
+                            processed_df = processed_df.dropna(subset=['datetime', 'power_demand'])
+                            
+                            combined_data.append(processed_df)
+                            
+                            st.success(f"✅ Processed '{file_info['name']}': {len(processed_df):,} valid records")
+                            
+                        except Exception as e:
+                            st.error(f"❌ Error processing '{file_info['name']}': {str(e)}")
+                
+                if combined_data:
+                    # Combine all processed data
+                    combined_df = pd.concat(combined_data, ignore_index=True)
+                    combined_df = combined_df.sort_values('datetime').reset_index(drop=True)
+                    
+                    # Store processed data
+                    st.session_state.uploaded_data = combined_df
+                    
+                    st.success(f"🎉 Successfully processed and combined data: {len(combined_df):,} total records")
+                    
+                    # Show combined data summary
+                    st.markdown("**📊 Combined Data Summary:**")
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    with col1:
+                        st.metric("Total Records", f"{len(combined_df):,}")
+                    
+                    with col2:
+                        date_range = f"{combined_df['datetime'].dt.date.min()} to {combined_df['datetime'].dt.date.max()}"
+                        st.metric("Date Range", date_range)
+                    
+                    with col3:
+                        if 'energy_consumption' in combined_df.columns:
+                            total_energy = f"{combined_df['energy_consumption'].sum():,.0f}"
+                            st.metric("Total Energy (kWh)", total_energy)
+                        else:
+                            st.metric("Max Demand (kW)", f"{combined_df['power_demand'].max():.1f}")
+                    
+                    with col4:
+                        files_count = combined_df['source_file'].nunique()
+                        st.metric("Source Files", files_count)
+                    
+                    # Show processed data preview
+                    with st.expander("📋 Processed Data Preview", expanded=True):
+                        st.dataframe(combined_df.head(10), use_container_width=True)
             else:
-                # Fallback to 15 minutes if we can't determine interval
-                interval_hours = 0.25
+                st.warning("⚠️ Please map the required columns (DateTime and kW Import/MD) for all files.")
+    
+    else:
+        st.info("📂 Please complete Step 1 to upload data first.")
+    st.markdown("---")
+    
+    # STEP 3: Compare Peak and Off-Peak for Months
+    st.header("📈 Step 3: Compare Peak and Off-Peak for Months")
+    
+    if not st.session_state.uploaded_data.empty:
+        filtered_df = st.session_state.uploaded_data
+        
+        st.markdown("**Monthly Peak vs Off-Peak Analysis:**")
+        
+        # Prepare data for analysis
+        analysis_df = filtered_df.copy()
+        analysis_df['hour'] = analysis_df['datetime'].dt.hour
+        analysis_df['month'] = analysis_df['datetime'].dt.strftime('%Y-%m')
+        analysis_df['is_peak'] = (analysis_df['hour'] >= 8) & (analysis_df['hour'] < 22)
+        
+        # Calculate monthly peak and off-peak consumption
+        monthly_analysis = analysis_df.groupby(['month', 'is_peak'])['energy_consumption'].agg([
+            ('total_consumption', 'sum'),
+            ('avg_consumption', 'mean'),
+            ('max_consumption', 'max'),
+            ('record_count', 'count')
+        ]).reset_index()
+        
+        monthly_analysis['period'] = monthly_analysis['is_peak'].map({True: 'Peak', False: 'Off-Peak'})
+        
+        # Create summary table
+        monthly_summary = []
+        for month in sorted(analysis_df['month'].unique()):
+            month_data = monthly_analysis[monthly_analysis['month'] == month]
+            peak_data = month_data[month_data['is_peak'] == True]
+            offpeak_data = month_data[month_data['is_peak'] == False]
             
-            interval_kwh = df[power_col] * interval_hours
-        else:
-            interval_kwh = df[power_col] * 0.25  # Fallback
+            peak_total = peak_data['total_consumption'].iloc[0] if len(peak_data) > 0 else 0
+            offpeak_total = offpeak_data['total_consumption'].iloc[0] if len(offpeak_data) > 0 else 0
+            peak_avg = peak_data['avg_consumption'].iloc[0] if len(peak_data) > 0 else 0
+            offpeak_avg = offpeak_data['avg_consumption'].iloc[0] if len(offpeak_data) > 0 else 0
+            peak_records = peak_data['record_count'].iloc[0] if len(peak_data) > 0 else 0
+            offpeak_records = offpeak_data['record_count'].iloc[0] if len(offpeak_data) > 0 else 0
             
-        peak_kwh = interval_kwh[is_peak].sum()
-        offpeak_kwh = interval_kwh[~is_peak].sum()
-        total_kwh = interval_kwh.sum()
-        peak_pct = (peak_kwh / total_kwh) * 100 if total_kwh else 0
-        offpeak_pct = (offpeak_kwh / total_kwh) * 100 if total_kwh else 0
-        pie_df = pd.DataFrame({
-            'Period': ['Peak', 'Off-Peak'],
-            'kWh': [peak_kwh, offpeak_kwh],
-            'Percentage': [peak_pct, offpeak_pct],
-            'Label': [
-                f"Peak: {peak_kwh:,.2f} kWh ({peak_pct:.1f}%)",
-                f"Off-Peak: {offpeak_kwh:,.2f} kWh ({offpeak_pct:.1f}%)"
-            ]
-        })
-        fig = px.bar(
-            pie_df,
-            x='Period',
-            y='kWh',
-            text='Label',
-            color='Period',
-            color_discrete_map={'Peak': 'orange', 'Off-Peak': 'blue'},
-            title='Peak vs Off-Peak Energy (kWh)'
+            total_consumption = peak_total + offpeak_total
+            peak_ratio = (peak_total / total_consumption * 100) if total_consumption > 0 else 0
+            
+            monthly_summary.append({
+                'Month': month,
+                'Peak Total (kWh)': peak_total,
+                'Off-Peak Total (kWh)': offpeak_total,
+                'Peak Average (kWh)': peak_avg,
+                'Off-Peak Average (kWh)': offpeak_avg,
+                'Peak Records': int(peak_records),
+                'Off-Peak Records': int(offpeak_records),
+                'Peak Ratio (%)': peak_ratio
+            })
+        
+        summary_df = pd.DataFrame(monthly_summary)
+        
+        # Display summary table
+        st.subheader("📊 Monthly Peak vs Off-Peak Summary")
+        
+        # Format display table
+        display_df = summary_df.copy()
+        display_df['Peak Total (kWh)'] = display_df['Peak Total (kWh)'].apply(lambda x: f"{x:,.0f}")
+        display_df['Off-Peak Total (kWh)'] = display_df['Off-Peak Total (kWh)'].apply(lambda x: f"{x:,.0f}")
+        display_df['Peak Average (kWh)'] = display_df['Peak Average (kWh)'].apply(lambda x: f"{x:.2f}")
+        display_df['Off-Peak Average (kWh)'] = display_df['Off-Peak Average (kWh)'].apply(lambda x: f"{x:.2f}")
+        display_df['Peak Ratio (%)'] = display_df['Peak Ratio (%)'].apply(lambda x: f"{x:.1f}%")
+        
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        
+        # Create visualizations
+        st.subheader("📈 Peak vs Off-Peak Visualization")
+        
+        # Bar chart comparing peak vs off-peak by month
+        fig1 = go.Figure()
+        
+        fig1.add_trace(go.Bar(
+            name='Peak Hours (8 AM - 10 PM)',
+            x=summary_df['Month'],
+            y=summary_df['Peak Total (kWh)'],
+            marker_color='#ff7f0e',
+            text=summary_df['Peak Total (kWh)'].apply(lambda x: f"{x:,.0f}"),
+            textposition='auto'
+        ))
+        
+        fig1.add_trace(go.Bar(
+            name='Off-Peak Hours (10 PM - 8 AM)',
+            x=summary_df['Month'],
+            y=summary_df['Off-Peak Total (kWh)'],
+            marker_color='#1f77b4',
+            text=summary_df['Off-Peak Total (kWh)'].apply(lambda x: f"{x:,.0f}"),
+            textposition='auto'
+        ))
+        
+        fig1.update_layout(
+            title='Monthly Peak vs Off-Peak Energy Consumption',
+            xaxis_title='Month',
+            yaxis_title='Energy Consumption (kWh)',
+            barmode='group',
+            height=500
         )
-        fig.update_traces(textposition='outside', textfont_size=28)  # Double the default font size (usually 14)
-        # Add 15% margin above the tallest bar for clarity
-        max_kwh = pie_df['kWh'].max()
-        fig.update_yaxes(range=[0, max_kwh * 1.15])
-        fig.update_layout(yaxis_title='Energy (kWh)', xaxis_title='', showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
-        st.caption(f"Peak: {peak_kwh:,.2f} kWh ({peak_pct:.1f}%) | Off-Peak: {offpeak_kwh:,.2f} kWh ({offpeak_pct:.1f}%)")
-
-        # --- Show number of days: weekday, weekend, and holidays ---
-        if not df.empty:
-            unique_dates = df["Parsed Timestamp"].dt.date.unique()
-            holidays_set = set(holidays)
-            weekday_count = 0
-            weekend_count = 0
-            holiday_count = 0
-            for d in unique_dates:
-                if d in holidays_set:
-                    holiday_count += 1
-                elif pd.Timestamp(d).weekday() >= 5:
-                    weekend_count += 1
-                else:
-                    weekday_count += 1
-            total_days = len(unique_dates)
-            st.markdown("**Number of Days:**")
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Weekdays", weekday_count)
-            col2.metric("Weekends", weekend_count)
-            col3.metric("Holidays", holiday_count)
-            col4.metric("Total Days", total_days)
-            st.caption("Total = Weekdays + Weekends + Holidays")
-
-        # --- AFA (Additional Fuel Adjustment) Rate ---
-        st.markdown("**AFA (Additional Fuel Adjustment) Rate**")
-        st.caption("Maximum allowable AFA is 3 cents (0.03 RM/kWh). Any value above requires government approval.")
-        afa_rate_cent = st.number_input(
-            "Enter AFA Rate (cent/kWh, optional)",
-            min_value=-10.0, max_value=10.0, value=3.0, step=0.1, format="%.1f", key="afa_rate_input_cent"
+        
+        st.plotly_chart(fig1, use_container_width=True)
+        
+        # Peak ratio trend line
+        fig2 = go.Figure()
+        
+        fig2.add_trace(go.Scatter(
+            x=summary_df['Month'],
+            y=summary_df['Peak Ratio (%)'],
+            mode='lines+markers+text',
+            name='Peak Consumption Ratio',
+            line=dict(width=3, color='#2ca02c'),
+            marker=dict(size=10),
+            text=summary_df['Peak Ratio (%)'].apply(lambda x: f"{x:.1f}%"),
+            textposition='top center'
+        ))
+        
+        fig2.update_layout(
+            title='Peak Hour Consumption Ratio by Month',
+            xaxis_title='Month',
+            yaxis_title='Peak Ratio (%)',
+            height=400
         )
-        afa_rate = afa_rate_cent / 100  # Convert cent to RM
-
-        # Move the 'Select New Tariff for Comparison' selector here
-        new_tariff_names = [tariff["Tariff"] for tariff in tariffs]
-        default_new_tariff = new_tariff_names[0]
-        selected_new_tariff = st.selectbox(
-            "Select New Tariff for Comparison",
-            new_tariff_names,
-            index=new_tariff_names.index(default_new_tariff),
-            key="unique_new_tariff_selector"
-        )
-
-        # --- Cost Calculation and Display ---
-        from utils.cost_calculator import calculate_cost, format_cost_breakdown
-        # Add dynamic title reflecting the selected tariff
-        st.markdown(f"### {selected_user_type} > {selected_tariff_group} > {selected_tariff_type}")
-        st.subheader("Cost Breakdown for Selected Tariff")
-        cost_breakdown = calculate_cost(df, selected_tariff_obj, power_col, holidays, afa_rate=afa_rate)
-        if "error" in cost_breakdown:
-            st.error(cost_breakdown["error"])
+        
+        st.plotly_chart(fig2, use_container_width=True)
+        
+    else:
+        st.info("📊 Please complete Steps 1 and 2 to view peak/off-peak analysis.")
+    
+    st.markdown("---")
+    
+    # STEP 4: Select Comparison Tariffs
+    st.header("📋 Step 4: Select Comparison Tariffs")
+    
+    # Get all available tariffs
+    all_tariffs = extract_all_tariffs()
+    
+    st.markdown("**Select multiple tariffs to compare:**")
+    st.info("💡 You can select multiple tariffs for comprehensive comparison analysis.")
+    
+    # Group tariffs by type for better organization
+    tariff_groups = {}
+    for tariff_key, tariff_info in all_tariffs.items():
+        tariff_type = tariff_info['type']
+        if tariff_type not in tariff_groups:
+            tariff_groups[tariff_type] = []
+        tariff_groups[tariff_type].append((tariff_key, tariff_info['name']))
+    
+    selected_tariffs = []
+    
+    # Create selection interface organized by tariff type
+    for tariff_type, tariff_list in tariff_groups.items():
+        st.subheader(f"🏭 {tariff_type.replace('_', ' ').title()}")
+        
+        # Create columns for tariffs in this type
+        cols = st.columns(min(3, len(tariff_list)))
+        for i, (tariff_key, tariff_name) in enumerate(tariff_list):
+            with cols[i % len(cols)]:
+                if st.checkbox(
+                    tariff_name.replace(f"{tariff_type.replace('_', ' ').title()} - ", ""), 
+                    key=f"tariff_{tariff_key}"
+                ):
+                    selected_tariffs.append(tariff_key)
+    
+    # Store selected tariffs in session state
+    st.session_state.selected_tariffs = selected_tariffs
+    selected_tariff_names = [all_tariffs[key]['name'] for key in selected_tariffs]
+    
+    if len(selected_tariffs) < 2:
+        st.warning("⚠️ Please select at least 2 tariffs to compare.")
+    else:
+        st.success(f"✅ Selected {len(selected_tariffs)} tariffs for comparison:")
+        for name in selected_tariff_names:
+            st.markdown(f"   • {name}")
+    
+    # Configuration section
+    st.subheader("⚙️ Analysis Configuration")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**📅 Analysis Period**")
+        
+        if not st.session_state.uploaded_data.empty:
+            available_months = sorted(st.session_state.uploaded_data['datetime'].dt.to_period('M').unique().astype(str))
+            default_months = available_months
         else:
+            available_months = []
+            default_months = []
+        
+        selected_months = st.multiselect(
+            "Select months to analyze",
+            available_months,
+            default=default_months,
+            help="Select specific months for analysis, or leave empty to analyze all available data"
+        )
+        
+        st.markdown("**🏖️ Holiday Configuration**")
+        use_default_holidays = st.checkbox(
+            "Use Malaysia 2025 holidays",
+            value=True,
+            help=f"Includes {len(MALAYSIA_HOLIDAYS_2025)} public holidays for Malaysia in 2025"
+        )
+        
+        holidays = MALAYSIA_HOLIDAYS_2025 if use_default_holidays else []
+    
+    with col2:
+        st.markdown("**⚡ AFA (Actual Fuel Adjustment) Rates**")
+        
+        afa_high = st.number_input(
+            "AFA High (sen/kWh)",
+            min_value=0.0,
+            max_value=100.0,
+            value=5.0,
+            step=0.1,
+            help="AFA rate for high voltage consumption"
+        )
+        
+        afa_medium = st.number_input(
+            "AFA Medium (sen/kWh)",
+            min_value=0.0,
+            max_value=100.0,
+            value=3.0,
+            step=0.1,
+            help="AFA rate for medium voltage consumption"
+        )
+        
+        afa_low = st.number_input(
+            "AFA Low (sen/kWh)",
+            min_value=0.0,
+            max_value=100.0,
+            value=2.0,
+            step=0.1,
+            help="AFA rate for low voltage consumption"
+        )
+    
+    # Store configuration in session state
+    st.session_state.analysis_config = {
+        'months': selected_months if selected_months else None,
+        'holidays': holidays,
+        'afa_high': afa_high / 100,  # Convert sen to RM
+        'afa_medium': afa_medium / 100,
+        'afa_low': afa_low / 100
+    }
+    
+    st.markdown("---")
+    
+    # STEP 4: Cost Comparison Results
+    st.header("💰 Step 4: Cost Comparison Results")
+    
+    # Check if we can proceed with analysis
+    can_analyze = (
+        len(st.session_state.selected_tariffs) >= 2 and
+        not st.session_state.uploaded_data.empty
+    )
+    
+    if not can_analyze:
+        if len(st.session_state.selected_tariffs) < 2:
+            st.warning("⚠️ Please select at least 2 tariffs in Step 4.")
+        if st.session_state.uploaded_data.empty:
+            st.warning("⚠️ Please complete Steps 1 and 2 to prepare your data.")
+        
+        st.info("Complete the above steps to view cost comparison results.")
+    
+    else:
+        if st.button("🔄 Calculate Cost Comparison", type="primary"):
+            # Perform cost analysis
+            with st.spinner("🔄 Calculating costs for selected tariffs..."):
+                results = {}
+                
+                for tariff_key in st.session_state.selected_tariffs:
+                    tariff_info = all_tariffs[tariff_key]
+                    try:
+                        # Get the actual tariff data object
+                        tariff_data = tariff_info['data']
+                        
+                        # Create a proper DataFrame with 'Parsed Timestamp' column for the cost calculator
+                        calc_df = st.session_state.uploaded_data.copy()
+                        calc_df['Parsed Timestamp'] = calc_df['datetime']
+                        
+                        # Use existing cost calculator with correct parameters
+                        result = calculate_cost(
+                            df=calc_df,
+                            tariff=tariff_data,
+                            power_col='power_demand',
+                            holidays=set(st.session_state.analysis_config['holidays']),
+                            afa_kwh=0,  # Can be customized later if needed
+                            afa_rate=st.session_state.analysis_config.get('afa_medium', 0.03)  # Use medium voltage AFA as default
+                        )
+                        results[tariff_info['name']] = result
+                    except Exception as e:
+                        st.error(f"Error calculating cost for {tariff_info['name']}: {str(e)}")
+                        results[tariff_info['name']] = {}
+            
+            if any(results.values()):
+                st.success("✅ Cost analysis complete! Here are your results:")
+                
+                # Create summary comparison table
+                st.subheader("📊 Cost Comparison Summary")
+                
+                summary_data = []
+                for tariff_name, result in results.items():
+                    if result:
+                        # Extract costs with proper key mapping
+                        total_cost = result.get('Total Cost', 0)
+                        
+                        # Calculate total energy cost (handle both General and TOU tariffs)
+                        energy_cost = result.get('Energy Cost (RM)', 0)  # General tariff
+                        if energy_cost == 0:  # TOU tariff
+                            energy_cost = result.get('Peak Energy Cost', 0) + result.get('Off-Peak Energy Cost', 0)
+                        
+                        # Calculate total demand cost
+                        demand_cost = result.get('Capacity Cost (RM)', 0) + result.get('Network Cost (RM)', 0)
+                        
+                        # Service charge (retail cost)
+                        service_charge = result.get('Retail Cost', 0)
+                        
+                        # Get demand values
+                        max_demand = result.get('Max Demand (kW)', 0)
+                        if max_demand == 0:
+                            max_demand = result.get('Peak Demand (kW, Peak Period Only)', 0)
+                        
+                        # Total energy
+                        total_energy = result.get('Total kWh', 0)
+                        
+                        # Cost per kWh
+                        avg_cost_kwh = result.get('Cost per kWh (Total Cost / Total kWh)', 0)
+                        if avg_cost_kwh == 0 and total_energy > 0:
+                            avg_cost_kwh = total_cost / total_energy
+                        
+                        summary_row = {
+                            'Tariff': tariff_name,
+                            'Total Cost (RM)': total_cost,
+                            'Energy Cost (RM)': energy_cost,
+                            'Demand Cost (RM)': demand_cost,
+                            'Service Charge (RM)': service_charge,
+                            'Average Cost per kWh (RM)': avg_cost_kwh,
+                            'Peak Demand (kW)': max_demand,
+                            'Total Energy (kWh)': total_energy
+                        }
+                        summary_data.append(summary_row)
+                
+                if summary_data:
+                    summary_df = pd.DataFrame(summary_data)
+                    summary_df = summary_df.sort_values('Total Cost (RM)')
+                    summary_df['Rank'] = range(1, len(summary_df) + 1)
+                    
+                    # Reorder columns
+                    cols = ['Rank'] + [col for col in summary_df.columns if col != 'Rank']
+                    summary_df = summary_df[cols]
+                    
+                    # Format for display
+                    display_df = summary_df.copy()
+                    currency_cols = ['Total Cost (RM)', 'Energy Cost (RM)', 'Demand Cost (RM)', 'Service Charge (RM)', 'Average Cost per kWh (RM)']
+                    for col in currency_cols:
+                        display_df[col] = display_df[col].apply(_format_rm_value)
+                    
+                    display_df['Peak Demand (kW)'] = display_df['Peak Demand (kW)'].apply(_format_number_value)
+                    display_df['Total Energy (kWh)'] = display_df['Total Energy (kWh)'].apply(_format_number_value)
+                    
+                    st.dataframe(display_df, use_container_width=True, hide_index=True)
+                    
+                    # Highlight best option
+                    best_tariff = summary_df.iloc[0]['Tariff']
+                    best_cost = summary_df.iloc[0]['Total Cost (RM)']
+                    st.success(f"🏆 **Best Option:** {best_tariff} with total cost of {_format_rm_value(best_cost)}")
+                
+                # Monthly cost comparison chart
+                st.subheader("📈 Monthly Cost Comparison")
+                
+                # Prepare monthly data
+                monthly_costs = {}
+                months = set()
+                
+                for tariff_name, result in results.items():
+                    if result and 'monthly_breakdown' in result and result['monthly_breakdown']:
+                        monthly_breakdown = result['monthly_breakdown']
+                        monthly_costs[tariff_name] = monthly_breakdown
+                        months.update(monthly_breakdown.keys())
+                
+                if monthly_costs and months:
+                    months = sorted(list(months))
+                    
+                    fig = go.Figure()
+                    
+                    for tariff_name, monthly_data in monthly_costs.items():
+                        costs = [monthly_data.get(month, {}).get('total_cost', 0) for month in months]
+                        
+                        fig.add_trace(go.Scatter(
+                            x=months,
+                            y=costs,
+                            mode='lines+markers+text',
+                            name=tariff_name,
+                            line=dict(width=3),
+                            marker=dict(size=8),
+                            text=[_format_rm_value(cost) for cost in costs],
+                            textposition='top center'
+                        ))
+                    
+                    fig.update_layout(
+                        title='Monthly Cost Comparison Across Tariffs',
+                        xaxis_title='Month',
+                        yaxis_title='Monthly Cost (RM)',
+                        height=500,
+                        hovermode='x unified'
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                # Cost breakdown chart
+                st.subheader("💰 Cost Breakdown Analysis")
+                
+                tariff_names = []
+                energy_costs = []
+                demand_costs = []
+                service_charges = []
+                
+                for tariff_name, result in results.items():
+                    if result:
+                        tariff_names.append(tariff_name)
+                        
+                        # Extract energy cost (handle both General and TOU tariffs)
+                        energy_cost = result.get('Energy Cost (RM)', 0)  # General tariff
+                        if energy_cost == 0:  # TOU tariff
+                            energy_cost = result.get('Peak Energy Cost', 0) + result.get('Off-Peak Energy Cost', 0)
+                        energy_costs.append(energy_cost)
+                        
+                        # Extract demand cost (Capacity + Network)
+                        demand_cost = result.get('Capacity Cost (RM)', 0) + result.get('Network Cost (RM)', 0)
+                        demand_costs.append(demand_cost)
+                        
+                        # Extract service charge (Retail)
+                        service_charge = result.get('Retail Cost', 0)
+                        service_charges.append(service_charge)
+                
+                if tariff_names:
+                    fig = go.Figure()
+                    
+                    fig.add_trace(go.Bar(
+                        name='Energy Cost',
+                        x=tariff_names,
+                        y=energy_costs,
+                        marker_color='#1f77b4'
+                    ))
+                    
+                    fig.add_trace(go.Bar(
+                        name='Demand Cost',
+                        x=tariff_names,
+                        y=demand_costs,
+                        marker_color='#ff7f0e'
+                    ))
+                    
+                    fig.add_trace(go.Bar(
+                        name='Service Charge',
+                        x=tariff_names,
+                        y=service_charges,
+                        marker_color='#2ca02c'
+                    ))
+                    
+                    fig.update_layout(
+                        title='Cost Breakdown by Tariff',
+                        xaxis_title='Tariff',
+                        yaxis_title='Cost (RM)',
+                        barmode='stack',
+                        height=500
+                    )
+                    
+                    fig.update_xaxes(tickangle=45)
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                # Export options
+                st.subheader("📥 Export Results")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    # CSV export
+                    if summary_data:
+                        csv = pd.DataFrame(summary_data).to_csv(index=False)
+                        st.download_button(
+                            label="📋 Download Summary CSV",
+                            data=csv,
+                            file_name=f"tnb_comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                            mime="text/csv"
+                        )
+                
+                with col2:
+                    # Excel export (simplified)
+                    if summary_data:
+                        output = io.BytesIO()
+                        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                            pd.DataFrame(summary_data).to_excel(writer, sheet_name='Summary', index=False)
+                        
+                        st.download_button(
+                            label="📊 Download Excel Report",
+                            data=output.getvalue(),
+                            file_name=f"tnb_comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+            
+            else:
+                st.error("❌ Unable to calculate costs. Please check your data and tariff selections.")
+        
+        else:
+            st.info("📊 Click the button above to start the cost calculation analysis.")
 
-            # --- HTML Table for Cost Breakdown (before Streamlit table) ---
-            def html_cost_table(breakdown):
-                # Update the formatting function to ensure numbers are displayed with commas for thousands separators.
-                def fmt(val):
-                    if val is None or val == "":
-                        return ""
-                    if isinstance(val, (int, float)):
-                        if val < 1:
-                            return f"{val:,.4f}"  # Format numbers with 4 decimal places if less than RM1.
-                        return f"{val:,.2f}"  # Format numbers with 2 decimal places if RM1 or greater.
-                    return val
 
-                def get_cost(*keys):
-                    for k in keys:
-                        if k in breakdown:
-                            return breakdown[k]
-                    return None
-                is_tou = "Peak kWh" in breakdown or "Off-Peak kWh" in breakdown
-                html = """
-                <table class=\"cost-table\">
-                    <tr>
-                        <th>No</th>
-                        <th>Description</th>
-                        <th>Unit</th>
-                        <th>Value</th>
-                        <th>Unit Rate (RM)</th>
-                        <th>Total Cost (RM)</th>
-                    </tr>
-                """
-                # Section A: Energy Consumption
-                html += "<tr class=\"section\"> <td>A</td> <td class=\"left\"><b>A. Energy Consumption kWh</b></td> <td></td><td></td><td></td><td></td> </tr>"
-                # Determine if AFA is applicable (not for Low Voltage General)
-                selected_tariff_name = selected_tariff_obj.get('Tariff', '').lower() if selected_tariff_obj else ''
-                afa_applicable = not (selected_tariff_name.startswith('low voltage') and 'general' in selected_tariff_name)
-                # Check if AFA row should be shown (if applicable and either kWh or adjustment value exists)
-                afa_kwh = breakdown.get('AFA kWh', None)
-                afa_rate = breakdown.get('AFA Rate', None)
-                afa_cost = get_cost('AFA Adjustment', 'AFA Adjustment (RM)')
-                if is_tou:
-                    if breakdown.get('Peak kWh', None) is not None:
-                        html += f"<tr> <td>1</td> <td class=\"left\">Peak Period Consumption</td> <td>kWh</td> <td>{fmt(breakdown.get('Peak kWh'))}</td> <td>{fmt(breakdown.get('Peak Rate'))}</td> <td>{fmt(get_cost('Peak Energy Cost', 'Peak Energy Cost (RM)'))}</td> </tr>"
-                    if breakdown.get('Off-Peak kWh', None) is not None:
-                        html += f"<tr> <td>2</td> <td class=\"left\">Off-Peak Consumption</td> <td>kWh</td> <td>{fmt(breakdown.get('Off-Peak kWh'))}</td> <td>{fmt(breakdown.get('Off-Peak Rate'))}</td> <td>{fmt(get_cost('Off-Peak Energy Cost', 'Off-Peak Energy Cost (RM)'))}</td> </tr>"
-                else:
-                    if breakdown.get('Total kWh', None) is not None:
-                        html += f"<tr> <td>1</td> <td class=\"left\">Total Consumption</td> <td>kWh</td> <td>{fmt(breakdown.get('Total kWh'))}</td> <td>{fmt(breakdown.get('Energy Rate'))}</td> <td>{fmt(get_cost('Energy Cost', 'Energy Cost (RM)'))}</td> </tr>"
-                # AFA row if present and applicable (show if either kWh or adjustment value exists)
-                if afa_applicable and (afa_kwh is not None or afa_cost is not None):
-                    html += f"<tr> <td></td> <td class=\"left\">AFA Consumption</td> <td>kWh</td> <td>{fmt(afa_kwh)}</td> <td>{fmt(afa_rate)}</td> <td>{fmt(afa_cost)}</td> </tr>"
-                # Section B: Demand/Capacity/Network charges
-                html += "<tr class=\"section\"> <td>B</td> <td class=\"left\"><b>B. Maximum Demand (Peak Demand)</b></td> <td></td><td></td><td></td><td></td> </tr>"
-                # Capacity Charge
-                cap_val = breakdown.get('Peak Demand (kW, Peak Period Only)', breakdown.get('Max Demand (kW)', None))
-                cap_rate = breakdown.get('Capacity Rate', None)
-                cap_cost = get_cost('Capacity Cost', 'Capacity Cost (RM)')
-                if cap_val is not None or cap_rate is not None or cap_cost is not None:
-                    html += f"<tr> <td>1</td> <td class=\"left\">Capacity Charge</td> <td>kW</td> <td>{fmt(cap_val)}</td> <td>{fmt(cap_rate)}</td> <td>{fmt(cap_cost)}</td> </tr>"
-                # Network Charge
-                net_val = breakdown.get('Peak Demand (kW, Peak Period Only)', breakdown.get('Max Demand (kW)', None))
-                net_rate = breakdown.get('Network Rate', None)
-                net_cost = get_cost('Network Cost', 'Network Cost (RM)')
-                if net_val is not None or net_rate is not None or net_cost is not None:
-                    html += f"<tr> <td>2</td> <td class=\"left\">Network Charge</td> <td>kW</td> <td>{fmt(net_val)}</td> <td>{fmt(net_rate)}</td> <td>{fmt(net_cost)}</td> </tr>"
-                # Retail Charge (if present)
-                if breakdown.get('Retail Cost', None) is not None:
-                    html += f"<tr> <td>3</td> <td class=\"left\">Retail Charge</td> <td></td> <td></td> <td></td> <td>{fmt(breakdown.get('Retail Cost'))}</td> </tr>"
-                # Add any other cost rows if present (future extensibility)
-                # Total Cost row (if present)
-                if get_cost('Total Cost', 'Total Cost (RM)') is not None:
-                    html += f"<tr class=\"section\"><td colspan=5 class=\"left\"><b>Total Cost</b></td><td><b>{fmt(get_cost('Total Cost', 'Total Cost (RM)'))}</b></td></tr>"
-                html += "</table>"
-                return html
-
-            # If either value is missing, do not show the section at all
-
-            # --- Debug section (disabled, enable for future debugging) ---
-            # st.write("DEBUG: cost_breakdown", cost_breakdown)
-            # afa_kwh = cost_breakdown.get('AFA kwh', cost_breakdown.get('Total KWh', None))
-            # afa_rate = cost_breakdown.get('AFA Rate', None)
-            # if afa_kwh is not None:
-            #     st.write("DEBUG: AFA Value (kWh)", afa_kwh)
-            # if afa_rate is not None:
-            #     st.write("DEBUG: AFA Rate (RM/kWh)", afa_rate)
-            # ...existing code...
-
-            # --- Side-by-side Tariff Comparison Section ---
-            st.markdown("---")
-            st.subheader("Compare with Selected Tariff and New Tariff")
-            colA, colC = st.columns([1, 1])  # Remove colB, only show colA and colC
-
-            # Display selected tariff breakdown
-            with colA:
-                st.markdown(f"#### {selected_user_type} > {selected_tariff_group} > {selected_tariff_type}")
-                st.markdown("<b>Cost per kWh (Total Cost / Total kWh):</b> " + (
-                    f"{(cost_breakdown.get('Total Cost',0)/cost_breakdown.get('Total kWh',1)) if cost_breakdown.get('Total kWh',0) else 'N/A'} RM/kWh"
-                ), unsafe_allow_html=True)
-                st.markdown(html_cost_table(cost_breakdown), unsafe_allow_html=True)
-
-            # Only display colC (New Tariff)
-            with colC:
-                st.markdown(f"#### New Tariff: {selected_new_tariff}")
-                new_tariff_obj = next((t for t in tariffs if t["Tariff"] == selected_new_tariff), None)
-                if not new_tariff_obj:
-                    st.error("Selected new tariff details not found.")
-                else:
-                    new_cost_breakdown = calculate_cost(df, new_tariff_obj, power_col, holidays, afa_rate=afa_rate)
-                    if "error" in new_cost_breakdown:
-                        st.error(new_cost_breakdown["error"])
-                    else:
-                        st.markdown("<b>Cost per kWh (Total Cost / Total kWh):</b> " + (
-                            f"{(new_cost_breakdown.get('Total Cost',0)/new_cost_breakdown.get('Total kWh',1)) if new_cost_breakdown.get('Total kWh',0) else 'N/A'} RM/kWh"
-                        ), unsafe_allow_html=True)
-                        st.markdown(html_cost_table(new_cost_breakdown), unsafe_allow_html=True)
-            # --- Regression Formula Display (disabled, enable for future debugging) ---
-            # st.subheader("Cost Calculation Formulae")
-            # formulae = []
-            # if "Peak kWh" in cost_breakdown:
-            #     formulae.append(f"Peak Energy Cost = Peak kWh × Peak Rate = {cost_breakdown.get('Peak kWh', 0):,.2f} × {cost_breakdown.get('Peak Rate', '–')} = {cost_breakdown.get('Peak Energy Cost', 0):,.2f}")
-            # if "Off-Peak kWh" in cost_breakdown:
-            #     formulae.append(f"Off-Peak Energy Cost = Off-Peak kWh × Off-Peak Rate = {cost_breakdown.get('Off-Peak kWh', 0):,.2f} × {cost_breakdown.get('Off-Peak Rate', '–')} = {cost_breakdown.get('Off-Peak Energy Cost', 0):,.2f}")
-            # afa_kwh = cost_breakdown.get('AFA kWh', cost_breakdown.get('Total KWh', 0))
-            # afa_rate = cost_breakdown.get('AFA Rate', '–')
-            # afa_cost = cost_breakdown.get('AFA Adjustment', 0)
-            # if afa_kwh and afa_rate != '–':
-            #     formulae.append(f"AFA Adjustment = AFA Value × AFA Rate = {afa_kwh:,.2f} × {afa_rate} = {afa_cost:,.2f}")
-            # if "Max Demand (kW)" in cost_breakdown:
-            #     formulae.append(f"Maximum Demand Cost = Max Demand × Capacity Rate = {cost_breakdown.get('Max Demand (kW)', 0):,.2f} × {cost_breakdown.get('Capacity Rate', '–')} = {cost_breakdown.get('Capacity Cost', 0):,.2f}")
-            # if "Network Cost" in cost_breakdown:
-            #     formulae.append(f"Network Cost = Max Demand × Network Rate = {cost_breakdown.get('Max Demand (kW)', 0):,.2f} × {cost_breakdown.get('Network Rate', '–')} = {cost_breakdown.get('Network Cost', 0):,.2f}")
-            # if "Retail Cost" in cost_breakdown:
-            #     formulae.append(f"Retail Cost = {cost_breakdown.get('Retail Cost', 0):,.2f}")
-            # for f in formulae:
-            #     st.markdown(f"- {f}")
-
-    # Remove the time interval input and all related debug and calculation logic
-    # (No more st.subheader("Enter Time Interval"), st.number_input for time_interval, or any interval-based kWh/cost debug)
-
-    # ...existing code...
-
-def get_peak_demand(df, power_col, holidays):
-    """
-    Returns the maximum demand (kW) during peak periods only.
-    """
-    if df.empty:
-        return None
-    is_peak = df["Parsed Timestamp"].apply(lambda ts: is_peak_rp4(ts, holidays))
-    if is_peak.any():
-        return df.loc[is_peak, power_col].max()
-    return None
+if __name__ == "__main__":
+    show()

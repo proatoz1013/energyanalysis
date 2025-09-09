@@ -114,11 +114,12 @@ def calculate_cost(df, tariff, power_col, holidays=None, afa_kwh=0, afa_rate=0):
             "KTWBB Cost": ktwbb_cost,
             "AFA Adjustment": afa_cost,
             "Total Cost": energy_cost + capacity_cost + network_cost + retail_cost + afa_cost + ktwbb_cost,
-            # For General tariffs, show all energy as "Peak Energy" instead of "Off-Peak Energy"
-            # This is more intuitive for users - all energy is treated as primary/main energy
-            "Peak kWh": total_kwh,
+            # For General tariffs, all energy is at a single rate (no peak/off-peak distinction)
+            "Total Energy kWh": total_kwh,
+            "Total Energy Cost": energy_cost,
+            "Peak kWh": 0,  # No peak/off-peak for General tariffs
             "Off-Peak kWh": 0,
-            "Peak Energy Cost": energy_cost,
+            "Peak Energy Cost": 0,
             "Off-Peak Energy Cost": 0,
             "AFA kWh": afa_kwh,
             "AFA Rate": afa_rate
