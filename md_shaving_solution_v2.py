@@ -3334,6 +3334,40 @@ def _display_tou_vs_general_comparison(results, selected_tariff=None):
 
 # Complex daily proactive charging function removed - replaced with simple SOC-based charging in main algorithm
 
+def _get_md_period_holiday_aware(timestamp, holidays=None):
+    """
+    Get MD period classification with holiday awareness.
+    
+    Args:
+        timestamp: Pandas timestamp
+        holidays: Set of holiday dates
+        
+    Returns:
+        str: Period classification with emoji
+    """
+    try:
+        from tariffs.peak_logic import get_malaysia_holidays, is_public_holiday
+        
+        if holidays is None:
+            year = timestamp.year
+            holidays = get_malaysia_holidays(year)
+        
+        # Check if it's a holiday
+        if is_public_holiday(timestamp, holidays):
+            return "🏖️ Holiday"
+            
+    except ImportError:
+        pass
+    
+    # Standard MD period check (2PM-10PM on weekdays)
+    is_weekday = timestamp.weekday() < 5
+    is_md_hours = 14 <= timestamp.hour < 22
+    
+    if is_weekday and is_md_hours:
+        return "🔴 Peak"
+    else:
+        return "🟢 Off-Peak"
+
 
 def is_md_window(timestamp, holidays=None):
     """
@@ -4236,7 +4270,7 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
         'max_soc': df_sim['Battery_SOC_Percent'].max(),
         'monthly_targets_count': len(monthly_targets) if monthly_targets is not None else 0,
         'v2_constraint_violations': len(df_sim[df_sim['Net_Demand_kW'] > df_sim['Monthly_Target']])
-    }, selected_tariff)
+    }, selected_tariff, holidays)
     
     # Panel 2: Combined SOC and Battery Power Chart (same as V1)
     st.markdown("##### 2️⃣ Combined SOC and Battery Power Chart")
@@ -4769,7 +4803,13 @@ def _create_v2_conditional_demand_line_with_dynamic_targets(fig, df, power_col, 
         else:
             # Fallback to closest available target
             month_period = timestamp.to_period('M')
-            available_periods = [t.to_period('M') for t in target_series.index if not pd.isna(target_series.loc[t])]
+            # Fix pandas Series boolean evaluation error by using proper scalar check
+            available_periods = []
+            for t in target_series.index:
+                value = target_series.loc[t]
+                if not pd.isna(value):  # Check scalar value instead of Series
+                    available_periods.append(t.to_period('M'))
+            
             if available_periods:
                 closest_period_timestamp = min(target_series.index, 
                                              key=lambda t: abs((timestamp - t).total_seconds()))
@@ -5754,6 +5794,76 @@ def _get_enhanced_shaving_success(row):
         return '🔴 Failed - Minimal Impact'
 
 
+def _calculate_target_shave_kw_holiday_aware(row, holidays=None):
+    """
+    Calculate Target_Shave_kW with holiday awareness.
+    
+    Args:
+        row: DataFrame row with simulation data
+        holidays: Set of holiday dates
+        
+    Returns:
+        float: Target shaving amount in kW (0 during holidays or off-peak periods)
+    """
+    try:
+        from tariffs.peak_logic import get_malaysia_holidays, is_public_holiday
+        
+        timestamp = row.name
+        original_demand = row['Original_Demand']
+        monthly_target = row['Monthly_Target']
+        
+        if holidays is None:
+            year = timestamp.year
+            holidays = get_malaysia_holidays(year)
+        
+        # Check if it's a holiday first - no MD charges on holidays
+        if is_public_holiday(timestamp, holidays):
+            return 0.0
+            
+    except ImportError:
+        pass
+    
+    # Standard MD period check (2PM-10PM on weekdays)
+    is_md_period = (timestamp.weekday() < 5 and 14 <= timestamp.hour < 22)
+    
+    # Only calculate target shaving during MD periods and non-holidays
+    if is_md_period:
+        return max(0, original_demand - monthly_target)
+    else:
+        return 0.0
+
+
+def _get_enhanced_shaving_success_holiday_aware(row, holidays=None):
+    """
+    Get enhanced shaving success status with holiday awareness.
+    
+    Args:
+        row: DataFrame row with simulation data
+        holidays: Set of holiday dates
+        
+    Returns:
+        str: Success status with emoji and description
+    """
+    try:
+        from tariffs.peak_logic import get_malaysia_holidays, is_public_holiday
+        
+        timestamp = row.name
+        
+        if holidays is None:
+            year = timestamp.year
+            holidays = get_malaysia_holidays(year)
+        
+        # Check if it's a holiday first
+        if is_public_holiday(timestamp, holidays):
+            return '🏖️ Holiday - No MD'
+            
+    except ImportError:
+        pass
+    
+    # Use the existing enhanced shaving success logic for non-holidays
+    return _get_enhanced_shaving_success(row)
+
+
 # ===================================================================================================
 # NUMBER FORMATTING UTILITIES
 # ===================================================================================================
@@ -5788,12 +5898,13 @@ def _format_number_value(value):
 # V2 TABLE VISUALIZATION FUNCTIONS - Enhanced Battery Simulation Tables
 # ===================================================================================================
 
-def _create_enhanced_battery_table(df_sim):
+def _create_enhanced_battery_table(df_sim, holidays=None):
     """
     Create enhanced table with health and C-rate information for time-series analysis.
     
     Args:
         df_sim: Simulation dataframe with battery operation data
+        holidays: Set of holiday dates to exclude from MD periods
         
     Returns:
         pd.DataFrame: Enhanced table with status indicators and detailed battery metrics
@@ -5815,22 +5926,22 @@ def _create_enhanced_battery_table(df_sim):
         'Charge (+ve)/Discharge (-ve) kW': df_sim['Battery_Power_kW'].apply(
             lambda x: f"+{abs(x):.1f}" if x < 0 else f"-{x:.1f}" if x > 0 else "0.0"
         ),
-        # NEW COLUMN 2: Target Shave (kW) - Amount that needs to be shaved during MD window only
+        # NEW COLUMN 2: Target Shave (kW) - Amount that needs to be shaved during MD window only (holiday-aware)
         'Target_Shave_kW': df_sim.apply(
-            lambda row: max(0, row['Original_Demand'] - row['Monthly_Target']) if (row.name.weekday() < 5 and 14 <= row.name.hour < 22) else 0,
+            lambda row: _calculate_target_shave_kw_holiday_aware(row, holidays),
             axis=1
         ).round(1),
         # NEW COLUMN 3: Actual Shave (kW) - Renamed from Peak_Shaved_kW
         'Actual_Shave_kW': df_sim['Peak_Shaved'].round(1),
-        'Shaving_Success': df_sim.apply(_get_enhanced_shaving_success, axis=1),
-        'MD_Period': df_sim.index.map(lambda x: '🔴 Peak' if (x.weekday() < 5 and 14 <= x.hour < 22) else '🟢 Off-Peak'),
+        'Shaving_Success': df_sim.apply(lambda row: _get_enhanced_shaving_success_holiday_aware(row, holidays), axis=1),
+        'MD_Period': df_sim.index.map(lambda x: _get_md_period_holiday_aware(x, holidays)),
         'Target_Violation': (df_sim['Net_Demand_kW'] > df_sim['Monthly_Target']).map({True: '❌', False: '✅'})
     }
     
     return pd.DataFrame(enhanced_columns)
 
 
-def _create_daily_summary_table(df_sim, selected_tariff=None):
+def _create_daily_summary_table(df_sim, selected_tariff=None, holidays=None):
     """
     Create revised daily summary of battery performance with RP4 tariff-aware peak events analysis.
     
@@ -5867,12 +5978,12 @@ def _create_daily_summary_table(df_sim, selected_tariff=None):
             pass
         battery_usable_capacity_kwh = total_capacity * (depth_of_discharge / 100)
     
-    # RP4 Tariff-Aware Peak Events Detection Logic
+    # RP4 Tariff-Aware Peak Events Detection Logic with Holiday Awareness
     def is_peak_event_rp4(row):
         """
         Determine if this interval contains a peak event based on RP4 tariff logic:
-        - TOU Tariff: Peak events only during MD recording periods (2PM-10PM weekdays)
-        - General Tariff: Peak events anytime (24/7 MD recording)
+        - TOU Tariff: Peak events only during MD recording periods (2PM-10PM weekdays, excluding holidays)
+        - General Tariff: Peak events anytime (24/7 MD recording, excluding holidays)
         """
         timestamp = row.name
         original_demand = row['Original_Demand']
@@ -5882,12 +5993,29 @@ def _create_daily_summary_table(df_sim, selected_tariff=None):
         if original_demand <= monthly_target:
             return False
         
+        # Check for holidays first
+        try:
+            from tariffs.peak_logic import get_malaysia_holidays, is_public_holiday
+            
+            if holidays is None:
+                year = timestamp.year
+                holiday_set = get_malaysia_holidays(year)
+            else:
+                holiday_set = holidays
+            
+            # If it's a holiday, no peak events (no MD charges on holidays)
+            if is_public_holiday(timestamp, holiday_set):
+                return False
+                
+        except ImportError:
+            pass
+        
         # Apply RP4 tariff-specific logic
         if is_tou_tariff:
-            # TOU: Only count as peak event during MD recording window (2PM-10PM weekdays)
+            # TOU: Only count as peak event during MD recording window (2PM-10PM weekdays, excluding holidays)
             return (timestamp.weekday() < 5 and 14 <= timestamp.hour < 22)
         else:
-            # General: Any time above target is a peak event (24/7 MD recording)
+            # General: Any time above target is a peak event (24/7 MD recording, excluding holidays)
             return True
     
     # Add peak event classification to dataframe
@@ -5974,7 +6102,7 @@ def _create_daily_summary_table(df_sim, selected_tariff=None):
     return pd.DataFrame(daily_summary)
 
 
-def _create_monthly_summary_table(df_sim, selected_tariff=None):
+def _create_monthly_summary_table(df_sim, selected_tariff=None, holidays=None):
     """
     Create monthly summary of battery performance with MD shaving effectiveness.
     
@@ -6143,7 +6271,7 @@ def _create_kpi_summary_table(simulation_results, df_sim):
     return pd.DataFrame(kpis)
 
 
-def _display_battery_simulation_tables(df_sim, simulation_results, selected_tariff=None):
+def _display_battery_simulation_tables(df_sim, simulation_results, selected_tariff=None, holidays=None):
     """
     Display comprehensive battery simulation tables with tabbed interface.
     
@@ -6151,6 +6279,7 @@ def _display_battery_simulation_tables(df_sim, simulation_results, selected_tari
         df_sim: Simulation dataframe with battery operation data
         simulation_results: Dictionary containing simulation metrics
         selected_tariff: Selected tariff configuration for cost calculations
+        holidays: Set of holiday dates for holiday-aware calculations
     """
     st.markdown("##### 1️⃣.1 📋 Battery Simulation Data Tables")
     
@@ -6189,7 +6318,7 @@ def _display_battery_simulation_tables(df_sim, simulation_results, selected_tari
             st.info(f"📊 **All Results**: Showing {len(df_sim):,} records (no chart filter applied)")
         
         # Create table data from the filtered df_sim
-        table_data = _create_enhanced_battery_table(df_sim)
+        table_data = _create_enhanced_battery_table(df_sim, holidays)
         
         # Display data
         st.dataframe(table_data, use_container_width=True, height=400)
@@ -6216,7 +6345,7 @@ def _display_battery_simulation_tables(df_sim, simulation_results, selected_tari
         st.markdown("**Daily Performance Summary with RP4 Tariff-Aware Peak Events**")
         
         # UPDATED: Pass selected_tariff to daily summary function
-        daily_data = _create_daily_summary_table(df_sim, selected_tariff)
+        daily_data = _create_daily_summary_table(df_sim, selected_tariff, holidays)
         
         if len(daily_data) > 0:
             st.dataframe(daily_data, use_container_width=True)
@@ -6285,7 +6414,7 @@ def _display_battery_simulation_tables(df_sim, simulation_results, selected_tari
     
     with tab3:
         st.markdown("**Monthly Performance Summary**")
-        monthly_data = _create_monthly_summary_table(df_sim, selected_tariff)
+        monthly_data = _create_monthly_summary_table(df_sim, selected_tariff, holidays)
         
         if len(monthly_data) > 0:
             st.dataframe(monthly_data, use_container_width=True)
@@ -6354,7 +6483,7 @@ def _display_battery_simulation_tables(df_sim, simulation_results, selected_tari
             mask = (df_sim.index.date >= date_range[0]) & (df_sim.index.date <= date_range[1])
             mask &= (df_sim['Battery_SOC_Percent'] >= soc_range[0]) & (df_sim['Battery_SOC_Percent'] <= soc_range[1])
             
-            filtered_advanced = _create_enhanced_battery_table(df_sim[mask])
+            filtered_advanced = _create_enhanced_battery_table(df_sim[mask], holidays)
             st.dataframe(filtered_advanced, use_container_width=True, height=400)
         else:
             st.info("Please select a valid date range to view filtered data.")
