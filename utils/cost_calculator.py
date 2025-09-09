@@ -25,7 +25,13 @@ def calculate_cost(df, tariff, power_col, holidays=None, afa_kwh=0, afa_rate=0):
         if len(time_diffs) > 0:
             # Get the most common time interval (mode)
             most_common_interval = time_diffs.mode()[0] if not time_diffs.mode().empty else pd.Timedelta(minutes=15)
-            interval_hours = most_common_interval.total_seconds() / 3600
+            interval_seconds = most_common_interval.total_seconds()
+            # Protect against zero division
+            if interval_seconds > 0:
+                interval_hours = interval_seconds / 3600
+            else:
+                # Fallback to 15 minutes if interval is zero
+                interval_hours = 0.25
         else:
             # Fallback to 15 minutes if we can't determine interval
             interval_hours = 0.25
@@ -38,14 +44,25 @@ def calculate_cost(df, tariff, power_col, holidays=None, afa_kwh=0, afa_rate=0):
     total_kwh = interval_kwh.sum()
     
     # --- Calculate 30-min rolling average demand for accurate billing ---
-    intervals_per_30min = int(round(0.5 / interval_hours))
+    # Protect against zero interval hours
+    if interval_hours > 0:
+        intervals_per_30min = max(1, int(round(0.5 / interval_hours)))
+    else:
+        intervals_per_30min = 1  # Fallback to 1 interval
+    
     rolling_30min_avg = df[power_col].rolling(window=intervals_per_30min, min_periods=1).mean()
-    max_demand_kw = rolling_30min_avg.max()
+    max_demand_kw = rolling_30min_avg.max() if not rolling_30min_avg.empty and not rolling_30min_avg.isna().all() else 0
     
     # For TOU tariffs, also calculate peak period max demand using 30-min rolling average
     is_peak = df["Parsed Timestamp"].apply(lambda ts: is_peak_rp4(ts, holidays or set()))
     peak_rolling_30min_avg = df[power_col].where(is_peak).rolling(window=intervals_per_30min, min_periods=1).mean()
-    peak_demand_kw = peak_rolling_30min_avg.max() if is_peak.any() else 0
+    peak_demand_kw = (peak_rolling_30min_avg.max() 
+                     if is_peak.any() and not peak_rolling_30min_avg.empty and not peak_rolling_30min_avg.isna().all() 
+                     else 0)
+    
+    # Ensure no NaN values
+    max_demand_kw = max_demand_kw if pd.notna(max_demand_kw) else 0
+    peak_demand_kw = peak_demand_kw if pd.notna(peak_demand_kw) else 0
     
     rules = tariff.get("Rules", {})
     rates = tariff.get("Rates", {})

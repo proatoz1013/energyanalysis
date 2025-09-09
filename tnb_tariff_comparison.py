@@ -582,6 +582,57 @@ def show():
             """,
             help="Click to view the latest AFA rates from TNB official website"
         )
+
+    # Additional configuration section
+    st.markdown("---")
+    st.markdown("**📊 MD Excess Analysis Configuration**")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        contract_demand_method = st.radio(
+            "Contract Demand Reference",
+            options=["Auto (% of Peak)", "Manual Entry"],
+            index=0,
+            help="Choose how to determine contract demand for MD excess calculation"
+        )
+        
+        if contract_demand_method == "Auto (% of Peak)":
+            mv_contract_percentage = st.slider(
+                "MV Contract Demand (% of Monthly Peak)",
+                min_value=70,
+                max_value=95,
+                value=90,
+                step=1,
+                help="Typical Medium Voltage contract demand as percentage of monthly peak"
+            )
+            lv_contract_percentage = st.slider(
+                "LV Contract Demand (% of Monthly Peak)",
+                min_value=70,
+                max_value=95,
+                value=85,
+                step=1,
+                help="Typical Low Voltage contract demand as percentage of monthly peak"
+            )
+        else:
+            st.info("Manual contract demand entry will use fixed values for all months.")
+    
+    with col2:
+        if contract_demand_method == "Manual Entry":
+            manual_mv_contract = st.number_input(
+                "MV Contract Demand (kW)",
+                min_value=0.0,
+                value=500.0,
+                step=10.0,
+                help="Your actual Medium Voltage contract demand limit"
+            )
+            manual_lv_contract = st.number_input(
+                "LV Contract Demand (kW)",
+                min_value=0.0,
+                value=200.0,
+                step=5.0,
+                help="Your actual Low Voltage contract demand limit"
+            )
     
     # Store configuration in session state
     st.session_state.analysis_config = {
@@ -647,6 +698,28 @@ def show():
                 # Create detailed monthly breakdown table first
                 st.subheader("📅 Monthly Breakdown Analysis")
                 
+                # Add explanation about MD Excess
+                with st.expander("ℹ️ Understanding Maximum Demand (MD)", expanded=False):
+                    st.markdown("""
+                    **What is Maximum Demand (MD)?**
+                    
+                    **Maximum Demand** is the highest power demand recorded during a billing period. Different tariff types record MD differently:
+                    
+                    **In the table below:**
+                    - **General MD (kW)**: Maximum demand recorded over the entire month (24/7 recording)
+                    - **TOU MD (kW)**: Maximum demand recorded only during TOU peak hours (2PM-10PM weekdays)
+                    
+                    **Key Differences:**
+                    - **General Tariffs**: Record MD continuously (24 hours/day, 7 days/week)
+                    - **TOU Tariffs**: Record MD only during peak periods (weekdays 2PM-10PM)
+                    - This is why TOU MD is often lower than General MD for the same facility
+                    
+                    **Why This Matters:**
+                    - MD charges are calculated based on the recorded maximum demand
+                    - TOU tariffs may offer savings if your peak demand occurs outside TOU recording hours
+                    - Understanding your demand patterns helps choose the right tariff
+                    """)
+                
                 # Prepare monthly breakdown data
                 monthly_breakdown_data = []
                 calc_df = st.session_state.uploaded_data.copy()
@@ -662,25 +735,25 @@ def show():
                     peak_energy = month_data[month_data['is_peak'] == True]['energy_consumption'].sum()
                     offpeak_energy = month_data[month_data['is_peak'] == False]['energy_consumption'].sum()
                     
-                    # Maximum demand for the month
-                    max_demand_month = month_data['power_demand'].max()
+                    # Calculate Maximum Demand for different tariff types
+                    # General MD: Maximum demand over entire month (24/7)
+                    general_md = month_data['power_demand'].max()
                     
-                    # Calculate MD excess for different tariff types
-                    # General tariff MD excess (assuming 100kW threshold as example - this should be configurable)
-                    general_md_threshold = 100.0  # kW - this could be made configurable
-                    general_md_excess = max(0, max_demand_month - general_md_threshold)
+                    # TOU MD: Maximum demand during peak hours only (2PM-10PM weekdays)
+                    # Create TOU peak period mask (weekdays 2PM-10PM)
+                    month_data['weekday'] = month_data['datetime'].dt.weekday
+                    month_data['hour'] = month_data['datetime'].dt.hour
+                    tou_peak_mask = (month_data['weekday'] < 5) & (month_data['hour'] >= 14) & (month_data['hour'] < 22)
                     
-                    # TOU tariff MD excess (different threshold, typically higher)
-                    tou_md_threshold = 132.0  # kW - this could be made configurable  
-                    tou_md_excess = max(0, max_demand_month - tou_md_threshold)
+                    tou_peak_data = month_data[tou_peak_mask]
+                    tou_md = tou_peak_data['power_demand'].max() if len(tou_peak_data) > 0 else 0
                     
                     monthly_breakdown_data.append({
                         'Month': month,
                         'Peak (kWh)': peak_energy,
                         'Off-Peak (kWh)': offpeak_energy,
-                        'Max Demand (kW)': max_demand_month,
-                        'General MD Excess (kW)': general_md_excess,
-                        'TOU MD Excess (kW)': tou_md_excess
+                        'General MD (kW)': general_md,
+                        'TOU MD (kW)': tou_md
                     })
                 
                 if monthly_breakdown_data:
@@ -690,9 +763,8 @@ def show():
                     display_breakdown_df = breakdown_df.copy()
                     display_breakdown_df['Peak (kWh)'] = display_breakdown_df['Peak (kWh)'].apply(lambda x: f"{x:,.0f}")
                     display_breakdown_df['Off-Peak (kWh)'] = display_breakdown_df['Off-Peak (kWh)'].apply(lambda x: f"{x:,.0f}")
-                    display_breakdown_df['Max Demand (kW)'] = display_breakdown_df['Max Demand (kW)'].apply(lambda x: f"{x:.1f}")
-                    display_breakdown_df['General MD Excess (kW)'] = display_breakdown_df['General MD Excess (kW)'].apply(lambda x: f"{x:.1f}" if x > 0 else "0.0")
-                    display_breakdown_df['TOU MD Excess (kW)'] = display_breakdown_df['TOU MD Excess (kW)'].apply(lambda x: f"{x:.1f}" if x > 0 else "0.0")
+                    display_breakdown_df['General MD (kW)'] = display_breakdown_df['General MD (kW)'].apply(lambda x: f"{x:.1f}")
+                    display_breakdown_df['TOU MD (kW)'] = display_breakdown_df['TOU MD (kW)'].apply(lambda x: f"{x:.1f}")
                     
                     st.dataframe(display_breakdown_df, use_container_width=True, hide_index=True)
                     
@@ -705,7 +777,7 @@ def show():
                         total_offpeak = breakdown_df['Off-Peak (kWh)'].sum()
                         st.metric("Total Off-Peak Energy", f"{total_offpeak:,.0f} kWh")
                     with col3:
-                        overall_max_demand = breakdown_df['Max Demand (kW)'].max()
+                        overall_max_demand = breakdown_df['General MD (kW)'].max()
                         st.metric("Overall Max Demand", f"{overall_max_demand:.1f} kW")
                     with col4:
                         peak_ratio = (total_peak / (total_peak + total_offpeak) * 100) if (total_peak + total_offpeak) > 0 else 0
@@ -713,75 +785,208 @@ def show():
                 
                 st.markdown("---")
                 
-                # Create summary comparison table
+                # Create detailed monthly cost comparison table
                 st.subheader("📊 Cost Comparison Summary")
                 
                 summary_data = []
+                
+                # Calculate monthly breakdown for each tariff
                 for tariff_name, result in results.items():
                     if result:
-                        # Extract costs with proper key mapping
-                        total_cost = result.get('Total Cost', 0)
+                        # Calculate monthly costs using the uploaded data
+                        calc_df = st.session_state.uploaded_data.copy()
+                        calc_df['month'] = calc_df['datetime'].dt.strftime('%Y-%m')
                         
-                        # Calculate total energy cost (handle both General and TOU tariffs)
-                        energy_cost = result.get('Energy Cost (RM)', 0)  # General tariff
-                        if energy_cost == 0:  # TOU tariff
-                            energy_cost = result.get('Peak Energy Cost', 0) + result.get('Off-Peak Energy Cost', 0)
-                        
-                        # Calculate total demand cost
-                        demand_cost = result.get('Capacity Cost (RM)', 0) + result.get('Network Cost (RM)', 0)
-                        
-                        # Service charge (retail cost)
-                        service_charge = result.get('Retail Cost', 0)
-                        
-                        # Get demand values
-                        max_demand = result.get('Max Demand (kW)', 0)
-                        if max_demand == 0:
-                            max_demand = result.get('Peak Demand (kW, Peak Period Only)', 0)
-                        
-                        # Total energy
-                        total_energy = result.get('Total kWh', 0)
-                        
-                        # Cost per kWh
-                        avg_cost_kwh = result.get('Cost per kWh (Total Cost / Total kWh)', 0)
-                        if avg_cost_kwh == 0 and total_energy > 0:
-                            avg_cost_kwh = total_cost / total_energy
-                        
-                        summary_row = {
-                            'Tariff': tariff_name,
-                            'Total Cost (RM)': total_cost,
-                            'Energy Cost (RM)': energy_cost,
-                            'Demand Cost (RM)': demand_cost,
-                            'Service Charge (RM)': service_charge,
-                            'Average Cost per kWh (RM)': avg_cost_kwh,
-                            'Peak Demand (kW)': max_demand,
-                            'Total Energy (kWh)': total_energy
-                        }
-                        summary_data.append(summary_row)
+                        # Group by month and calculate costs for each month
+                        for month in sorted(calc_df['month'].unique()):
+                            month_data = calc_df[calc_df['month'] == month].copy()
+                            
+                            if len(month_data) > 0:
+                                # Prepare month data for cost calculation
+                                month_data['Parsed Timestamp'] = month_data['datetime']
+                                
+                                try:
+                                    # Get tariff data for this result
+                                    tariff_key = None
+                                    for key, info in all_tariffs.items():
+                                        if info['name'] == tariff_name:
+                                            tariff_key = key
+                                            break
+                                    
+                                    if tariff_key:
+                                        tariff_data = all_tariffs[tariff_key]['data']
+                                        
+                                        # Calculate monthly cost
+                                        monthly_result = calculate_cost(
+                                            df=month_data,
+                                            tariff=tariff_data,
+                                            power_col='power_demand',
+                                            holidays=set(st.session_state.analysis_config['holidays']),
+                                            afa_kwh=0,
+                                            afa_rate=st.session_state.analysis_config.get('afa_rate', -0.011)
+                                        )
+                                        
+                                        if monthly_result and 'error' not in monthly_result:
+                                            total_cost = monthly_result.get('Total Cost', 0)
+                                            
+                                            # Calculate total energy cost (handle both General and TOU tariffs)
+                                            energy_cost = monthly_result.get('Energy Cost (RM)', 0)  # General tariff
+                                            if energy_cost == 0:  # TOU tariff
+                                                energy_cost = monthly_result.get('Peak Energy Cost', 0) + monthly_result.get('Off-Peak Energy Cost', 0)
+                                            
+                                            # Calculate AFA cost
+                                            afa_cost = monthly_result.get('AFA Adjustment', 0)
+                                            
+                                            # Calculate demand cost (Capacity + Network) - handle both key formats
+                                            # General tariffs use "Capacity Cost (RM)", TOU tariffs use "Capacity Cost"
+                                            capacity_cost = monthly_result.get('Capacity Cost (RM)', 0) or monthly_result.get('Capacity Cost', 0)
+                                            network_cost = monthly_result.get('Network Cost (RM)', 0) or monthly_result.get('Network Cost', 0)
+                                            demand_cost = capacity_cost + network_cost
+                                            
+                                            # Service charge (retail cost)
+                                            service_charge = monthly_result.get('Retail Cost', 0)
+                                            
+                                            # 1.6% (KTWBB - Kumpulan Wang Industri Elektrik)
+                                            kwie_cost = monthly_result.get('KTWBB Cost', 0)
+                                            if kwie_cost == 0:  # Calculate manually if not in result
+                                                kwie_cost = energy_cost * 0.016
+                                            
+                                            # Total energy
+                                            total_energy = monthly_result.get('Total kWh', 0)
+                                            
+                                            # Cost per kWh
+                                            avg_cost_kwh = total_cost / total_energy if total_energy > 0 else 0
+                                            
+                                            summary_row = {
+                                                'Tariff': tariff_name,
+                                                'Month': month,
+                                                'Total Cost (RM)': total_cost,
+                                                'Energy Cost (RM)': energy_cost,
+                                                'AFA Cost (RM)': afa_cost,
+                                                'Capacity + Network (RM)': demand_cost,
+                                                'Service Charge (RM)': service_charge,
+                                                '1.6% (RM)': kwie_cost,
+                                                'Average Cost Per kWh (RM)': avg_cost_kwh
+                                            }
+                                            summary_data.append(summary_row)
+                                        
+                                except Exception as e:
+                                    st.error(f"Error calculating monthly cost for {tariff_name} - {month}: {str(e)}")
+                                    # Add a row with zero values to maintain structure
+                                    summary_row = {
+                                        'Tariff': tariff_name,
+                                        'Month': month,
+                                        'Total Cost (RM)': 0,
+                                        'Energy Cost (RM)': 0,
+                                        'AFA Cost (RM)': 0,
+                                        'Capacity + Network (RM)': 0,
+                                        'Service Charge (RM)': 0,
+                                        '1.6% (RM)': 0,
+                                        'Average Cost Per kWh (RM)': 0
+                                    }
+                                    summary_data.append(summary_row)
                 
                 if summary_data:
                     summary_df = pd.DataFrame(summary_data)
-                    summary_df = summary_df.sort_values('Total Cost (RM)')
-                    summary_df['Rank'] = range(1, len(summary_df) + 1)
                     
-                    # Reorder columns
-                    cols = ['Rank'] + [col for col in summary_df.columns if col != 'Rank']
-                    summary_df = summary_df[cols]
+                    # Sort by tariff name and then by month
+                    summary_df = summary_df.sort_values(['Tariff', 'Month'])
                     
                     # Format for display
                     display_df = summary_df.copy()
-                    currency_cols = ['Total Cost (RM)', 'Energy Cost (RM)', 'Demand Cost (RM)', 'Service Charge (RM)', 'Average Cost per kWh (RM)']
+                    currency_cols = ['Total Cost (RM)', 'Energy Cost (RM)', 'AFA Cost (RM)', 
+                                   'Capacity + Network (RM)', 'Service Charge (RM)', '1.6% (RM)', 
+                                   'Average Cost Per kWh (RM)']
+                    
                     for col in currency_cols:
-                        display_df[col] = display_df[col].apply(_format_rm_value)
+                        if col in display_df.columns:
+                            display_df[col] = display_df[col].apply(_format_rm_value)
                     
-                    display_df['Peak Demand (kW)'] = display_df['Peak Demand (kW)'].apply(_format_number_value)
-                    display_df['Total Energy (kWh)'] = display_df['Total Energy (kWh)'].apply(_format_number_value)
-                    
+                    # Display the table
                     st.dataframe(display_df, use_container_width=True, hide_index=True)
                     
-                    # Highlight best option
-                    best_tariff = summary_df.iloc[0]['Tariff']
-                    best_cost = summary_df.iloc[0]['Total Cost (RM)']
-                    st.success(f"🏆 **Best Option:** {best_tariff} with total cost of {_format_rm_value(best_cost)}")
+                    # Show best options by month
+                    st.markdown("**🏆 Best Options by Month:**")
+                    for month in sorted(summary_df['Month'].unique()):
+                        month_data = summary_df[summary_df['Month'] == month]
+                        if len(month_data) > 0:
+                            best_month = month_data.sort_values('Total Cost (RM)').iloc[0]
+                            st.markdown(f"- **{month}**: {best_month['Tariff']} - {_format_rm_value(best_month['Total Cost (RM)'])}")
+                
+                # Summary totals section
+                st.subheader("📈 Summary Totals by Tariff")
+                
+                # Calculate totals for each tariff
+                total_summary_data = []
+                
+                if summary_data:
+                    # Group by tariff and sum the monthly costs
+                    summary_df_totals = pd.DataFrame(summary_data)
+                    tariff_totals = summary_df_totals.groupby('Tariff').agg({
+                        'Total Cost (RM)': 'sum',
+                        'Energy Cost (RM)': 'sum',
+                        'AFA Cost (RM)': 'sum',
+                        'Capacity + Network (RM)': 'sum',
+                        'Service Charge (RM)': 'sum',
+                        '1.6% (RM)': 'sum'
+                    }).reset_index()
+                    
+                    # Calculate additional metrics from original results
+                    for tariff_name in tariff_totals['Tariff'].unique():
+                        original_result = results.get(tariff_name, {})
+                        if original_result:
+                            # Get demand values
+                            max_demand = original_result.get('Max Demand (kW)', 0)
+                            if max_demand == 0:
+                                max_demand = original_result.get('Peak Demand (kW, Peak Period Only)', 0)
+                            
+                            # Total energy
+                            total_energy = original_result.get('Total kWh', 0)
+                            
+                            # Get totals from grouped data
+                            tariff_row = tariff_totals[tariff_totals['Tariff'] == tariff_name].iloc[0]
+                            total_cost = tariff_row['Total Cost (RM)']
+                            
+                            # Cost per kWh
+                            avg_cost_kwh = total_cost / total_energy if total_energy > 0 else 0
+                            
+                            total_summary_row = {
+                                'Tariff': tariff_name,
+                                'Total Cost (RM)': total_cost,
+                                'Energy Cost (RM)': tariff_row['Energy Cost (RM)'],
+                                'AFA Cost (RM)': tariff_row['AFA Cost (RM)'],
+                                'Capacity + Network (RM)': tariff_row['Capacity + Network (RM)'],
+                                'Service Charge (RM)': tariff_row['Service Charge (RM)'],
+                                '1.6% (RM)': tariff_row['1.6% (RM)'],
+                                'Average Cost Per kWh (RM)': avg_cost_kwh,
+                                'Peak Demand (kW)': max_demand,
+                                'Total Energy (kWh)': total_energy
+                            }
+                            total_summary_data.append(total_summary_row)
+                
+                if total_summary_data:
+                    total_summary_df = pd.DataFrame(total_summary_data)
+                    total_summary_df = total_summary_df.sort_values('Total Cost (RM)')
+                    total_summary_df['Rank'] = range(1, len(total_summary_df) + 1)
+                    
+                    # Reorder columns
+                    cols = ['Rank'] + [col for col in total_summary_df.columns if col != 'Rank']
+                    total_summary_df = total_summary_df[cols]
+                    
+                    # Format for display
+                    display_totals_df = total_summary_df.copy()
+                    currency_cols = ['Total Cost (RM)', 'Energy Cost (RM)', 'AFA Cost (RM)', 
+                                   'Capacity + Network (RM)', 'Service Charge (RM)', '1.6% (RM)', 
+                                   'Average Cost Per kWh (RM)']
+                    
+                    for col in currency_cols:
+                        if col in display_totals_df.columns:
+                            display_totals_df[col] = display_totals_df[col].apply(_format_rm_value)
+                    
+                    display_totals_df['Peak Demand (kW)'] = display_totals_df['Peak Demand (kW)'].apply(_format_number_value)
+                    display_totals_df['Total Energy (kWh)'] = display_totals_df['Total Energy (kWh)'].apply(_format_number_value)
+                    
+                    st.dataframe(display_totals_df, use_container_width=True, hide_index=True)
                 
                 # Monthly cost comparison chart
                 st.subheader("📈 Monthly Cost Comparison")
