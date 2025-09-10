@@ -3980,18 +3980,18 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
         
         # Get available days based on Level 1 filter
         if selected_filter == "All Success Days":
-            # Updated patterns to match comprehensive battery status categories
-            success_patterns = '✅ Complete Success|✅ MD: Complete Success|✅ MD: No Action Needed|✅ Off-Peak: Ready|🟢 Off-Peak: Good Readiness|🟢 Off-Peak Period'
+            # Updated patterns for simplified 4-category system
+            success_patterns = '✅ Success'
             success_days = df_sim[df_sim['Shaving_Success'].str.contains(success_patterns, na=False)].index.date
             level2_days = sorted(set(success_days))
         elif selected_filter == "All Partial Days":
-            # Updated patterns to match comprehensive battery status categories  
-            partial_patterns = '🟡 Good Partial|🟡 MD: Good Partial|🟠 Fair Partial|🟠 MD: Fair Partial|🔶 Poor Partial|🔶 MD: Poor Partial|🟡 Off-Peak: Fair Readiness'
+            # Updated patterns for simplified 4-category system  
+            partial_patterns = '🟡 Partial'
             partial_days = df_sim[df_sim['Shaving_Success'].str.contains(partial_patterns, na=False)].index.date
             level2_days = sorted(set(partial_days))
         elif selected_filter == "All Failed Days":
-            # Updated patterns to match comprehensive battery status categories
-            failed_patterns = '🔴 Failed|🔴 MD: Failed|🔴 MD: Minimal Impact|🔴 Off-Peak: Critical SOC|🟠 Off-Peak: SOC Warning'
+            # Updated patterns for simplified 4-category system
+            failed_patterns = '🔴 Failed'
             failed_days = df_sim[df_sim['Shaving_Success'].str.contains(failed_patterns, na=False)].index.date
             level2_days = sorted(set(failed_days))
         else:
@@ -4033,22 +4033,22 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
         
         # Level 1: Day Type Filter
         if selected_filter == "All Success Days":
-            # Find all days that contain success events - Updated patterns for comprehensive battery status
-            success_patterns = '✅ Complete Success|✅ MD: Complete Success|✅ MD: No Action Needed|✅ Off-Peak: Ready|🟢 Off-Peak: Good Readiness|🟢 Off-Peak Period'
+            # Find all days that contain success events - Updated for simplified 4-category system
+            success_patterns = '✅ Success'
             success_days = df_sim[df_sim['Shaving_Success'].str.contains(success_patterns, na=False)].index.date
             success_days_set = set(success_days)
             # Show all data for those days - use pd.Series.isin() instead of numpy array.isin()
             df_sim_filtered = df_sim[pd.Series(df_sim.index.date).isin(success_days_set).values]
         elif selected_filter == "All Partial Days":
-            # Find all days that contain partial events - Updated patterns for comprehensive battery status
-            partial_patterns = '🟡 Good Partial|🟡 MD: Good Partial|🟠 Fair Partial|🟠 MD: Fair Partial|🔶 Poor Partial|🔶 MD: Poor Partial|🟡 Off-Peak: Fair Readiness'
+            # Find all days that contain partial events - Updated for simplified 4-category system
+            partial_patterns = '🟡 Partial'
             partial_days = df_sim[df_sim['Shaving_Success'].str.contains(partial_patterns, na=False)].index.date
             partial_days_set = set(partial_days)
             # Show all data for those days - use pd.Series.isin() instead of numpy array.isin()
             df_sim_filtered = df_sim[pd.Series(df_sim.index.date).isin(partial_days_set).values]
         elif selected_filter == "All Failed Days":
-            # Find all days that contain failed events - Updated patterns for comprehensive battery status
-            failed_patterns = '🔴 Failed|🔴 MD: Failed|🔴 MD: Minimal Impact|🔴 Off-Peak: Critical SOC|🟠 Off-Peak: SOC Warning'
+            # Find all days that contain failed events - Updated for simplified 4-category system
+            failed_patterns = '🔴 Failed'
             failed_days = df_sim[df_sim['Shaving_Success'].str.contains(failed_patterns, na=False)].index.date
             failed_days_set = set(failed_days)
             # Show all data for those days - use pd.Series.isin() instead of numpy array.isin()
@@ -4074,13 +4074,15 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
                 except (ValueError, TypeError):
                     st.warning(f"⚠️ Could not parse selected date: {selected_specific_day}")
         
+        # Calculate day breakdown counts using simplified 4-category system (always calculate)
+        success_days = len(set(df_sim[df_sim['Shaving_Success'].str.contains('✅ Success', na=False)].index.date))
+        partial_days = len(set(df_sim[df_sim['Shaving_Success'].str.contains('🟡 Partial', na=False)].index.date))
+        failed_days = len(set(df_sim[df_sim['Shaving_Success'].str.contains('🔴 Failed', na=False)].index.date))
+        total_days = len(set(df_sim.index.date))
+        filtered_days = len(set(df_sim_filtered.index.date))
+        
         # Display cascading filter results summary
         if len(df_sim_filtered) < len(df_sim):
-            success_days = len(set(df_sim[df_sim['Shaving_Success'].str.contains('✅ Complete Success', na=False)].index.date))
-            partial_days = len(set(df_sim[df_sim['Shaving_Success'].str.contains('🟡 Good Partial|🟠 Fair Partial|🔶 Poor Partial', na=False)].index.date))
-            failed_days = len(set(df_sim[df_sim['Shaving_Success'].str.contains('🔴 Failed', na=False)].index.date))
-            total_days = len(set(df_sim.index.date))
-            filtered_days = len(set(df_sim_filtered.index.date))
             
             # Check if Level 2 filter is active (updated for always-visible interface)
             level2_active = ('specific_day_filter' in st.session_state and 
@@ -4101,12 +4103,19 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
                 
                 **Day Breakdown:**
                 - ✅ **Success Days**: {success_days} days
-                - 🟡🟠🔶 **Partial Days**: {partial_days} days
+                - 🟡 **Partial Days**: {partial_days} days
                 - 🔴 **Failed Days**: {failed_days} days
                 """)
         else:
-            total_days = len(set(df_sim.index.date))
-            st.info(f"📊 **All Days**: Showing {len(df_sim_filtered):,} records from {total_days} days")
+            # Always show day breakdown even when no filters are applied
+            st.info(f"""
+            📊 **All Days**: Showing {len(df_sim_filtered):,} records from {total_days} days
+            
+            **Day Breakdown:**
+            - ✅ **Success Days**: {success_days} days
+            - 🟡 **Partial Days**: {partial_days} days
+            - 🔴 **Failed Days**: {failed_days} days
+            """)
         
         # Use filtered data for the rest of the chart function
         df_sim = df_sim_filtered
@@ -5731,24 +5740,25 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
 # V2 ENHANCED SHAVING SUCCESS CLASSIFICATION
 # ===================================================================================================
 
-def _get_comprehensive_battery_status(row, holidays=None):
+def _get_simplified_battery_status(row, holidays=None):
     """
-    Solution 3: Comprehensive Operational Status for battery classification across ALL time periods.
+    Simplified 4-category battery status classification: Success, Partial, Failed, or Not Applicable.
     
-    Provides detailed operational insights for:
-    - MD Peak Periods: Detailed shaving analysis with success/failure reasons
-    - Off-Peak Periods: Battery health, charging effectiveness, and readiness assessment
-    - All Periods: Battery operational efficiency and system health monitoring
+    This replaces the overly complex 24-category system with a clean, actionable classification
+    focused on MD shaving effectiveness during billing periods only.
     
-    Addresses the issue where off-peak periods are masked as "🟢 Off-Peak Period" 
-    without further analysis, providing comprehensive operational visibility.
+    Categories:
+    - ✅ Success: Complete MD shaving achieved or no action needed
+    - 🟡 Partial: Some shaving achieved but not complete  
+    - 🔴 Failed: Should have shaved but couldn't or failed completely
+    - ⚪ Not Applicable: Outside MD billing window (off-peak periods for TOU)
     
     Args:
         row: DataFrame row with simulation data
         holidays: Set of holiday dates to exclude from MD period determination
         
     Returns:
-        str: Comprehensive operational status with detailed analysis
+        str: Simplified operational status (Success/Partial/Failed/Not Applicable)
     """
     original_demand = row['Original_Demand']
     net_demand = row['Net_Demand_kW'] 
@@ -5756,98 +5766,60 @@ def _get_comprehensive_battery_status(row, holidays=None):
     battery_power = row.get('Battery_Power_kW', 0)  # Positive = discharge, negative = charge
     soc_percent = row.get('Battery_SOC_Percent', 100)
     
-    # IMPROVED HIERARCHY: Holiday → Weekday → Hour with proper holiday checking
+    # Check if this is an MD billing period (weekdays 2PM-10PM, excluding holidays)
     is_md_window = False
     if row.name.weekday() < 5:  # Weekday check first
         if not (holidays and row.name.date() in holidays):  # Holiday check
             if 14 <= row.name.hour < 22:  # Hour check (2PM-10PM)
                 is_md_window = True
     
-    # ==========================================
-    # MD PEAK PERIOD ANALYSIS (2PM-10PM Weekdays)
-    # ==========================================
-    if is_md_window:
-        # No intervention needed during MD window
-        if original_demand <= monthly_target:
-            return '✅ MD: No Action Needed'
-        
-        # Battery health checks during MD period
-        if soc_percent < 5:
-            return '🔴 MD: Critical SOC (<5%)'
-        elif soc_percent < 15:
-            return '🟠 MD: Low SOC Warning (<15%)'
-        
-        # Battery attempted to discharge
-        if battery_power > 0:
-            excess_before = original_demand - monthly_target
-            excess_after = max(0, net_demand - monthly_target)
-            reduction_achieved = excess_before - excess_after
-            reduction_percentage = (reduction_achieved / excess_before * 100) if excess_before > 0 else 0
-            
-            # Complete success
-            if net_demand <= monthly_target * 1.05:  # 5% tolerance
-                return '✅ MD: Complete Success'
-            
-            # Partial success levels
-            elif reduction_percentage >= 80:
-                return f'🟡 MD: Good Partial ({reduction_percentage:.0f}%)'
-            elif reduction_percentage >= 50:
-                return f'🟠 MD: Fair Partial ({reduction_percentage:.0f}%)'
-            elif reduction_percentage >= 20:
-                return f'🔶 MD: Poor Partial ({reduction_percentage:.0f}%)'
-            else:
-                return '🔴 MD: Minimal Impact'
-        else:
-            # Battery should have discharged but didn't
-            if soc_percent < 25:
-                return '🔴 MD: Failed - SOC Too Low'
-            else:
-                return '🔴 MD: Failed - No Discharge'
+    # Only classify periods that affect MD billing
+    if not is_md_window:
+        return '⚪ Not Applicable'  # Off-peak periods don't affect MD charges
     
     # ==========================================
-    # OFF-PEAK PERIOD COMPREHENSIVE ANALYSIS
+    # MD PERIOD CLASSIFICATION (Simplified)
     # ==========================================
+    
+    # No intervention needed - already below target
+    if original_demand <= monthly_target:
+        return '✅ Success'
+    
+    # Critical battery issues that prevent operation
+    if soc_percent < 5:  # Below safety minimum
+        return '🔴 Failed'
+    
+    # Battery attempted discharge during MD period
+    if battery_power > 0:
+        excess_before = original_demand - monthly_target
+        excess_after = max(0, net_demand - monthly_target)
+        reduction_achieved = excess_before - excess_after
+        reduction_percentage = (reduction_achieved / excess_before * 100) if excess_before > 0 else 0
+        
+        # Complete success - got demand to target level
+        if net_demand <= monthly_target * 1.05:  # 5% tolerance
+            return '✅ Success'
+        
+        # Partial success - some reduction but not complete
+        elif reduction_percentage >= 20:  # At least 20% reduction
+            return '🟡 Partial'
+        
+        # Minimal or no impact
+        else:
+            return '🔴 Failed'
+    
     else:
-        # Battery Health Assessment
-        if soc_percent < 5:
-            return '🔴 Off-Peak: Critical SOC (<5%)'
-        elif soc_percent < 15:
-            return '🟠 Off-Peak: SOC Warning (<15%)'
-        elif soc_percent < 25:
-            return '🟡 Off-Peak: SOC Caution (<25%)'
-        
-        # Charging Effectiveness Analysis
-        if battery_power < 0:  # Charging
-            charge_power = abs(battery_power)
-            if soc_percent >= 95:
-                return '✅ Off-Peak: Charging Complete'
-            elif charge_power > 20:  # High charge rate
-                return f'⚡ Off-Peak: Active Charging ({charge_power:.1f}kW)'
-            elif charge_power > 5:   # Moderate charge rate
-                return f'🔄 Off-Peak: Moderate Charging ({charge_power:.1f}kW)'
-            else:                    # Low charge rate
-                return f'🐌 Off-Peak: Slow Charging ({charge_power:.1f}kW)'
-        
-        # Battery Readiness Assessment
-        elif battery_power == 0:  # No activity
-            if soc_percent >= 80:
-                return '✅ Off-Peak: Ready (SOC >80%)'
-            elif soc_percent >= 60:
-                return '🟢 Off-Peak: Good Readiness (SOC >60%)'
-            elif soc_percent >= 40:
-                return '🟡 Off-Peak: Fair Readiness (SOC >40%)'
-            else:
-                return '🟠 Off-Peak: Poor Readiness (SOC <40%)'
-        
-        # Unexpected discharge during off-peak
-        else:  # battery_power > 0
-            discharge_power = battery_power
-            if discharge_power > 20:
-                return f'⚠️ Off-Peak: High Discharge ({discharge_power:.1f}kW)'
-            elif discharge_power > 5:
-                return f'🟡 Off-Peak: Moderate Discharge ({discharge_power:.1f}kW)'
-            else:
-                return f'🔵 Off-Peak: Minor Discharge ({discharge_power:.1f}kW)'
+        # Should have discharged during MD period but didn't
+        if soc_percent < 25:  # Low SOC prevented discharge
+            return '🔴 Failed'
+        else:  # Battery available but didn't discharge
+            return '🔴 Failed'
+
+
+# Keep backward compatibility alias
+def _get_comprehensive_battery_status(row, holidays=None):
+    """Backward compatibility alias for the simplified battery status function."""
+    return _get_simplified_battery_status(row, holidays)
 
 
 # Alias for backward compatibility
@@ -5936,15 +5908,15 @@ def _calculate_success_rate_from_shaving_status(df_sim, holidays=None, debug=Fal
             'exclusion_reasons': 'All intervals outside MD periods'
         }
     
-    # SUCCESS CRITERIA: Count successful intervals
-    # Only ✅ Complete Success and 🟢 No Action Needed count as successful
-    successful_statuses = ['✅ Complete Success', '🟢 No Action Needed']
+    # SUCCESS CRITERIA: Count successful intervals using simplified 4-category system
+    # Only ✅ Success counts as successful in the simplified system
+    successful_statuses = ['✅ Success']
     
-    # Handle partial matches for statuses that might have additional text
+    # Count successful intervals
     successful_intervals = 0
     for idx, row in df_md_only.iterrows():
         status = str(row[status_column])
-        if any(success_status in status for success_status in successful_statuses):
+        if status in successful_statuses:
             successful_intervals += 1
     
     total_md_intervals = len(df_md_only)
@@ -5953,14 +5925,23 @@ def _calculate_success_rate_from_shaving_status(df_sim, holidays=None, debug=Fal
     # Status breakdown for debugging
     status_counts = df_md_only[status_column].value_counts().to_dict()
     
+    # Calculate breakdown by simplified categories
+    category_breakdown = {
+        'Success': sum(1 for status in df_md_only[status_column] if '✅ Success' in str(status)),
+        'Partial': sum(1 for status in df_md_only[status_column] if '🟡 Partial' in str(status)),
+        'Failed': sum(1 for status in df_md_only[status_column] if '🔴 Failed' in str(status)),
+        'Not_Applicable': sum(1 for status in df_md_only[status_column] if '⚪ Not Applicable' in str(status))
+    }
+    
     result = {
         'success_rate_percent': success_rate_percent,
         'total_md_intervals': total_md_intervals,
         'successful_intervals': successful_intervals,
-        'calculation_method': 'MD Period gated with 6-category classification',
+        'calculation_method': 'MD Period gated with simplified 4-category system',
         'md_period_logic': 'Weekdays 2PM-10PM (primary gate)',
         'successful_statuses': successful_statuses,
         'status_breakdown': status_counts,
+        'category_breakdown': category_breakdown,
         'excluded_intervals': len(df_sim) - total_md_intervals,
         'total_intervals': len(df_sim)
     }
@@ -5968,13 +5949,16 @@ def _calculate_success_rate_from_shaving_status(df_sim, holidays=None, debug=Fal
     if debug:
         import streamlit as st
         st.info(f"""
-        🔍 **Success Rate Calculation Debug Info:**
+        🔍 **Success Rate Calculation Debug Info (Simplified 4-Category System):**
         - **MD Period Gate**: {total_md_intervals} intervals during weekdays 2PM-10PM
         - **Excluded**: {len(df_sim) - total_md_intervals} intervals outside MD periods
-        - **Successful**: {successful_intervals} intervals (✅ Complete Success + 🟢 No Action Needed)
+        - **Successful**: {successful_intervals} intervals (✅ Success only)
         - **Success Rate**: {success_rate_percent:.1f}%
         
-        **Status Breakdown:**
+        **Simplified Category Breakdown:**
+        {chr(10).join([f"  - {category}: {count}" for category, count in result['category_breakdown'].items()])}
+        
+        **Detailed Status Breakdown:**
         {chr(10).join([f"  - {status}: {count}" for status, count in status_counts.items()])}
         """)
     
