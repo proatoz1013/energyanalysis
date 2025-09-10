@@ -5877,10 +5877,11 @@ def _create_enhanced_battery_table(df_sim, selected_tariff=None, holidays=None):
         'Timestamp': df_sim.index.strftime('%Y-%m-%d %H:%M'),
         'Original_Demand_kW': df_sim['Original_Demand'].round(1),
         'Monthly_Target_kW': df_sim['Monthly_Target'].round(1),
-        'Net_Demand_kW': df_sim['Net_Demand_kW'].round(1),
         'Battery_Action': df_sim['Battery_Power_kW'].apply(
             lambda x: f"Discharge {x:.1f}kW" if x > 0 else f"Charge {abs(x):.1f}kW" if x < 0 else "Standby"
         ),
+        'Success_Status': df_sim.apply(_get_enhanced_shaving_success, axis=1),
+        'Net_Demand_kW': df_sim['Net_Demand_kW'].round(1),
         'BESS_Balance_kWh': df_sim['Battery_SOC_kWh'].round(1),
         'SOC_%': df_sim['Battery_SOC_Percent'].round(1),
         'SOC_Status': df_sim['Battery_SOC_Percent'].apply(
@@ -5896,7 +5897,6 @@ def _create_enhanced_battery_table(df_sim, selected_tariff=None, holidays=None):
         ).round(1),
         # NEW COLUMN 3: Actual Shave (kW) - Renamed from Peak_Shaved_kW
         'Actual_Shave_kW': df_sim['Peak_Shaved'].round(1),
-        'Shaving_Success': df_sim.apply(_get_enhanced_shaving_success, axis=1),
         'MD_Period': df_sim.index.map(lambda x: '🔴 Peak' if (x.weekday() < 5 and 14 <= x.hour < 22) else '🟢 Off-Peak'),
         'Target_Violation': df_sim.apply(lambda row: _calculate_md_aware_target_violation(row, selected_tariff), axis=1)
     }
