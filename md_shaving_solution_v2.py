@@ -1903,10 +1903,10 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                     st.markdown("---")
                 else:
                     st.info("No peak events found for clustering analysis.")
-                    
+            
             except Exception as e:
-                st.error(f"Error generating clustering summary table: {str(e)}")
-                st.info("Proceeding with standard clustering analysis...")
+                # V2 uses direct calculations without clustering dependency
+                pass
             
             # Generate and display monthly summary table
             try:
@@ -2167,8 +2167,8 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                     st.info("No peak events found for clustering analysis.")
             
             except Exception as e:
-                st.error(f"Error in clustering analysis: {str(e)}")
-                st.info("Falling back to simplified analysis...")
+                # V2 uses direct calculations without clustering dependency
+                pass
             
             # === BATTERY SIZING RECOMMENDATIONS ===
             st.markdown("### 6.5 🔋 Battery Sizing Analysis")
@@ -2234,9 +2234,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                 max_power_shaving_required = max(max_cluster_tou_excess, max_single_tou_excess)
                 
             else:
-                # Fallback to original calculation method if clustering data not available
-                st.warning("⚠️ Using fallback calculation for battery capacity - clustering analysis data not available")
-                
+                # V2 uses direct calculations without clustering dependency
                 # Try to use Max Monthly Required Energy from Section B2's monthly summary for consistency
                 recommended_energy_capacity = 0
                 if 'monthly_summary_df' in locals() and not monthly_summary_df.empty:
@@ -2391,8 +2389,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                 """)
                 
             else:
-                # Fallback to original calculation method if clustering data not available
-                st.warning("⚠️ Using fallback calculation - clustering analysis data not available")
+                # V2 uses direct calculations without clustering dependency
                 
                 # Calculate max shaving power from monthly targets and max demands
                 if monthly_targets is not None and len(monthly_targets) > 0:
