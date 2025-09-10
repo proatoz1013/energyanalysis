@@ -6469,13 +6469,18 @@ def _create_monthly_summary_table(df_sim, selected_tariff=None, interval_hours=N
     monthly_data = monthly_data.join(cycles_df, how='left')
     monthly_data['equivalent_full_cycles'] = monthly_data['equivalent_full_cycles'].fillna(0)
     
+    # Calculate Accumulating Charging Cycles for monthly summary
+    # This represents the cumulative EFC cycles up to the end of each month
+    cumulative_monthly_cycles = monthly_data['equivalent_full_cycles'].cumsum()
+    
     # Format the results with proper number formatting
     result = pd.DataFrame({
         'Month': [str(period) for period in monthly_data.index],
         f'{tariff_label} MD Excess (kW)': [_format_number_value(x) for x in monthly_data['MD_Excess_kW']],
         'Success Shaved (kW)': [_format_number_value(x) for x in monthly_data['Success_Shaved_kW']],
         'Cost Saving (RM)': [_format_rm_value(x) for x in monthly_data['Cost_Saving_RM']],
-        'Total EFC': [_format_number_value(x) for x in monthly_data['equivalent_full_cycles']]  # CORRECTED: Updated column name and reference
+        'Total EFC': [_format_number_value(x) for x in monthly_data['equivalent_full_cycles']], 
+        'Accumulating Charging Cycles': [_format_number_value(x) for x in cumulative_monthly_cycles]  # NEW: Added as last column
     })
     
     return result
@@ -6696,14 +6701,38 @@ def _display_battery_simulation_tables(df_sim, simulation_results, selected_tari
             if selected_tariff and 'Cost Saving (RM)' in monthly_data.columns:
                 # Extract numeric values from formatted data for calculations
                 cost_saving_values = monthly_data['Cost Saving (RM)'].apply(lambda x: float(x.replace('RM', '').replace(',', '')) if isinstance(x, str) else x)
-                charging_cycle_values = monthly_data['Total Charging Cycles'].apply(lambda x: float(x.replace(',', '')) if isinstance(x, str) else x) if 'Total Charging Cycles' in monthly_data.columns else pd.Series([0])
+                
+                # Handle both old and new column names for charging cycles
+                if 'Accumulating Charging Cycles' in monthly_data.columns:
+                    # Use the new accumulating column - take the final (maximum) value since it's cumulative
+                    accumulating_cycle_values = monthly_data['Accumulating Charging Cycles'].apply(lambda x: float(x.replace(',', '')) if isinstance(x, str) else x)
+                    total_charging_cycles = accumulating_cycle_values.max() if len(accumulating_cycle_values) > 0 else 0
+                    # For monthly average, use Total EFC if available, otherwise calculate from Total Charging Cycles / months
+                    if 'Total EFC' in monthly_data.columns:
+                        efc_values = monthly_data['Total EFC'].apply(lambda x: float(x.replace(',', '')) if isinstance(x, str) else x)
+                        avg_monthly_cycles = efc_values.mean()
+                    else:
+                        avg_monthly_cycles = total_charging_cycles / len(monthly_data) if len(monthly_data) > 0 else 0
+                elif 'Total Charging Cycles' in monthly_data.columns:
+                    # Backwards compatibility with old column name
+                    charging_cycle_values = monthly_data['Total Charging Cycles'].apply(lambda x: float(x.replace(',', '')) if isinstance(x, str) else x)
+                    total_charging_cycles = charging_cycle_values.sum()
+                    avg_monthly_cycles = charging_cycle_values.mean()
+                elif 'Total EFC' in monthly_data.columns:
+                    # Use Total EFC as fallback
+                    efc_values = monthly_data['Total EFC'].apply(lambda x: float(x.replace(',', '')) if isinstance(x, str) else x)
+                    total_charging_cycles = efc_values.sum()
+                    avg_monthly_cycles = efc_values.mean()
+                else:
+                    # No charging cycle data available
+                    total_charging_cycles = 0
+                    avg_monthly_cycles = 0
+                
                 success_shaved_values = monthly_data['Success Shaved (kW)'].apply(lambda x: float(x.replace(',', '')) if isinstance(x, str) else x)
                 md_excess_values = monthly_data.iloc[:, 1].apply(lambda x: float(x.replace(',', '')) if isinstance(x, str) else x)  # Second column is MD Excess
                 
                 total_cost_saving = cost_saving_values.sum()
                 avg_monthly_saving = cost_saving_values.mean()
-                total_charging_cycles = charging_cycle_values.sum()
-                avg_monthly_cycles = charging_cycle_values.mean()
                 total_success_shaved = success_shaved_values.sum()
                 total_md_excess = md_excess_values.sum()
                 
@@ -6713,7 +6742,11 @@ def _display_battery_simulation_tables(df_sim, simulation_results, selected_tari
                 with col2:
                     st.metric("Average Monthly Saving", _format_rm_value(avg_monthly_saving))
                 with col3:
-                    st.metric("Total Charging Cycles", _format_number_value(total_charging_cycles))
+                    # Update metric label based on available data
+                    if 'Accumulating Charging Cycles' in monthly_data.columns:
+                        st.metric("Total Accumulating Cycles", _format_number_value(total_charging_cycles))
+                    else:
+                        st.metric("Total Charging Cycles", _format_number_value(total_charging_cycles))
                 with col4:
                     st.metric("Analysis Period", f"{len(monthly_data)} months")
                     
