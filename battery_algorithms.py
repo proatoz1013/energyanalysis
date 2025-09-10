@@ -23,6 +23,43 @@ from plotly.subplots import make_subplots
 from tariffs.peak_logic import is_peak_rp4, get_malaysia_holidays
 
 
+def _get_dynamic_interval_hours(df):
+    """
+    Detect sampling interval from DataFrame and return interval in hours.
+    
+    Args:
+        df: DataFrame with datetime index or containing timestamp column
+        
+    Returns:
+        float: Interval in hours (e.g., 0.25 for 15-min intervals)
+    """
+    try:
+        # If DataFrame has datetime index
+        if hasattr(df.index, 'freq') and df.index.freq is not None:
+            return pd.Timedelta(df.index.freq).total_seconds() / 3600
+        
+        # Try to infer from index
+        if len(df) > 1:
+            time_diff = df.index[1] - df.index[0]
+            if hasattr(time_diff, 'total_seconds'):
+                return time_diff.total_seconds() / 3600
+        
+        # Look for timestamp columns
+        for col in ['timestamp', 'Timestamp', 'DateTime', 'datetime']:
+            if col in df.columns:
+                timestamps = pd.to_datetime(df[col])
+                if len(timestamps) > 1:
+                    time_diff = timestamps.iloc[1] - timestamps.iloc[0]
+                    return time_diff.total_seconds() / 3600
+        
+        # Default fallback to 15-minute intervals
+        return 0.25
+        
+    except Exception:
+        # Fallback to 15-minute intervals
+        return 0.25
+
+
 def detect_holidays_from_data(df, timestamp_col):
     """
     Detect holidays from data by analyzing patterns.
@@ -563,12 +600,15 @@ class BatteryAlgorithms:
     
     def _calculate_simulation_metrics(self, df_sim, target_demand, soc_percent):
         """Calculate comprehensive simulation performance metrics."""
+        # Get dynamic interval for energy calculations
+        interval_hours = _get_dynamic_interval_hours(df_sim)
+        
         # Energy metrics with more detailed analysis
         charging_intervals = df_sim['Battery_Power_kW'] < 0
         discharging_intervals = df_sim['Battery_Power_kW'] > 0
         
-        total_energy_discharged = sum([p * 0.25 for p in df_sim['Battery_Power_kW'] if p > 0])  # Assuming 15-min intervals
-        total_energy_charged = sum([abs(p) * 0.25 for p in df_sim['Battery_Power_kW'] if p < 0])
+        total_energy_discharged = sum([p * interval_hours for p in df_sim['Battery_Power_kW'] if p > 0])
+        total_energy_charged = sum([abs(p) * interval_hours for p in df_sim['Battery_Power_kW'] if p < 0])
         
         # Charging/Discharging cycle analysis
         charging_cycles = len(df_sim[charging_intervals])
@@ -755,6 +795,9 @@ class BatteryAlgorithms:
         Returns:
             Dictionary with compliance analysis results
         """
+        # Get dynamic interval for energy calculations
+        interval_hours = _get_dynamic_interval_hours(df_sim)
+        
         # Count total discharge events
         discharge_events = df_sim[df_sim['Battery_Power_kW'] > 0]
         total_discharges = len(discharge_events)
@@ -765,8 +808,8 @@ class BatteryAlgorithms:
             violation_discharges = total_discharges - compliant_discharges
             
             # Energy analysis
-            total_energy_discharged = discharge_events['Battery_Power_kW'].sum() * 0.25  # Assuming 15-min intervals
-            compliant_energy = discharge_events[discharge_events['Is_Peak_Period']]['Battery_Power_kW'].sum() * 0.25
+            total_energy_discharged = discharge_events['Battery_Power_kW'].sum() * interval_hours
+            compliant_energy = discharge_events[discharge_events['Is_Peak_Period']]['Battery_Power_kW'].sum() * interval_hours
             violation_energy = total_energy_discharged - compliant_energy
             
             compliance_rule = "TOU: Discharge only during peak periods (Mon-Fri 2PM-10PM, excluding holidays)"
@@ -776,7 +819,7 @@ class BatteryAlgorithms:
             violation_discharges = 0
             
             # Energy analysis
-            total_energy_discharged = discharge_events['Battery_Power_kW'].sum() * 0.25
+            total_energy_discharged = discharge_events['Battery_Power_kW'].sum() * interval_hours
             compliant_energy = total_energy_discharged
             violation_energy = 0
             

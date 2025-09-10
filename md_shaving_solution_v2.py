@@ -64,6 +64,34 @@ def _infer_interval_hours(datetime_index, fallback=0.25):
     return fallback
 
 
+def _get_dynamic_interval_hours(df_or_index):
+    """
+    Centralized function to get dynamic interval hours with consistent fallback logic.
+    
+    This ensures all energy conversion calculations use the same detected interval
+    throughout V2, preventing inconsistencies between hardcoded and dynamic intervals.
+    
+    Args:
+        df_or_index: DataFrame or DatetimeIndex to detect interval from
+        
+    Returns:
+        float: Detected interval in hours
+    """
+    # First try to get from session state (already detected and stored)
+    try:
+        import streamlit as st
+        if hasattr(st.session_state, 'data_interval_hours'):
+            return st.session_state.data_interval_hours
+    except (ImportError, AttributeError):
+        pass
+    
+    # Fallback to detection from provided data
+    if hasattr(df_or_index, 'index'):
+        return _infer_interval_hours(df_or_index.index, fallback=0.25)
+    else:
+        return _infer_interval_hours(df_or_index, fallback=0.25)
+
+
 def _calculate_tariff_specific_monthly_peaks(df, power_col, selected_tariff, holidays):
     """
     Calculate monthly peak demands based on tariff type:
@@ -3402,7 +3430,7 @@ def cluster_peak_events(events_df, battery_params, md_hours, working_days):
     return clusters_df, events_for_clustering
 
 
-def _compute_per_event_bess_dispatch(all_monthly_events, monthly_targets, selected_tariff, holidays, battery_spec=None, quantity=1, interval_hours=0.25):
+def _compute_per_event_bess_dispatch(all_monthly_events, monthly_targets, selected_tariff, holidays, battery_spec=None, quantity=1, interval_hours=None):
     """
     Compute per-event BESS dispatch results using existing V2 logic.
     
@@ -3420,6 +3448,10 @@ def _compute_per_event_bess_dispatch(all_monthly_events, monthly_targets, select
     """
     if not all_monthly_events or not battery_spec:
         return pd.DataFrame()
+    
+    # Add dynamic interval detection if not provided
+    if interval_hours is None:
+        interval_hours = _get_dynamic_interval_hours(pd.DataFrame(index=pd.to_datetime(['2024-01-01'])))
     
     # Determine tariff type using existing logic
     tariff_type = 'General'
@@ -3703,9 +3735,12 @@ def _render_event_results_table(all_monthly_events, monthly_targets, selected_ta
     
     # Compute event results
     with st.spinner("Computing per-event BESS dispatch results..."):
+        # Get dynamic interval hours for accurate energy calculations
+        interval_hours = _get_dynamic_interval_hours(pd.DataFrame(index=pd.to_datetime(['2024-01-01'])))
+        
         df_results = _compute_per_event_bess_dispatch(
             all_monthly_events, monthly_targets, selected_tariff, holidays, 
-            battery_spec, quantity
+            battery_spec, quantity, interval_hours
         )
     
     if df_results.empty:
@@ -4252,11 +4287,14 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
     """)
     
     # ===== V2 TABLE VISUALIZATION INTEGRATION BETWEEN CHART 1 AND 2 =====
+    # Get dynamic interval hours for energy calculations
+    interval_hours = _get_dynamic_interval_hours(df_sim)
+    
     _display_battery_simulation_tables(df_sim, {
         'peak_reduction_kw': sizing.get('power_rating_kw', 0) if sizing else 0,
         'success_rate_percent': 85.0,  # Default placeholder
-        'total_energy_discharged': df_sim['Battery_Power_kW'].where(df_sim['Battery_Power_kW'] > 0, 0).sum() * 0.25,
-        'total_energy_charged': abs(df_sim['Battery_Power_kW'].where(df_sim['Battery_Power_kW'] < 0, 0).sum()) * 0.25,
+        'total_energy_discharged': df_sim['Battery_Power_kW'].where(df_sim['Battery_Power_kW'] > 0, 0).sum() * interval_hours,
+        'total_energy_charged': abs(df_sim['Battery_Power_kW'].where(df_sim['Battery_Power_kW'] < 0, 0).sum()) * interval_hours,
         'average_soc': df_sim['Battery_SOC_Percent'].mean(),
         'min_soc': df_sim['Battery_SOC_Percent'].min(),
         'max_soc': df_sim['Battery_SOC_Percent'].max(),
@@ -4506,10 +4544,10 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
                 # Calculate energy required to shave this day's peak to monthly target
                 if net_peak <= monthly_target * 1.05:  # Successful day
                     # Energy that was successfully shaved (based on actual peak reduction)
-                    energy_shaved = row['Peak_Reduction'] * 0.25  # Convert kW to kWh (15-min intervals)
+                    energy_shaved = row['Peak_Reduction'] * interval_hours  # Convert kW to kWh using dynamic interval
                 else:  # Failed day
                     # Energy that would be needed to reach monthly target
-                    energy_needed = (original_peak - monthly_target) * 0.25
+                    energy_needed = (original_peak - monthly_target) * interval_hours
                     energy_shaved = energy_needed
                 
                 daily_analysis_energy.loc[idx, 'Daily_Energy_Required_kWh'] = energy_shaved
@@ -4521,7 +4559,7 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
         df_sim_md_peak = df_sim[df_sim.index.to_series().apply(is_md_peak_period_for_effectiveness)]
         if len(df_sim_md_peak) > 0:
             daily_battery_discharge = df_sim_md_peak.groupby(df_sim_md_peak.index.date).agg({
-                'Battery_Power_kW': lambda x: (x.clip(lower=0) * 0.25).sum()  # Only positive (discharge) * 15-min intervals
+                'Battery_Power_kW': lambda x: (x.clip(lower=0) * interval_hours).sum()  # Only positive (discharge) using dynamic interval
             }).reset_index()
             daily_battery_discharge.columns = ['Date', 'Daily_Battery_Discharge_kWh']
             
@@ -6114,19 +6152,24 @@ def _create_enhanced_battery_table(df_sim, selected_tariff=None, holidays=None):
     return pd.DataFrame(enhanced_columns)
 
 
-def _create_daily_summary_table(df_sim, selected_tariff=None):
+def _create_daily_summary_table(df_sim, selected_tariff=None, interval_hours=None):
     """
     Create revised daily summary of battery performance with RP4 tariff-aware peak events analysis.
     
     Args:
         df_sim: Simulation dataframe with battery operation data
         selected_tariff: Selected tariff configuration for RP4 tariff-aware analysis
+        interval_hours: Time interval in hours (if None, will be detected dynamically)
         
     Returns:
         pd.DataFrame: Daily performance summary with RP4 tariff-aware peak events analysis
     """
     if df_sim.empty:
         return pd.DataFrame()
+    
+    # Get dynamic interval hours if not provided
+    if interval_hours is None:
+        interval_hours = _get_dynamic_interval_hours(df_sim)
     
     # Determine tariff type for RP4 tariff-aware analysis
     is_tou_tariff = False
@@ -6207,11 +6250,11 @@ def _create_daily_summary_table(df_sim, selected_tariff=None):
         
         # 4. Total Energy Charge (kWh)
         charging_intervals = day_data[day_data['Battery_Power_kW'] < 0]
-        total_energy_charge_kwh = abs(charging_intervals['Battery_Power_kW']).sum() * 0.25  # Convert to kWh (15-min intervals)
+        total_energy_charge_kwh = abs(charging_intervals['Battery_Power_kW']).sum() * interval_hours  # Convert to kWh using dynamic interval
         
         # 5. Total Energy Discharge (kWh)
         discharging_intervals = day_data[day_data['Battery_Power_kW'] > 0]
-        total_energy_discharge_kwh = discharging_intervals['Battery_Power_kW'].sum() * 0.25  # Convert to kWh
+        total_energy_discharge_kwh = discharging_intervals['Battery_Power_kW'].sum() * interval_hours  # Convert to kWh using dynamic interval
         
         # 6. Target MD Shave (kW) - Maximum target shaving required during peak events
         if total_peak_events > 0:
@@ -6259,19 +6302,24 @@ def _create_daily_summary_table(df_sim, selected_tariff=None):
     return pd.DataFrame(daily_summary)
 
 
-def _create_monthly_summary_table(df_sim, selected_tariff=None):
+def _create_monthly_summary_table(df_sim, selected_tariff=None, interval_hours=None):
     """
     Create monthly summary of battery performance with MD shaving effectiveness.
     
     Args:
         df_sim: Simulation dataframe with battery operation data
         selected_tariff: Selected tariff configuration for cost calculations
+        interval_hours: Time interval in hours (if None, will be detected dynamically)
         
     Returns:
         pd.DataFrame: Monthly performance summary with cost calculations
     """
     if df_sim.empty:
         return pd.DataFrame()
+    
+    # Get dynamic interval hours if not provided
+    if interval_hours is None:
+        interval_hours = _get_dynamic_interval_hours(df_sim)
     
     # Extract month-year from index
     df_sim['YearMonth'] = df_sim.index.to_series().dt.to_period('M')
@@ -6331,8 +6379,8 @@ def _create_monthly_summary_table(df_sim, selected_tariff=None):
         charging_intervals = month_data[month_data['Battery_Power_kW'] < 0]
         discharging_intervals = month_data[month_data['Battery_Power_kW'] > 0]
         
-        total_energy_charge_kwh = abs(charging_intervals['Battery_Power_kW']).sum() * 0.25
-        total_energy_discharge_kwh = discharging_intervals['Battery_Power_kW'].sum() * 0.25
+        total_energy_charge_kwh = abs(charging_intervals['Battery_Power_kW']).sum() * interval_hours
+        total_energy_discharge_kwh = discharging_intervals['Battery_Power_kW'].sum() * interval_hours
         
         # Calculate charging cycles for this month
         total_energy_throughput_kwh = total_energy_charge_kwh + total_energy_discharge_kwh
@@ -6351,7 +6399,7 @@ def _create_monthly_summary_table(df_sim, selected_tariff=None):
         'Original_Demand': 'max',  # Maximum demand in the tariff-specific periods
         'Net_Demand_kW': 'max',    # Maximum net demand in the tariff-specific periods  
         'Monthly_Target': 'first',
-        'Battery_Power_kW': lambda x: (x > 0).sum() * 0.25,  # Total discharge hours
+        'Battery_Power_kW': lambda x: (x > 0).sum() * interval_hours,  # Total discharge hours using dynamic interval
         'Battery_SOC_Percent': 'mean'
     }).round(2)
     
@@ -6376,17 +6424,22 @@ def _create_monthly_summary_table(df_sim, selected_tariff=None):
     return result
 
 
-def _create_kpi_summary_table(simulation_results, df_sim):
+def _create_kpi_summary_table(simulation_results, df_sim, interval_hours=None):
     """
     Create comprehensive KPI summary table with battery performance metrics.
     
     Args:
         simulation_results: Dictionary containing simulation metrics
         df_sim: Simulation dataframe with battery operation data
+        interval_hours: Time interval in hours (if None, will be detected dynamically)
         
     Returns:
         pd.DataFrame: Key performance indicators table
     """
+    # Get dynamic interval hours if not provided
+    if interval_hours is None:
+        interval_hours = _get_dynamic_interval_hours(df_sim)
+        
     # Get battery capacity from session state or use default
     battery_capacity_kwh = 100  # Default fallback
     if hasattr(st.session_state, 'tabled_analysis_selected_battery'):
@@ -6410,7 +6463,7 @@ def _create_kpi_summary_table(simulation_results, df_sim):
             'Battery Utilization (%)'
         ],
         'Value': [
-            f"{_format_number_value(len(df_sim) * 0.25)} hours",
+            f"{_format_number_value(len(df_sim) * interval_hours)} hours",
             f"{_format_number_value(simulation_results.get('peak_reduction_kw', 0))} kW",
             f"{_format_number_value(simulation_results.get('success_rate_percent', 0))}%",
             f"{_format_number_value(simulation_results.get('total_energy_discharged', 0))} kWh",
@@ -6421,7 +6474,7 @@ def _create_kpi_summary_table(simulation_results, df_sim):
             f"{_format_number_value(simulation_results.get('max_soc', 0))}%",
             f"{_format_number_value(simulation_results.get('monthly_targets_count', 0))} months",
             f"{_format_number_value(simulation_results.get('v2_constraint_violations', 0))} intervals",
-            f"{_format_number_value(simulation_results.get('total_energy_discharged', 0) / max(len(df_sim) * 0.25 * battery_capacity_kwh, 1) * 100)}%"
+            f"{_format_number_value(simulation_results.get('total_energy_discharged', 0) / max(len(df_sim) * interval_hours * battery_capacity_kwh, 1) * 100)}%"
         ]
     }
     
@@ -6501,8 +6554,9 @@ def _display_battery_simulation_tables(df_sim, simulation_results, selected_tari
     with tab2:
         st.markdown("**Daily Performance Summary with RP4 Tariff-Aware Peak Events**")
         
-        # UPDATED: Pass selected_tariff to daily summary function
-        daily_data = _create_daily_summary_table(df_sim, selected_tariff)
+        # UPDATED: Pass selected_tariff and interval_hours to daily summary function
+        interval_hours = _get_dynamic_interval_hours(df_sim)
+        daily_data = _create_daily_summary_table(df_sim, selected_tariff, interval_hours)
         
         if len(daily_data) > 0:
             st.dataframe(daily_data, use_container_width=True)
@@ -6571,7 +6625,8 @@ def _display_battery_simulation_tables(df_sim, simulation_results, selected_tari
     
     with tab3:
         st.markdown("**Monthly Performance Summary**")
-        monthly_data = _create_monthly_summary_table(df_sim, selected_tariff)
+        interval_hours = _get_dynamic_interval_hours(df_sim)
+        monthly_data = _create_monthly_summary_table(df_sim, selected_tariff, interval_hours)
         
         if len(monthly_data) > 0:
             st.dataframe(monthly_data, use_container_width=True)
@@ -6619,7 +6674,8 @@ def _display_battery_simulation_tables(df_sim, simulation_results, selected_tari
     
     with tab4:
         st.markdown("**Key Performance Indicators**")
-        kpi_data = _create_kpi_summary_table(simulation_results, df_sim)
+        interval_hours = _get_dynamic_interval_hours(df_sim)
+        kpi_data = _create_kpi_summary_table(simulation_results, df_sim, interval_hours)
         st.dataframe(kpi_data, use_container_width=True, hide_index=True)
     
     with tab5:
