@@ -6281,9 +6281,19 @@ def _create_daily_summary_table(df_sim, selected_tariff=None, interval_hours=Non
         else:
             target_success = '✅'  # No peak events means success by default
         
-        # 10. Charging Cycles - Total energy throughput (charge + discharge) / usable battery capacity
+        # 10. CORRECTED Equivalent Full Cycles (EFC) - Throughput Method (Industry Standard)
+        # Step 1: Calculate total throughput (charge + discharge energy)
         total_energy_throughput_kwh = total_energy_charge_kwh + total_energy_discharge_kwh
-        charging_cycles = total_energy_throughput_kwh / battery_usable_capacity_kwh if battery_usable_capacity_kwh > 0 else 0
+        
+        # Step 2: Apply throughput method - EFC = Throughput ÷ (2 × Usable Capacity)
+        # This is the industry-standard method used for battery warranties
+        efc_throughput = total_energy_throughput_kwh / (2 * battery_usable_capacity_kwh) if battery_usable_capacity_kwh > 0 else 0
+        
+        # Alternative calculation (Discharge-Only Method) for reference:
+        # efc_discharge_only = total_energy_discharge_kwh / battery_usable_capacity_kwh if battery_usable_capacity_kwh > 0 else 0
+        
+        # Use throughput method as primary (industry default for warranties)
+        equivalent_full_cycles = efc_throughput
         
         # Append daily summary with proper formatting
         daily_summary.append({
@@ -6296,7 +6306,7 @@ def _create_daily_summary_table(df_sim, selected_tariff=None, interval_hours=Non
             'Actual MD Shave (kW)': _format_number_value(actual_md_shave_kw),
             'Variance MD Shave (kW)': _format_number_value(variance_md_shave_kw),
             'Target_Success': target_success,
-            'Charging Cycles': _format_number_value(charging_cycles)
+            'Equivalent Full Cycles (EFC)': _format_number_value(equivalent_full_cycles)  # CORRECTED: Now uses proper EFC formula
         })
     
     return pd.DataFrame(daily_summary)
@@ -6382,13 +6392,17 @@ def _create_monthly_summary_table(df_sim, selected_tariff=None, interval_hours=N
         total_energy_charge_kwh = abs(charging_intervals['Battery_Power_kW']).sum() * interval_hours
         total_energy_discharge_kwh = discharging_intervals['Battery_Power_kW'].sum() * interval_hours
         
-        # Calculate charging cycles for this month
+        # CORRECTED EFC calculation - Throughput Method (Industry Standard)
+        # Step 1: Calculate total throughput for this month
         total_energy_throughput_kwh = total_energy_charge_kwh + total_energy_discharge_kwh
-        charging_cycles = total_energy_throughput_kwh / battery_usable_capacity_kwh if battery_usable_capacity_kwh > 0 else 0
+        
+        # Step 2: Apply throughput method - EFC = Throughput ÷ (2 × Usable Capacity) 
+        # This matches battery manufacturer warranties and industry standards
+        equivalent_full_cycles = total_energy_throughput_kwh / (2 * battery_usable_capacity_kwh) if battery_usable_capacity_kwh > 0 else 0
         
         monthly_cycles_data.append({
             'period': period,
-            'charging_cycles': charging_cycles
+            'equivalent_full_cycles': equivalent_full_cycles  # CORRECTED: Now uses proper EFC formula
         })
     
     # Convert to DataFrame for easier merging
@@ -6408,9 +6422,9 @@ def _create_monthly_summary_table(df_sim, selected_tariff=None, interval_hours=N
     monthly_data['Success_Shaved_kW'] = (monthly_data['Original_Demand'] - monthly_data['Net_Demand_kW']).apply(lambda x: max(0, x))  # Max Original - Max Net per month
     monthly_data['Cost_Saving_RM'] = monthly_data['Success_Shaved_kW'] * md_rate_rm_per_kw
     
-    # Merge charging cycles data
+    # Merge EFC cycles data (corrected column name)
     monthly_data = monthly_data.join(cycles_df, how='left')
-    monthly_data['charging_cycles'] = monthly_data['charging_cycles'].fillna(0)
+    monthly_data['equivalent_full_cycles'] = monthly_data['equivalent_full_cycles'].fillna(0)
     
     # Format the results with proper number formatting
     result = pd.DataFrame({
@@ -6418,7 +6432,7 @@ def _create_monthly_summary_table(df_sim, selected_tariff=None, interval_hours=N
         f'{tariff_label} MD Excess (kW)': [_format_number_value(x) for x in monthly_data['MD_Excess_kW']],
         'Success Shaved (kW)': [_format_number_value(x) for x in monthly_data['Success_Shaved_kW']],
         'Cost Saving (RM)': [_format_rm_value(x) for x in monthly_data['Cost_Saving_RM']],
-        'Total Charging Cycles': [_format_number_value(x) for x in monthly_data['charging_cycles']]
+        'Total EFC': [_format_number_value(x) for x in monthly_data['equivalent_full_cycles']]  # CORRECTED: Updated column name and reference
     })
     
     return result
@@ -6566,18 +6580,18 @@ def _display_battery_simulation_tables(df_sim, simulation_results, selected_tari
             
             # Extract numeric values from formatted data for calculations
             peak_events_values = daily_data['Total Peak Events'].apply(lambda x: float(x.replace(',', '')) if isinstance(x, str) else x)
-            charging_cycle_values = daily_data['Charging Cycles'].apply(lambda x: float(x.replace(',', '')) if isinstance(x, str) else x)
+            efc_values = daily_data['Equivalent Full Cycles (EFC)'].apply(lambda x: float(x.replace(',', '')) if isinstance(x, str) else x)
             
             total_peak_events = peak_events_values.sum()
             successful_days = len(daily_data[daily_data['Target_Success'] == '✅'])
             total_days = len(daily_data)
             success_rate = (successful_days / total_days * 100) if total_days > 0 else 0
-            total_charging_cycles = charging_cycle_values.sum()
+            total_efc = efc_values.sum()
             
             col1.metric("Total Peak Events", _format_number_value(total_peak_events))
             col2.metric("Success Rate", f"{_format_number_value(success_rate)}%", f"{successful_days}/{total_days} days")
-            col3.metric("Total Charging Cycles", _format_number_value(total_charging_cycles))
-            col4.metric("Avg Cycles/Day", _format_number_value(total_charging_cycles/total_days) if total_days > 0 else "0.00")
+            col3.metric("Total EFC", _format_number_value(total_efc))
+            col4.metric("Avg EFC/Day", _format_number_value(total_efc/total_days) if total_days > 0 else "0.00")
             
             # Add explanation
             tariff_type = "TOU" if (selected_tariff and ('tou' in selected_tariff.get('Tariff', '').lower() or selected_tariff.get('Type', '').lower() == 'tou')) else "General"
@@ -6609,11 +6623,11 @@ def _display_battery_simulation_tables(df_sim, simulation_results, selected_tari
             - **MD Excess**: Maximum demand above monthly target during peak events only
             - **Target Success**: ✅ if maximum net demand during peak events ≤ monthly target (±5% tolerance)
             
-            **Energy & Charging Cycle Calculations:**
+            **Energy & EFC (Equivalent Full Cycles) Calculations:**
             - **Battery Configuration**: {battery_info}
-            - **Energy Conversion**: 15-minute intervals × 0.25 conversion factor
-            - **Charging Cycles**: (Total Charge kWh + Total Discharge kWh) ÷ Usable Battery Capacity
-            - **Fractional Cycles**: Values can be less than 1.0 (e.g., 0.25 = quarter cycle)
+            - **Energy Conversion**: Dynamic interval detection for accurate kWh conversion
+            - **EFC Formula**: (Total Charge kWh + Total Discharge kWh) ÷ (2 × Usable Battery Capacity) - Industry Standard Throughput Method
+            - **Fractional EFC**: Values can be less than 1.0 (e.g., 0.42 = 42% of a full cycle per day)
             
             **Daily Analysis Scope:**
             - Charge/Discharge energies sum all intervals for the entire day (24/7)
