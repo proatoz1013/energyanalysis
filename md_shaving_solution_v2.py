@@ -549,10 +549,10 @@ def build_daily_simulator_structure(df, threshold_kw, clusters_df, selected_tari
             c_rate_power_limit = battery_capacity_kwh * c_rate
             
             # SOC-based derating (power reduces at extreme SOC levels)
-            if current_soc_percent > 90:
+            if current_soc_percent > 95:
                 soc_factor = 0.8  # Reduce power at high SOC
-            elif current_soc_percent < 20:
-                soc_factor = 0.7  # Reduce power at low SOC
+            elif current_soc_percent < 5:
+                soc_factor = 0.7  # Reduce power at low SOC (5% minimum safety limit)
             else:
                 soc_factor = 1.0  # Full power in normal SOC range
             
@@ -1960,8 +1960,8 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
             # Default battery parameters for clustering (can be customized)
             battery_params_cluster = {
                 'unit_energy_kwh': 100,  # Default 100 kWh battery
-                'soc_min': 20.0,
-                'soc_max': 100.0,
+                'soc_min': 5.0,  # Updated to 5% minimum safety SOC
+                'soc_max': 95.0,  # Updated to 95% maximum SOC
                 'efficiency': 0.95,
                 'charge_power_limit_kw': 100  # Increased to 100 kW for more flexible clustering
             }
@@ -2556,8 +2556,8 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                         'efficiency': 0.95,
                         'round_trip_efficiency': 95.0,  # Percentage
                         'c_rate': battery_spec.get('c_rate', 1.0),
-                        'min_soc': 20.0,
-                        'max_soc': 100.0,
+                        'min_soc': 5.0,  # Updated to 5% minimum safety SOC
+                        'max_soc': 95.0,  # Updated to 95% maximum SOC
                         'depth_of_discharge': 80.0  # Max usable % of capacity
                     }
                     
@@ -3302,9 +3302,9 @@ def _display_tou_vs_general_comparison(results, selected_tariff=None):
         },
         {
             "Aspect": "Charging Strategy",
-            "General Tariff": "90% SOC target (Standard)",
-            "TOU Tariff": "95% SOC target (Enhanced)",
-            "TOU Advantage": "Higher readiness for peak periods"
+            "General Tariff": "95% SOC target (Standardized)",
+            "TOU Tariff": "95% SOC target (Standardized)",
+            "TOU Advantage": "Same target, but enhanced charging urgency logic"
         },
         {
             "Aspect": "Charging Windows",
@@ -3333,40 +3333,6 @@ def _display_tou_vs_general_comparison(results, selected_tariff=None):
 
 
 # Complex daily proactive charging function removed - replaced with simple SOC-based charging in main algorithm
-
-def _get_md_period_holiday_aware(timestamp, holidays=None):
-    """
-    Get MD period classification with holiday awareness.
-    
-    Args:
-        timestamp: Pandas timestamp
-        holidays: Set of holiday dates
-        
-    Returns:
-        str: Period classification with emoji
-    """
-    try:
-        from tariffs.peak_logic import get_malaysia_holidays, is_public_holiday
-        
-        if holidays is None:
-            year = timestamp.year
-            holidays = get_malaysia_holidays(year)
-        
-        # Check if it's a holiday
-        if is_public_holiday(timestamp, holidays):
-            return "🏖️ Holiday"
-            
-    except ImportError:
-        pass
-    
-    # Standard MD period check (2PM-10PM on weekdays)
-    is_weekday = timestamp.weekday() < 5
-    is_md_hours = 14 <= timestamp.hour < 22
-    
-    if is_weekday and is_md_hours:
-        return "🔴 Peak"
-    else:
-        return "🟢 Off-Peak"
 
 
 def is_md_window(timestamp, holidays=None):
@@ -3472,12 +3438,12 @@ def _compute_per_event_bess_dispatch(all_monthly_events, monthly_targets, select
         rates = selected_tariff.get('Rates', {})
         md_rate_rm_per_kw = rates.get('Capacity Rate', 0) + rates.get('Network Rate', 0)
     
-    # Battery system parameters
+    # Battery system parameters (updated to standardized 95%/5% SOC limits)
     rated_power_kw = battery_spec.get('power_kW', 0) * quantity
     capacity_kwh = battery_spec.get('energy_kWh', 0) * quantity
-    soc_min_percent = 20.0  # Default SOC limits
-    soc_max_percent = 100.0
-    ready_soc_percent = 80.0  # Starting SOC
+    soc_min_percent = 5.0   # Standardized 5% minimum safety SOC
+    soc_max_percent = 95.0  # Standardized 95% maximum SOC
+    ready_soc_percent = 80.0  # Starting SOC (within 5%-95% range)
     eta_charge = 0.95  # Charging efficiency
     eta_discharge = 0.95  # Discharging efficiency
     round_trip_efficiency = eta_charge * eta_discharge
@@ -4293,9 +4259,9 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
         secondary_y=True
     )
     
-    # Add horizontal line for minimum SOC warning
-    fig2.add_hline(y=20, line_dash="dot", line_color="red", 
-                   annotation_text="Low SOC Warning (20%)", secondary_y=False)
+    # Add horizontal line for minimum SOC warning (updated to 10% based on 5% safety limit)
+    fig2.add_hline(y=10, line_dash="dot", line_color="red", 
+                   annotation_text="Low SOC Warning (10% - 5% Safety Limit)", secondary_y=False)
     
     # Update axes
     fig2.update_xaxes(title_text="Time")
@@ -4396,11 +4362,11 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
         st.warning("⚠️ No MD peak period data found (weekdays 2-10 PM). Cannot calculate V2 MD-focused effectiveness.")
         return
     
-    # Categorize failure reasons with V2 context
+    # Categorize failure reasons with V2 context (updated for 5% minimum SOC safety limit)
     def categorize_failure_reason(row):
         if row['Success']:
             return 'Success'
-        elif row['Min_SOC'] < 20:
+        elif row['Min_SOC'] < 10:  # Updated from 20% to 10% (based on 5% safety limit)
             return 'Low SOC (Battery Depleted)'
         elif row['Max_Battery_Power'] < sizing['power_rating_kw'] * 0.9:
             return 'Insufficient Battery Power'
@@ -4668,10 +4634,10 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
         elif avg_utilization > 80:
             insights.append("🔥 **High Utilization**: Battery operating near maximum capacity for V2 monthly targets")
     
-    # Check for low SOC events
-    low_soc_events = len(df_sim[df_sim['Battery_SOC_Percent'] < 20])
+    # Check for low SOC events (updated to 10% warning threshold based on 5% safety limit)
+    low_soc_events = len(df_sim[df_sim['Battery_SOC_Percent'] < 10])
     if low_soc_events > 0:
-        insights.append(f"🔋 **Low SOC Warning**: {low_soc_events} intervals with SOC below 20% during V2 operation")
+        insights.append(f"🔋 **Low SOC Warning**: {low_soc_events} intervals with SOC below 10% during V2 operation (5% safety limit)")
     
     # Add insight about V2 methodology
     if len(monthly_targets) > 0:
@@ -4803,13 +4769,7 @@ def _create_v2_conditional_demand_line_with_dynamic_targets(fig, df, power_col, 
         else:
             # Fallback to closest available target
             month_period = timestamp.to_period('M')
-            # Fix pandas Series boolean evaluation error by using proper scalar check
-            available_periods = []
-            for t in target_series.index:
-                value = target_series.loc[t]
-                if not pd.isna(value):  # Check scalar value instead of Series
-                    available_periods.append(t.to_period('M'))
-            
+            available_periods = [t.to_period('M') for t in target_series.index if not pd.isna(target_series.loc[t])]
             if available_periods:
                 closest_period_timestamp = min(target_series.index, 
                                              key=lambda t: abs((timestamp - t).total_seconds()))
@@ -4981,16 +4941,16 @@ def _calculate_intelligent_charge_strategy_simple(current_soc_percent, tariff_pe
         charge_multiplier = 0.7
         tariff_consideration = 0.9  # Very strong tariff consideration
         md_constraint_priority = False
-    elif current_soc_percent <= 85:
-        # MAINTENANCE CHARGING: Conservative approach
+    elif current_soc_percent <= 95:
+        # MAINTENANCE CHARGING: Conservative approach (updated from 85% to 95%)
         urgency_level = 'maintenance_charging'
         charge_multiplier = 0.4
         tariff_consideration = 1.0  # Full tariff consideration
         md_constraint_priority = False
     else:
-        # HIGH SOC: Minimal charging to avoid overcharging
-        urgency_level = 'high_soc_protection'
-        charge_multiplier = 0.1  # Minimal charging only
+        # MAXIMUM SOC REACHED: No charging needed (updated for 95% limit)
+        urgency_level = 'max_soc_reached'
+        charge_multiplier = 0.0  # No charging above 95%
         tariff_consideration = 1.0  # Full tariff consideration
         md_constraint_priority = False
     
@@ -5075,11 +5035,13 @@ def _get_tariff_aware_discharge_strategy(tariff_type, current_tariff_period, cur
     # Calculate excess above target
     excess_above_target_kw = max(0, demand_power_kw - monthly_target_kw)
     
-    # Simple SOC-based discharge limits
-    if current_soc_percent <= 10:
-        soc_factor = 0.0  # No discharge at very low SOC
+    # Simple SOC-based discharge limits (updated for 5% minimum safety SOC)
+    if current_soc_percent <= 5:
+        soc_factor = 0.0  # No discharge at critical safety SOC (5% minimum)
+    elif current_soc_percent <= 15:
+        soc_factor = 0.3  # Very limited discharge near minimum SOC
     elif current_soc_percent <= 25:
-        soc_factor = 0.5  # Limited discharge at low SOC
+        soc_factor = 0.6  # Limited discharge at low SOC
     else:
         soc_factor = 1.0  # Full discharge capability
     
@@ -5316,7 +5278,7 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
             max_allowable_discharge = current_demand - monthly_target
             
             # Get current SOC for C-rate calculations
-            current_soc_kwh = soc[i-1] if i > 0 else usable_capacity * 0.8  # Start at 80% SOC
+            current_soc_kwh = soc[i-1] if i > 0 else usable_capacity * 0.80  # Start at 80% SOC (within 5%-95% range)
             current_soc_percent = (current_soc_kwh / usable_capacity) * 100
             
             # Get battery specifications with C-rate constraints
@@ -5339,9 +5301,10 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
                 max_discharge_power_c_rate  # C-rate constraint
             )
             
-            # Check if battery has enough energy
+            # Check if battery has enough energy (with 5% minimum SOC safety protection)
             available_energy = current_soc_kwh
-            max_discharge_energy = available_energy
+            min_soc_energy = usable_capacity * 0.05  # 5% minimum safety SOC
+            max_discharge_energy = max(0, available_energy - min_soc_energy)  # Don't discharge below 5%
             max_discharge_power = min(max_discharge_energy / interval_hours, required_discharge)
             
             actual_discharge = max(0, max_discharge_power)
@@ -5388,7 +5351,7 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
                 if tou_info['is_charging_window'] and tou_info['is_weekday']:
                     tou_charging_active = True
                     
-                    # TOU charging conditions based on urgency
+                    # TOU charging conditions based on urgency (standardized to 95% max SOC)
                     if tou_info['urgency_level'] == 'critical':
                         # CRITICAL: Must charge aggressively - less than 4 hours to MD window
                         should_charge = (soc_percentage < 95) and (current_demand < avg_demand * 1.2)
@@ -5398,16 +5361,16 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
                             tou_feedback_messages.append(f"🚨 CRITICAL TOU Charging: {tou_info['hours_until_md']:.1f}h until MD window, SOC: {soc_percentage:.1f}%")
                             
                     elif tou_info['urgency_level'] == 'high':
-                        # HIGH: Enhanced charging - 4-8 hours to MD window
-                        should_charge = (soc_percentage < 92) and (current_demand < avg_demand * 1.0)
+                        # HIGH: Enhanced charging - 4-8 hours to MD window (standardized to 95% max SOC)
+                        should_charge = (soc_percentage < 95) and (current_demand < avg_demand * 1.0)
                         charge_rate_factor = 0.6 * tou_info['charge_rate_multiplier']
                         
                         if i % 8 == 0:  # Log every 8 intervals
                             tou_feedback_messages.append(f"⚡ HIGH TOU Charging: {tou_info['hours_until_md']:.1f}h until MD window, SOC: {soc_percentage:.1f}%")
                             
                     else:
-                        # NORMAL: Standard overnight charging
-                        should_charge = (soc_percentage < 85) and (current_demand < avg_demand * 0.8)
+                        # NORMAL: Standard overnight charging (standardized to 95% max SOC)
+                        should_charge = (soc_percentage < 95) and (current_demand < avg_demand * 0.8)
                         charge_rate_factor = 0.5
                         
                         if i % 16 == 0:  # Log every 16 intervals
@@ -5418,8 +5381,8 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
                     monthly_target = df_sim['Monthly_Target'].iloc[i]
                     is_md_period = is_md_window(current_time, holidays)
                     
-                    # Standard SOC-based charging with tariff awareness
-                    if soc_percentage < 30:  # Critical SOC
+                    # Standard SOC-based charging with tariff awareness (updated for 5% min safety SOC)
+                    if soc_percentage < 10:  # Very low SOC - emergency charging (updated from 30%)
                         should_charge = current_demand < avg_demand * 0.9
                         charge_rate_factor = 0.8
                     elif soc_percentage < 60:  # Low SOC
@@ -5429,7 +5392,7 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
                         else:
                             should_charge = current_demand < demand_25th * 1.2
                             charge_rate_factor = 0.4
-                    elif soc_percentage < 75:  # Reduced target for TOU (was 90% for general tariffs)
+                    elif soc_percentage < 95:  # Normal operation (standardized to 95% max SOC)
                         if not is_md_period:
                             should_charge = current_demand < avg_demand * 0.7
                             charge_rate_factor = 0.5
@@ -5442,8 +5405,8 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
                 monthly_target = df_sim['Monthly_Target'].iloc[i]
                 is_md_period = is_md_window(current_time, holidays)
                 
-                # Critical SOC - charge aggressively regardless of period
-                if soc_percentage < 30:
+                # Very low SOC - charge aggressively regardless of period (updated for 5% min safety SOC)
+                if soc_percentage < 10:  # Updated from 30% to 10% for emergency charging only
                     should_charge = current_demand < avg_demand * 0.9  # Lenient threshold
                     charge_rate_factor = 0.8  # Higher charge rate
                 # Low SOC - moderate charging with tariff awareness
@@ -5455,7 +5418,7 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
                         should_charge = current_demand < demand_25th * 1.2
                         charge_rate_factor = 0.4
                 # Normal SOC - conservative charging with full tariff awareness
-                elif soc_percentage < 90:  # Standard 90% target for general tariffs
+                elif soc_percentage < 95:  # Standardized 95% target for both TOU and General tariffs
                     if not is_md_period:  # ✅ RP4 Off-peak periods
                         should_charge = current_demand < avg_demand * 0.7
                         charge_rate_factor = 0.5
@@ -5544,8 +5507,8 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
                 # No charging conditions met
                 net_demand.iloc[i] = current_demand
         
-        # Ensure SOC stays within limits
-        soc[i] = max(0, min(soc[i], usable_capacity))
+        # Ensure SOC stays within 5%-95% limits for standardized battery protection
+        soc[i] = max(usable_capacity * 0.05, min(soc[i], usable_capacity * 0.95))
         soc_percent[i] = (soc[i] / usable_capacity) * 100
     
     # Add V2 simulation results to dataframe
@@ -5794,76 +5757,6 @@ def _get_enhanced_shaving_success(row):
         return '🔴 Failed - Minimal Impact'
 
 
-def _calculate_target_shave_kw_holiday_aware(row, holidays=None):
-    """
-    Calculate Target_Shave_kW with holiday awareness.
-    
-    Args:
-        row: DataFrame row with simulation data
-        holidays: Set of holiday dates
-        
-    Returns:
-        float: Target shaving amount in kW (0 during holidays or off-peak periods)
-    """
-    try:
-        from tariffs.peak_logic import get_malaysia_holidays, is_public_holiday
-        
-        timestamp = row.name
-        original_demand = row['Original_Demand']
-        monthly_target = row['Monthly_Target']
-        
-        if holidays is None:
-            year = timestamp.year
-            holidays = get_malaysia_holidays(year)
-        
-        # Check if it's a holiday first - no MD charges on holidays
-        if is_public_holiday(timestamp, holidays):
-            return 0.0
-            
-    except ImportError:
-        pass
-    
-    # Standard MD period check (2PM-10PM on weekdays)
-    is_md_period = (timestamp.weekday() < 5 and 14 <= timestamp.hour < 22)
-    
-    # Only calculate target shaving during MD periods and non-holidays
-    if is_md_period:
-        return max(0, original_demand - monthly_target)
-    else:
-        return 0.0
-
-
-def _get_enhanced_shaving_success_holiday_aware(row, holidays=None):
-    """
-    Get enhanced shaving success status with holiday awareness.
-    
-    Args:
-        row: DataFrame row with simulation data
-        holidays: Set of holiday dates
-        
-    Returns:
-        str: Success status with emoji and description
-    """
-    try:
-        from tariffs.peak_logic import get_malaysia_holidays, is_public_holiday
-        
-        timestamp = row.name
-        
-        if holidays is None:
-            year = timestamp.year
-            holidays = get_malaysia_holidays(year)
-        
-        # Check if it's a holiday first
-        if is_public_holiday(timestamp, holidays):
-            return '🏖️ Holiday - No MD'
-            
-    except ImportError:
-        pass
-    
-    # Use the existing enhanced shaving success logic for non-holidays
-    return _get_enhanced_shaving_success(row)
-
-
 # ===================================================================================================
 # NUMBER FORMATTING UTILITIES
 # ===================================================================================================
@@ -5898,13 +5791,84 @@ def _format_number_value(value):
 # V2 TABLE VISUALIZATION FUNCTIONS - Enhanced Battery Simulation Tables
 # ===================================================================================================
 
-def _create_enhanced_battery_table(df_sim, holidays=None):
+def _calculate_md_aware_target_violation(row, selected_tariff=None):
+    """
+    Calculate target violation considering MD recording periods and tariff type.
+    
+    Args:
+        row: DataFrame row containing simulation data
+        selected_tariff: Selected tariff configuration
+        
+    Returns:
+        str: Target violation status considering MD periods
+    """
+    net_demand = row.get('Net_Demand_kW', 0)
+    monthly_target = row.get('Monthly_Target', 0)
+    md_period = row.get('MD_Period', '')
+    
+    # Determine tariff type
+    tariff_type = 'General'  # Default
+    if selected_tariff:
+        tariff_name = selected_tariff.get('Tariff', '').lower()
+        tariff_type_field = selected_tariff.get('Type', '').lower()
+        is_tou_tariff = tariff_type_field == 'tou' or 'tou' in tariff_name
+        if is_tou_tariff:
+            tariff_type = 'TOU'
+    
+    # Calculate violation based on tariff type and MD period
+    if tariff_type == 'TOU':
+        # TOU: Only violations during Peak periods matter (MD recording periods)
+        if '🔴 Peak' in md_period:
+            return '❌' if net_demand > monthly_target else '✅'
+        else:
+            return '⚪ Not Applicable'  # Off-peak periods don't affect MD
+    else:
+        # General: All violations matter (24/7 MD recording)
+        return '❌' if net_demand > monthly_target else '✅'
+
+
+def _calculate_target_shave_kw_holiday_aware(row, holidays=None):
+    """
+    Calculate target shave amount (kW) considering MD recording periods, tariff type, and holidays.
+    
+    This function determines how much power needs to be shaved during MD recording windows only.
+    MD charges only apply during specific periods, so shaving is only needed during those times.
+    
+    Args:
+        row: DataFrame row containing simulation data
+        holidays: Set of holiday dates (optional)
+        
+    Returns:
+        float: Target shave amount in kW (0.0 if outside MD window or on holidays)
+    """
+    # Get required data from row
+    original_demand = row.get('Original_Demand', 0)
+    monthly_target = row.get('Monthly_Target', 0)
+    
+    # Get timestamp from row index
+    timestamp = row.name
+    
+    # Check if this is a holiday
+    if holidays and timestamp.date() in holidays:
+        return 0.0  # No MD charges on holidays
+    
+    # Check if this is within MD recording window (2PM-10PM weekdays)
+    is_md_period = (timestamp.weekday() < 5 and 14 <= timestamp.hour < 22)
+    
+    if not is_md_period:
+        return 0.0  # No MD charges outside recording window
+    
+    # Calculate shave amount only during MD recording periods
+    return max(0.0, original_demand - monthly_target)
+
+def _create_enhanced_battery_table(df_sim, selected_tariff=None, holidays=None):
     """
     Create enhanced table with health and C-rate information for time-series analysis.
     
     Args:
         df_sim: Simulation dataframe with battery operation data
-        holidays: Set of holiday dates to exclude from MD periods
+        selected_tariff: Selected tariff configuration for MD-aware analysis
+        holidays: Set of holiday dates for MD-aware calculations
         
     Returns:
         pd.DataFrame: Enhanced table with status indicators and detailed battery metrics
@@ -5926,22 +5890,21 @@ def _create_enhanced_battery_table(df_sim, holidays=None):
         'Charge (+ve)/Discharge (-ve) kW': df_sim['Battery_Power_kW'].apply(
             lambda x: f"+{abs(x):.1f}" if x < 0 else f"-{x:.1f}" if x > 0 else "0.0"
         ),
-        # NEW COLUMN 2: Target Shave (kW) - Amount that needs to be shaved during MD window only (holiday-aware)
+        # NEW COLUMN 2: Target Shave (kW) - Amount that needs to be shaved during MD window only
         'Target_Shave_kW': df_sim.apply(
-            lambda row: _calculate_target_shave_kw_holiday_aware(row, holidays),
-            axis=1
+            lambda row: _calculate_target_shave_kw_holiday_aware(row, holidays), axis=1
         ).round(1),
         # NEW COLUMN 3: Actual Shave (kW) - Renamed from Peak_Shaved_kW
         'Actual_Shave_kW': df_sim['Peak_Shaved'].round(1),
-        'Shaving_Success': df_sim.apply(lambda row: _get_enhanced_shaving_success_holiday_aware(row, holidays), axis=1),
-        'MD_Period': df_sim.index.map(lambda x: _get_md_period_holiday_aware(x, holidays)),
-        'Target_Violation': (df_sim['Net_Demand_kW'] > df_sim['Monthly_Target']).map({True: '❌', False: '✅'})
+        'Shaving_Success': df_sim.apply(_get_enhanced_shaving_success, axis=1),
+        'MD_Period': df_sim.index.map(lambda x: '🔴 Peak' if (x.weekday() < 5 and 14 <= x.hour < 22) else '🟢 Off-Peak'),
+        'Target_Violation': df_sim.apply(lambda row: _calculate_md_aware_target_violation(row, selected_tariff), axis=1)
     }
     
     return pd.DataFrame(enhanced_columns)
 
 
-def _create_daily_summary_table(df_sim, selected_tariff=None, holidays=None):
+def _create_daily_summary_table(df_sim, selected_tariff=None):
     """
     Create revised daily summary of battery performance with RP4 tariff-aware peak events analysis.
     
@@ -5978,12 +5941,12 @@ def _create_daily_summary_table(df_sim, selected_tariff=None, holidays=None):
             pass
         battery_usable_capacity_kwh = total_capacity * (depth_of_discharge / 100)
     
-    # RP4 Tariff-Aware Peak Events Detection Logic with Holiday Awareness
+    # RP4 Tariff-Aware Peak Events Detection Logic
     def is_peak_event_rp4(row):
         """
         Determine if this interval contains a peak event based on RP4 tariff logic:
-        - TOU Tariff: Peak events only during MD recording periods (2PM-10PM weekdays, excluding holidays)
-        - General Tariff: Peak events anytime (24/7 MD recording, excluding holidays)
+        - TOU Tariff: Peak events only during MD recording periods (2PM-10PM weekdays)
+        - General Tariff: Peak events anytime (24/7 MD recording)
         """
         timestamp = row.name
         original_demand = row['Original_Demand']
@@ -5993,29 +5956,12 @@ def _create_daily_summary_table(df_sim, selected_tariff=None, holidays=None):
         if original_demand <= monthly_target:
             return False
         
-        # Check for holidays first
-        try:
-            from tariffs.peak_logic import get_malaysia_holidays, is_public_holiday
-            
-            if holidays is None:
-                year = timestamp.year
-                holiday_set = get_malaysia_holidays(year)
-            else:
-                holiday_set = holidays
-            
-            # If it's a holiday, no peak events (no MD charges on holidays)
-            if is_public_holiday(timestamp, holiday_set):
-                return False
-                
-        except ImportError:
-            pass
-        
         # Apply RP4 tariff-specific logic
         if is_tou_tariff:
-            # TOU: Only count as peak event during MD recording window (2PM-10PM weekdays, excluding holidays)
+            # TOU: Only count as peak event during MD recording window (2PM-10PM weekdays)
             return (timestamp.weekday() < 5 and 14 <= timestamp.hour < 22)
         else:
-            # General: Any time above target is a peak event (24/7 MD recording, excluding holidays)
+            # General: Any time above target is a peak event (24/7 MD recording)
             return True
     
     # Add peak event classification to dataframe
@@ -6102,7 +6048,7 @@ def _create_daily_summary_table(df_sim, selected_tariff=None, holidays=None):
     return pd.DataFrame(daily_summary)
 
 
-def _create_monthly_summary_table(df_sim, selected_tariff=None, holidays=None):
+def _create_monthly_summary_table(df_sim, selected_tariff=None):
     """
     Create monthly summary of battery performance with MD shaving effectiveness.
     
@@ -6279,7 +6225,7 @@ def _display_battery_simulation_tables(df_sim, simulation_results, selected_tari
         df_sim: Simulation dataframe with battery operation data
         simulation_results: Dictionary containing simulation metrics
         selected_tariff: Selected tariff configuration for cost calculations
-        holidays: Set of holiday dates for holiday-aware calculations
+        holidays: Set of holiday dates for MD-aware calculations
     """
     st.markdown("##### 1️⃣.1 📋 Battery Simulation Data Tables")
     
@@ -6318,7 +6264,7 @@ def _display_battery_simulation_tables(df_sim, simulation_results, selected_tari
             st.info(f"📊 **All Results**: Showing {len(df_sim):,} records (no chart filter applied)")
         
         # Create table data from the filtered df_sim
-        table_data = _create_enhanced_battery_table(df_sim, holidays)
+        table_data = _create_enhanced_battery_table(df_sim, selected_tariff, holidays)
         
         # Display data
         st.dataframe(table_data, use_container_width=True, height=400)
@@ -6345,7 +6291,7 @@ def _display_battery_simulation_tables(df_sim, simulation_results, selected_tari
         st.markdown("**Daily Performance Summary with RP4 Tariff-Aware Peak Events**")
         
         # UPDATED: Pass selected_tariff to daily summary function
-        daily_data = _create_daily_summary_table(df_sim, selected_tariff, holidays)
+        daily_data = _create_daily_summary_table(df_sim, selected_tariff)
         
         if len(daily_data) > 0:
             st.dataframe(daily_data, use_container_width=True)
@@ -6414,7 +6360,7 @@ def _display_battery_simulation_tables(df_sim, simulation_results, selected_tari
     
     with tab3:
         st.markdown("**Monthly Performance Summary**")
-        monthly_data = _create_monthly_summary_table(df_sim, selected_tariff, holidays)
+        monthly_data = _create_monthly_summary_table(df_sim, selected_tariff)
         
         if len(monthly_data) > 0:
             st.dataframe(monthly_data, use_container_width=True)
@@ -6483,7 +6429,7 @@ def _display_battery_simulation_tables(df_sim, simulation_results, selected_tari
             mask = (df_sim.index.date >= date_range[0]) & (df_sim.index.date <= date_range[1])
             mask &= (df_sim['Battery_SOC_Percent'] >= soc_range[0]) & (df_sim['Battery_SOC_Percent'] <= soc_range[1])
             
-            filtered_advanced = _create_enhanced_battery_table(df_sim[mask], holidays)
+            filtered_advanced = _create_enhanced_battery_table(df_sim[mask], selected_tariff, holidays)
             st.dataframe(filtered_advanced, use_container_width=True, height=400)
         else:
             st.info("Please select a valid date range to view filtered data.")

@@ -1907,8 +1907,8 @@ def _simulate_battery_operation(df, power_col, target_demand, battery_sizing, ba
             should_charge = False
             charge_rate_factor = 0.3  # Default conservative rate
             
-            # Critical SOC - charge aggressively
-            if soc_percentage < 30:
+            # Very low SOC - charge aggressively (updated to 5% safety limit)
+            if soc_percentage < 10:  # Updated from 30% to 10% for emergency charging only
                 should_charge = current_demand < avg_demand * 0.9  # Lenient threshold
                 charge_rate_factor = 0.8  # Higher charge rate
             # Low SOC - moderate charging
@@ -1919,8 +1919,8 @@ def _simulate_battery_operation(df, power_col, target_demand, battery_sizing, ba
                 else:  # Peak hours - more selective
                     should_charge = current_demand < demand_25th * 1.2
                     charge_rate_factor = 0.4
-            # Normal SOC - conservative charging
-            elif soc_percentage < 90:  # Increased from 90% (was implicit at 95%)
+            # Normal SOC - conservative charging (standardized to 95% max SOC)
+            elif soc_percentage < 95:  # Standardized 95% max SOC for both TOU and General tariffs
                 if hour >= 22 or hour < 8:  # Off-peak hours
                     should_charge = current_demand < avg_demand * 0.7
                     charge_rate_factor = 0.5
@@ -2466,7 +2466,7 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None, s
     def categorize_failure_reason(row):
         if row['Success']:
             return 'Success'
-        elif row['Min_SOC'] < 20:
+        elif row['Min_SOC'] < 10:
             return 'Low SOC (Battery Depleted)'
         elif row['Max_Battery_Power'] < sizing['power_rating_kw'] * 0.9:
             return 'Insufficient Battery Power'
@@ -2817,7 +2817,7 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None, s
     # Check for low SOC events
     low_soc_events = len(df_sim[df_sim['Battery_SOC_Percent'] < 20])
     if low_soc_events > 0:
-        insights.append(f"🔋 **Low SOC Warning**: {low_soc_events} intervals with SOC below 20%")
+        insights.append(f"🔋 **Low SOC Warning**: {low_soc_events} intervals with SOC below 10%")
     
     # Add insight about data source alignment
     if len(daily_analysis) > 0:

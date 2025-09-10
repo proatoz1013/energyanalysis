@@ -414,8 +414,8 @@ class BatteryAlgorithms:
         current_time = df_sim.index[i]
         hour = current_time.hour
         
-        # Check if battery needs charging (lower threshold for more charging opportunities)
-        if previous_soc >= usable_capacity * 0.90:  # Reduced from 95% to 90%
+        # Check if battery needs charging (updated to 95% max SOC)
+        if previous_soc >= usable_capacity * 0.95:  # Standardized 95% max SOC
             return 0  # Battery is sufficiently charged
         
         # Enhanced charging time windows - allow more charging opportunities
@@ -441,8 +441,8 @@ class BatteryAlgorithms:
         # Determine charging conditions based on demand level and SOC urgency
         soc_percentage = (previous_soc / usable_capacity) * 100
         
-        # Critical SOC - charge aggressively even during peak hours
-        if soc_percentage < 30:
+        # Very low SOC - charge aggressively even during peak hours (updated to 5% safety limit)
+        if soc_percentage < 10:  # Updated from 30% - emergency charging only
             charging_threshold = demand_percentile_50  # Allow charging up to median demand
             charge_rate_factor = 1.0  # Use full power if needed
         # Low SOC - charge during off-peak and low demand
@@ -477,8 +477,8 @@ class BatteryAlgorithms:
             (usable_capacity * 0.95 - previous_soc) / interval_hours / efficiency  # Don't exceed 95% SOC
         )
         
-        # Boost charging if SOC is critically low
-        if soc_percentage < 20:
+        # Boost charging if SOC is critically low (updated to 5% safety limit)
+        if soc_percentage < 10:  # Updated from 20% - emergency boost only
             base_charge_power = min(base_charge_power * 1.2, max_power)  # 20% boost for critical SOC
         
         return max(0, base_charge_power)
@@ -495,7 +495,7 @@ class BatteryAlgorithms:
         - Uses dynamic demand thresholds for optimal charging decisions
         """
         
-        # Check if battery needs charging
+        # Check if battery needs charging (standardized 95% max SOC)
         if previous_soc >= usable_capacity * 0.95:
             return 0  # Battery is sufficiently charged
         
@@ -519,8 +519,8 @@ class BatteryAlgorithms:
         should_charge = False
         charge_rate_factor = 0.3  # Default conservative rate
         
-        # Critical SOC - charge aggressively even during peak hours if needed
-        if soc_percentage < 20:
+        # Very low SOC - charge aggressively even during peak hours (updated to 5% safety limit)
+        if soc_percentage < 10:  # Updated from 20% - emergency charging only
             should_charge = current_demand < avg_demand * 1.0  # Very lenient threshold
             charge_rate_factor = 0.9  # High charge rate
             
@@ -533,8 +533,8 @@ class BatteryAlgorithms:
                 should_charge = current_demand < demand_25th * 0.9
                 charge_rate_factor = 0.3
                 
-        # Normal SOC - conservative charging, prioritize off-peak
-        elif soc_percentage < 80:
+        # Normal SOC - conservative charging, prioritize off-peak (standardized 95% max SOC)
+        elif soc_percentage < 95:  # Updated from 80% to 95%
             if not is_peak_period:  # Off-peak hours
                 should_charge = current_demand < avg_demand * 0.75
                 charge_rate_factor = 0.6
@@ -542,11 +542,9 @@ class BatteryAlgorithms:
                 should_charge = current_demand < demand_25th * 0.8
                 charge_rate_factor = 0.2
         
-        # High SOC - minimal charging, off-peak only
+        # High SOC - minimal charging, off-peak only (removed - now handled by 95% limit check above)
         else:
-            if not is_peak_period and current_demand < demand_25th * 0.7:
-                should_charge = True
-                charge_rate_factor = 0.3
+            return 0  # No charging above 95% SOC
         
         if not should_charge:
             return 0
@@ -558,7 +556,7 @@ class BatteryAlgorithms:
         charge_power = min(
             max_power * charge_rate_factor,  # Dynamic charging rate
             max_charge_energy / interval_hours,  # Energy constraint
-            remaining_capacity / interval_hours / efficiency  # Don't exceed 95% SOC
+            (usable_capacity * 0.95 - previous_soc) / interval_hours / efficiency  # Don't exceed 95% SOC
         )
         
         return max(0, charge_power)
