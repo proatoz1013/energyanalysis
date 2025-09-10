@@ -3975,49 +3975,58 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
                     del st.session_state.specific_day_filter
                 st.rerun()
         
-        # ===== LEVEL 2: SPECIFIC DAY FILTER (Only show when Level 1 is not "All Days") =====
+        # ===== LEVEL 2: SPECIFIC DAY FILTER (Always show regardless of Level 1 selection) =====
         level2_days = []
-        if selected_filter != "All Days":
-            # Get available days based on Level 1 filter
-            if selected_filter == "All Success Days":
-                # Updated patterns to match comprehensive battery status categories
-                success_patterns = '✅ Complete Success|✅ MD: Complete Success|✅ MD: No Action Needed|✅ Off-Peak: Ready|🟢 Off-Peak: Good Readiness|🟢 Off-Peak Period'
-                success_days = df_sim[df_sim['Shaving_Success'].str.contains(success_patterns, na=False)].index.date
-                level2_days = sorted(set(success_days))
-            elif selected_filter == "All Partial Days":
-                # Updated patterns to match comprehensive battery status categories  
-                partial_patterns = '🟡 Good Partial|🟡 MD: Good Partial|🟠 Fair Partial|🟠 MD: Fair Partial|🔶 Poor Partial|🔶 MD: Poor Partial|🟡 Off-Peak: Fair Readiness'
-                partial_days = df_sim[df_sim['Shaving_Success'].str.contains(partial_patterns, na=False)].index.date
-                level2_days = sorted(set(partial_days))
-            elif selected_filter == "All Failed Days":
-                # Updated patterns to match comprehensive battery status categories
-                failed_patterns = '🔴 Failed|🔴 MD: Failed|🔴 MD: Minimal Impact|🔴 Off-Peak: Critical SOC|🟠 Off-Peak: SOC Warning'
-                failed_days = df_sim[df_sim['Shaving_Success'].str.contains(failed_patterns, na=False)].index.date
-                level2_days = sorted(set(failed_days))
+        
+        # Get available days based on Level 1 filter
+        if selected_filter == "All Success Days":
+            # Updated patterns to match comprehensive battery status categories
+            success_patterns = '✅ Complete Success|✅ MD: Complete Success|✅ MD: No Action Needed|✅ Off-Peak: Ready|🟢 Off-Peak: Good Readiness|🟢 Off-Peak Period'
+            success_days = df_sim[df_sim['Shaving_Success'].str.contains(success_patterns, na=False)].index.date
+            level2_days = sorted(set(success_days))
+        elif selected_filter == "All Partial Days":
+            # Updated patterns to match comprehensive battery status categories  
+            partial_patterns = '🟡 Good Partial|🟡 MD: Good Partial|🟠 Fair Partial|🟠 MD: Fair Partial|🔶 Poor Partial|🔶 MD: Poor Partial|🟡 Off-Peak: Fair Readiness'
+            partial_days = df_sim[df_sim['Shaving_Success'].str.contains(partial_patterns, na=False)].index.date
+            level2_days = sorted(set(partial_days))
+        elif selected_filter == "All Failed Days":
+            # Updated patterns to match comprehensive battery status categories
+            failed_patterns = '🔴 Failed|🔴 MD: Failed|🔴 MD: Minimal Impact|🔴 Off-Peak: Critical SOC|🟠 Off-Peak: SOC Warning'
+            failed_days = df_sim[df_sim['Shaving_Success'].str.contains(failed_patterns, na=False)].index.date
+            level2_days = sorted(set(failed_days))
+        else:
+            # "All Days" - show all available days
+            all_days = sorted(set(df_sim.index.date))
+            level2_days = all_days
+        
+        # Always show Level 2 filter interface
+        st.markdown("**Level 2: Select Specific Day for Detailed Analysis**")
+        col3, col4 = st.columns([5, 1])
+        
+        with col3:
+            # Create options for specific day selection
+            if selected_filter == "All Days":
+                day_options = ["All Days"]
+            else:
+                day_options = ["All " + selected_filter.split()[-2] + " " + selected_filter.split()[-1]]  # e.g., "All Success Days"
             
+            # Add individual days if available
             if level2_days:
-                # Show Level 2 filter
-                st.markdown("**Level 2: Select Specific Day for Detailed Analysis**")
-                col3, col4 = st.columns([5, 1])
-                
-                with col3:
-                    # Create options for specific day selection
-                    day_options = ["All " + selected_filter.split()[-2] + " " + selected_filter.split()[-1]]  # e.g., "All Success Days"
-                    day_options.extend([str(day) for day in level2_days])
-                    
-                    selected_specific_day = st.selectbox(
-                        "🎯 Select Specific Day:",
-                        options=day_options,
-                        index=0,
-                        key="specific_day_filter",
-                        help="Second level: Choose a specific date for detailed analysis, or keep 'All' to show all days of the selected type"
-                    )
-                
-                with col4:
-                    if st.button("🔄 Reset Day", key="reset_specific_day_filter"):
-                        if 'specific_day_filter' in st.session_state:
-                            del st.session_state.specific_day_filter
-                        st.rerun()
+                day_options.extend([str(day) for day in level2_days])
+            
+            selected_specific_day = st.selectbox(
+                "🎯 Select Specific Day:",
+                options=day_options,
+                index=0,
+                key="specific_day_filter",
+                help="Second level: Choose a specific date for detailed analysis, or keep 'All' to show all days of the selected type"
+            )
+        
+        with col4:
+            if st.button("🔄 Reset Day", key="reset_specific_day_filter"):
+                if 'specific_day_filter' in st.session_state:
+                    del st.session_state.specific_day_filter
+                st.rerun()
         
         # ===== APPLY TWO-LEVEL CASCADING FILTERS =====
         df_sim_filtered = df_sim.copy()
@@ -4048,11 +4057,11 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
             # "All Days" - show everything (no Level 1 filtering)
             df_sim_filtered = df_sim
         
-        # Level 2: Specific Day Filter (only apply if a specific day is selected)
-        if selected_filter != "All Days" and 'specific_day_filter' in st.session_state:
+        # Level 2: Specific Day Filter (apply regardless of Level 1 selection)
+        if 'specific_day_filter' in st.session_state:
             selected_specific_day = st.session_state.get('specific_day_filter', '')
             
-            # Check if a specific day is selected (not the "All [Type] Days" option)
+            # Check if a specific day is selected (not an "All [Type]" option)
             if selected_specific_day and not selected_specific_day.startswith("All "):
                 try:
                     # Parse the selected date
@@ -4073,9 +4082,8 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
             total_days = len(set(df_sim.index.date))
             filtered_days = len(set(df_sim_filtered.index.date))
             
-            # Check if Level 2 filter is active
-            level2_active = (selected_filter != "All Days" and 
-                           'specific_day_filter' in st.session_state and 
+            # Check if Level 2 filter is active (updated for always-visible interface)
+            level2_active = ('specific_day_filter' in st.session_state and 
                            st.session_state.get('specific_day_filter', '').strip() and 
                            not st.session_state.get('specific_day_filter', '').startswith("All "))
             
@@ -4135,9 +4143,8 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
     # Panel 1: V2 Enhanced MD Shaving Effectiveness with Dynamic Monthly Targets
     st.markdown("##### 1️⃣ V2 MD Shaving Effectiveness: Demand vs Battery vs Dynamic Monthly Targets")
     
-    # Display filtering status info
-    level2_active = (selected_filter != "All Days" and 
-                    'specific_day_filter' in st.session_state and 
+    # Display filtering status info (updated for always-visible Level 2)
+    level2_active = ('specific_day_filter' in st.session_state and 
                     st.session_state.get('specific_day_filter', '').strip() and 
                     not st.session_state.get('specific_day_filter', '').startswith("All "))
     
