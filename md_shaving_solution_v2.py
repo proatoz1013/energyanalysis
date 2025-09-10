@@ -6306,10 +6306,25 @@ def _create_daily_summary_table(df_sim, selected_tariff=None, interval_hours=Non
             'Actual MD Shave (kW)': _format_number_value(actual_md_shave_kw),
             'Variance MD Shave (kW)': _format_number_value(variance_md_shave_kw),
             'Target_Success': target_success,
-            'Equivalent Full Cycles (EFC)': _format_number_value(equivalent_full_cycles)  # CORRECTED: Now uses proper EFC formula
+            'Equivalent Full Cycles (EFC)': _format_number_value(equivalent_full_cycles),  # CORRECTED: Now uses proper EFC formula
+            'equivalent_full_cycles_raw': equivalent_full_cycles  # Store raw value for accumulation calculation
         })
     
-    return pd.DataFrame(daily_summary)
+    # Convert to DataFrame for accumulating cycles calculation
+    df_summary = pd.DataFrame(daily_summary)
+    
+    # 11. NEW COLUMN: Accumulating Charging Cycles - Cumulative sum of daily EFC values
+    if len(df_summary) > 0:
+        # Calculate cumulative sum of raw EFC values
+        cumulative_cycles = df_summary['equivalent_full_cycles_raw'].cumsum()
+        
+        # Add formatted accumulating cycles column
+        df_summary['Accumulating Charging Cycles'] = [_format_number_value(x) for x in cumulative_cycles]
+        
+        # Remove the raw helper column
+        df_summary = df_summary.drop('equivalent_full_cycles_raw', axis=1)
+    
+    return df_summary
 
 
 def _create_monthly_summary_table(df_sim, selected_tariff=None, interval_hours=None):
