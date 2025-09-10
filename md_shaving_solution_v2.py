@@ -1733,7 +1733,9 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                     y=1,
                     xanchor="left",
                     x=1.02
-                )
+                ),
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)'
             )
             
             st.plotly_chart(fig, use_container_width=True)
@@ -3063,7 +3065,9 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                                 xaxis_title="Month",
                                 yaxis_title="Maximum Demand (kW)",
                                 height=400,
-                                showlegend=True
+                                showlegend=True,
+                                plot_bgcolor='rgba(0,0,0,0)',
+                                paper_bgcolor='rgba(0,0,0,0)'
                             )
                             
                             st.plotly_chart(fig_monthly, use_container_width=True)
@@ -3083,7 +3087,9 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                                 title="Monthly Savings from MD Reduction",
                                 xaxis_title="Month",
                                 yaxis_title="Savings (RM)",
-                                height=400
+                                height=400,
+                                plot_bgcolor='rgba(0,0,0,0)',
+                                paper_bgcolor='rgba(0,0,0,0)'
                             )
                             
                             st.plotly_chart(fig_savings, use_container_width=True)
@@ -4270,8 +4276,18 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
         ),
         height=500,
         hovermode='x unified',
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        barmode='overlay'
+        legend=dict(
+            orientation="h",
+            yanchor="top", 
+            y=-0.15,
+            xanchor="center", 
+            x=0.5
+        ),
+        margin=dict(b=100),
+        barmode='overlay',
+        template="none",
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)'
     )
     
     st.plotly_chart(fig, use_container_width=True)
@@ -4335,7 +4351,10 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
     fig2.update_layout(
         title='⚡ SOC vs Battery Power: Timing Analysis',
         height=400,
-        hovermode='x unified'
+        hovermode='x unified',
+        template="none",
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)'
     )
     
     st.plotly_chart(fig2, use_container_width=True)
@@ -4373,7 +4392,10 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
         title='🔥 Battery Power Utilization Heatmap (% of Rated Power)',
         xaxis_title='Date',
         yaxis_title='Hour of Day',
-        height=400
+        height=400,
+        template="none",
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)'
     )
     
     st.plotly_chart(fig3, use_container_width=True)
@@ -4491,7 +4513,10 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
         xaxis_title='Date',
         yaxis_title='Peak Demand during MD Hours (kW)',
         height=400,
-        barmode='group'
+        barmode='group',
+        template="none",
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)'
     )
     
     st.plotly_chart(fig4, use_container_width=True)
@@ -4623,7 +4648,10 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
                 xaxis_title='Date',
                 yaxis_title='Cumulative Energy (kWh)',
                 height=500,
-                hovermode='x unified'
+                hovermode='x unified',
+                template="none",
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)'
             )
             
             st.plotly_chart(fig5, use_container_width=True)

@@ -3695,8 +3695,7 @@ with tabs[9]:
                     borderwidth=1
                 ),
                 height=700,
-                hovermode='x unified',
-                plot_bgcolor='white'
+                hovermode='x unified'
             )
             
             st.plotly_chart(fig, use_container_width=True)
