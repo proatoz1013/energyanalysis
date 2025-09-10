@@ -789,7 +789,7 @@ def _render_battery_quantity_recommendation(max_power_shaving_required, recommen
             user_selected_qty = st.number_input(
                 "Select Battery Quantity:",
                 min_value=1,
-                max_value=50,
+                max_value=200,
                 value=recommended_qty,
                 step=1,
                 key="v2_battery_quantity_selection",
