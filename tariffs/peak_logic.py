@@ -109,15 +109,24 @@ def is_peak_rp4(dt, holidays, peak_days={0, 1, 2, 3, 4}, peak_start=14, peak_end
     RP4 peak period rule:
     - Peak: Mon–Fri, 14:00–22:00 (excluding public holidays)
     - Off-Peak: All other times
+    
+    Improved Hierarchy: Holiday Check → Weekday Check → Hour Check
+    This clearer flow makes the logic more maintainable for both General and TOU tariffs.
     """
     if isinstance(dt, pd.Timestamp):
         dt = dt.to_pydatetime()
     if dt.tzinfo:
         dt = dt.replace(tzinfo=None)
+    
+    # 1. HOLIDAY CHECK (first priority - clearest exclusion)
     if is_public_holiday(dt, holidays):
         return False
+    
+    # 2. WEEKDAY CHECK (second priority - excludes weekends)
     if dt.weekday() not in peak_days:
         return False
+    
+    # 3. HOUR CHECK (final constraint - MD recording window)
     return is_peak_hour(dt, peak_start, peak_end)
 
 def classify_peak_period(df, timestamp_col, holidays=None, label_col="Period"):

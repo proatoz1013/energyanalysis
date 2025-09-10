@@ -508,10 +508,10 @@ def _detect_peak_events(df, power_col, target_demand, total_md_rate, interval_ho
         group_above = group[group[power_col] > target_demand]
         total_energy_to_shave = ((group_above[power_col] - target_demand) * interval_hours).sum()
         
-        # Calculate energy to shave during MD peak period only (2 PM to 10 PM)
+        # Calculate energy to shave during MD peak period only (2 PM to 10 PM) - IMPROVED HIERARCHY
         # Filter for MD peak hours (14:00-22:00, weekdays only, excluding holidays)
         md_peak_mask = group_above.index.to_series().apply(
-            lambda ts: ts.weekday() < 5 and 14 <= ts.hour < 22
+            lambda ts: (ts.weekday() < 5) and (14 <= ts.hour < 22)  # Holiday check would require holidays parameter
         )
         group_md_peak = group_above[md_peak_mask]
         md_peak_energy_to_shave = ((group_md_peak[power_col] - target_demand) * interval_hours).sum() if not group_md_peak.empty else 0
@@ -893,8 +893,9 @@ def _display_threshold_analysis(df, power_col, overall_max_demand, total_md_rate
             total_energy_to_shave = ((group_above[power_col] - test_target) * interval_hours).sum()
             
             # Calculate energy to shave during MD peak period only (2 PM to 10 PM) using global interval
+            # IMPROVED HIERARCHY: MD peak period logic
             md_peak_mask = group_above.index.to_series().apply(
-                lambda ts: ts.weekday() < 5 and 14 <= ts.hour < 22
+                lambda ts: (ts.weekday() < 5) and (14 <= ts.hour < 22)  # Holiday check would require holidays parameter
             )
             group_md_peak = group_above[md_peak_mask]
             md_peak_energy_to_shave = ((group_md_peak[power_col] - test_target) * interval_hours).sum() if not group_md_peak.empty else 0

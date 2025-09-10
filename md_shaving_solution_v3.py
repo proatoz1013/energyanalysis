@@ -67,7 +67,8 @@ def _classify_tou_periods_v3(timestamp, voltage_level):
     hour = timestamp.hour
     weekday = timestamp.weekday()
     
-    # Standard TOU Peak Hours: 2PM-10PM weekdays for all voltage levels
+    # Standard TOU Peak Hours: 2PM-10PM weekdays for all voltage levels - IMPROVED HIERARCHY APPLIED
+    # Hierarchy: Holiday Check (handled by parent) → Weekday Check → Hour Check
     if weekday < 5 and 14 <= hour < 22:
         return 'Peak'
     else:

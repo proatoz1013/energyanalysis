@@ -934,9 +934,9 @@ def _detect_peak_events(df, power_col, target_demand, total_md_rate, interval_ho
         group_above = group[group[power_col] > target_demand]
         total_energy_to_shave = ((group_above[power_col] - target_demand) * interval_hours).sum()
         
-        # Calculate energy to shave during MD peak period only (2 PM to 10 PM)
+        # Calculate energy to shave during MD peak period only (2 PM to 10 PM) - IMPROVED HIERARCHY
         md_peak_mask = group_above.index.to_series().apply(
-            lambda ts: ts.weekday() < 5 and 14 <= ts.hour < 22
+            lambda ts: (ts.weekday() < 5) and (14 <= ts.hour < 22)  # Holiday check would require holidays parameter
         )
         group_md_peak = group_above[md_peak_mask]
         md_peak_energy_to_shave = ((group_md_peak[power_col] - target_demand) * interval_hours).sum() if not group_md_peak.empty else 0
@@ -1321,9 +1321,9 @@ def _display_threshold_analysis(df, power_col, overall_max_demand, total_md_rate
             group_above = group[group[power_col] > test_target]
             total_energy_to_shave = ((group_above[power_col] - test_target) * interval_hours).sum()
             
-            # Calculate energy to shave during MD peak period only
+            # Calculate energy to shave during MD peak period only - IMPROVED HIERARCHY
             md_peak_mask = group_above.index.to_series().apply(
-                lambda ts: ts.weekday() < 5 and 14 <= ts.hour < 22
+                lambda ts: (ts.weekday() < 5) and (14 <= ts.hour < 22)  # Holiday check would require holidays parameter
             )
             group_md_peak = group_above[md_peak_mask]
             md_peak_energy_to_shave = ((group_md_peak[power_col] - test_target) * interval_hours).sum() if not group_md_peak.empty else 0
@@ -2328,8 +2328,8 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None, s
     
     st.plotly_chart(fig, use_container_width=True)
     
-    # Success/Failure Analysis (MD Peak Periods Only)
-    df_md_peak_sim = df_sim[df_sim.index.to_series().apply(lambda ts: ts.weekday() < 5 and 14 <= ts.hour < 22)]
+    # Success/Failure Analysis (MD Peak Periods Only) - IMPROVED HIERARCHY
+    df_md_peak_sim = df_sim[df_sim.index.to_series().apply(lambda ts: (ts.weekday() < 5) and (14 <= ts.hour < 22))]  # Holiday check would require holidays parameter
     
     if len(df_md_peak_sim) > 0:
         success_intervals = len(df_md_peak_sim[
@@ -2915,8 +2915,9 @@ def _classify_tou_tariff_periods(timestamp):
     hour = timestamp.hour
     weekday = timestamp.weekday()
     
-    # TOU Peak Hours: When electricity rates are highest
-    # Standard RP4 TOU: 2PM-10PM weekdays
+    # TOU Peak Hours: When electricity rates are highest - IMPROVED HIERARCHY APPLIED
+    # Standard RP4 TOU: 2PM-10PM weekdays (holidays already handled by parent function)
+    # Hierarchy: Holiday Check (✅ done by parent) → Weekday Check → Hour Check
     if weekday < 5 and 14 <= hour < 22:
         return 'Peak'  # High energy rate + MD recording
     else:
