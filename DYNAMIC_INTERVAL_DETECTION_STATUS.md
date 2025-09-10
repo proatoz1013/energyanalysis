@@ -3,6 +3,18 @@
 ## 🎯 Project Overview
 Replace all hardcoded `* 0.25` references throughout the MD shaving solution with centralized dynamic interval detection for accurate energy calculations across different data sampling intervals.
 
+## 🚀 GITHUB UPDATES - COMPLETED ✅
+
+**Commit:** `ad9e105` - "🔧 Fix EFC calculation & BESS quantity limit in V2"
+
+**Successfully Updated:**
+- ✅ **BESS Quantity Limit Fix**: Increased from 50 to 200 units for battery selection
+- ✅ **EFC Calculation Correction**: Fixed industry-standard Throughput Method implementation
+- ✅ **Dynamic Interval Detection**: Full V2 implementation with centralized `_get_dynamic_interval_hours()`
+- ✅ **Display Updates**: Updated column names, metrics, and help text for clarity
+
+**Repository Status:** All core V2 enhancements successfully pushed to GitHub main branch
+
 ## ✅ COMPLETED FILES
 
 ### 1. **md_shaving_solution_v2.py** - 100% COMPLETE ✅
