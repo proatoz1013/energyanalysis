@@ -201,7 +201,8 @@ def md_shaving_battery_page():
         uploaded_file = st.file_uploader(
             "Choose a data file",
             type=["csv", "xls", "xlsx"],
-            help="Upload your energy consumption data with timestamp and power columns"
+            help="Upload your energy consumption data with timestamp and power columns",
+            key="md_shaving_battery_upload"
         )
         
         if uploaded_file is not None:

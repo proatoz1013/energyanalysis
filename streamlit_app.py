@@ -10,6 +10,8 @@ from md_shaving_solution import show as show_md_shaving_solution
 from md_shaving_solution_v2 import render_md_shaving_v2, render_battery_impact_visualization
 from md_shaving_solution_v3 import render_md_shaving_v3
 from md_pattern_analysis import show_md_pattern_analysis
+from utils.multi_tab_navigation import render_multi_tab_navigation
+from utils.navigation import inject_navigation_css
 import sys
 import os
 
@@ -17,6 +19,9 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), 'energyanalaysis', 'chiller-energy-dashboard', 'src'))
 
 st.set_page_config(page_title="Load Profile Analysis", layout="wide")
+
+# Inject custom navigation CSS
+inject_navigation_css()
 
 # Load custom CSS for global styling (including increased font sizes)
 try:
@@ -136,7 +141,22 @@ This tool provides comprehensive analysis of:
 - Demand shaving analysis
 """)
 
-tabs = st.tabs(["TNB New Tariff Comparison", "Load Profile Analysis", "Advanced Energy Analysis", "Monthly Rate Impact Analysis", "MD Shaving Solution", "🔋 MD Shaving (v2)", "� MD Shaving (v3)", "�📊 MD Patterns", "🔋 Advanced MD Shaving", "❄️ Chiller Energy Dashboard"])
+# Content Navigation Section
+st.sidebar.markdown("---")
+
+# Render comprehensive navigation for all tabs
+render_multi_tab_navigation()
+
+st.sidebar.markdown("---")
+
+# Tab names to match with navigation
+TAB_NAMES = ["TNB New Tariff Comparison", "Load Profile Analysis", "Advanced Energy Analysis", "Monthly Rate Impact Analysis", "MD Shaving Solution", "🔋 MD Shaving (v2)", "🔋 MD Shaving (v3)", "📊 MD Patterns", "🔋 Advanced MD Shaving", "❄️ Chiller Energy Dashboard"]
+
+tabs = st.tabs(TAB_NAMES)
+
+# Tab 0: TNB New Tariff Comparison
+with tabs[0]:
+    show_tnb_tariff_comparison()
 
 with tabs[1]:
     st.title("Energy Analysis Dashboard")
@@ -172,7 +192,7 @@ with tabs[1]:
     }
     st.markdown(f"**Charging Rate:** {charging_rates.get(tariff_rate, 'N/A')}")
 
-    uploaded_file = st.file_uploader("Upload your data file", type=["csv", "xls", "xlsx"])
+    uploaded_file = st.file_uploader("Upload your data file", type=["csv", "xls", "xlsx"], key="energy_analysis_upload")
 
     # Helper function to read different file formats
     def read_uploaded_file(file):
@@ -845,13 +865,11 @@ with tabs[1]:
             st.error(f"An unexpected error occurred: {e}")
             st.error("Ensure Excel file is correctly formatted and columns are selected.")
 
-with tabs[0]:
-    show_tnb_tariff_comparison()
-
 with tabs[2]:
     show_advanced_energy_analysis()
 
 with tabs[3]:
+    
     st.title("Monthly Rate Impact Analysis")
     st.markdown("""
     Compare the financial impact of old TNB tariffs vs new RP4 tariffs on a **monthly basis**. 
@@ -2001,6 +2019,7 @@ with tabs[4]:
     show_md_shaving_solution()
 
 with tabs[5]:
+    
     st.markdown("## 🔋 MD Shaving (v2)")
     
     # Render the MD Shaving v2 analysis content first
@@ -2556,14 +2575,14 @@ with tabs[5]:
     # render_battery_impact_visualization()
 
 with tabs[6]:
-    # � MD Shaving (v3) Tab - Next-Generation AI-Powered Analysis
+    # 🔋 MD Shaving (v3) Tab - Next-Generation AI-Powered Analysis
     render_md_shaving_v3()
 
-with tabs[8]:
-    # �📊 MD Patterns Tab
+with tabs[7]:
+    # 📊 MD Patterns Tab
     show_md_pattern_analysis()
 
-with tabs[9]:
+with tabs[8]:
     # 🔋 Advanced MD Shaving Tab
     st.title("🔋 Advanced MD Shaving")
     st.markdown("""
@@ -2740,7 +2759,8 @@ with tabs[9]:
     uploaded_file = st.file_uploader(
         "Choose a CSV file with load profile data",
         type=["csv"],
-        help="Upload your peak events data from MD shaving analysis"
+        help="Upload your peak events data from MD shaving analysis",
+        key="load_profile_upload"
     )
     
     if uploaded_file is not None:

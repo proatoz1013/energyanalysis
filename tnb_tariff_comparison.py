@@ -142,7 +142,8 @@ def show():
         "Choose CSV or Excel files",
         type=['csv', 'xlsx', 'xls'],
         accept_multiple_files=True,
-        help="You can upload multiple files. They will be combined for analysis."
+        help="You can upload multiple files. They will be combined for analysis.",
+        key="tariff_comparison_upload"
     )
     
     # Process uploaded files
