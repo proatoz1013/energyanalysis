@@ -5475,11 +5475,17 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
     battery_power = np.zeros(len(df_sim))  # Positive = discharge, Negative = charge
     net_demand = df_sim[power_col].copy()
     
-    # 🔋 CONSERVATION MODE TRACKING
+    # 🔋 CONSERVATION CASCADE TRACKING VARIABLES
     running_min_exceedance = np.full(len(df_sim), np.inf)  # Track running minimum exceedance
     conservation_activated = np.zeros(len(df_sim), dtype=bool)  # Track when conservation is active
     battery_power_conserved = np.zeros(len(df_sim))  # Track battery power being conserved
     battery_kw_conserved_values = np.zeros(len(df_sim))  # Track actual kW conserved based on user input
+    
+    # Conservation cascade workflow tracking
+    revised_discharge_power_cascade = np.zeros(len(df_sim))  # Step 1: Revised discharge power
+    revised_bess_balance_cascade = np.zeros(len(df_sim))     # Step 2: BESS balance reduction
+    revised_target_achieved_cascade = np.zeros(len(df_sim))  # Step 3: Actual target achieved
+    soc_improvement_cascade = np.zeros(len(df_sim))          # Step 4: SOC improvement
     
     # V2 SIMULATION LOOP - Monthly Target Floor Implementation
     for i in range(len(df_sim)):
@@ -5488,20 +5494,64 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
         excess = max(0, current_demand - monthly_target)
         current_timestamp = df_sim.index[i]
         
-        # 🔋 CONSERVATION MODE LOGIC - Battery Power Conservation Approach
+        # 🔋 CONSERVATION CASCADE WORKFLOW - Comprehensive Conservation Logic
+        # STEP 1: Initialize conservation parameters for this interval
+        current_soc_percent = (soc[i-1] / usable_capacity * 100) if i > 0 else 80
+        conservation_activated[i] = False
+        battery_power_conserved[i] = 0.0
+        battery_kw_conserved_values[i] = 0.0
+        revised_discharge_power = 0.0  # Track power revision due to conservation
+        revised_bess_balance = 0.0     # Track BESS balance reduction
+        revised_target_achieved = 0.0  # Track actual target achieved with conservation
+        soc_improvement = 0.0          # Track SOC improvement from conservation
+        
         if conservation_enabled:
-            # Check if conservation should be activated
-            current_soc_percent = (soc[i-1] / usable_capacity * 100) if i > 0 else 80
-            
+            # CONSERVATION CASCADE WORKFLOW: Four-step feedback loop process
             if current_soc_percent < soc_threshold:
-                # Activate conservation: reduce available battery power
                 conservation_activated[i] = True
-                battery_power_conserved[i] = battery_kw_conserved
-                battery_kw_conserved_values[i] = battery_kw_conserved  # Store actual kW conserved from user input
-            else:
-                conservation_activated[i] = False
-                battery_power_conserved[i] = 0.0
-                battery_kw_conserved_values[i] = 0.0
+                
+                # Calculate original discharge requirement (before conservation)
+                original_discharge_required = excess
+                
+                # ===== STEP 1: REVISE DISCHARGE POWER BASED ON CONSERVATION PARAMETERS =====
+                # Apply user's manual conservation parameter as a fixed reduction amount
+                # User sets the exact kW amount to conserve, not a maximum
+                power_to_conserve = min(battery_kw_conserved, original_discharge_required)
+                revised_discharge_power = max(0, original_discharge_required - power_to_conserve)
+                
+                # Store conservation metrics
+                battery_power_conserved[i] = power_to_conserve
+                battery_kw_conserved_values[i] = power_to_conserve
+                
+                # ===== STEP 2: REDUCE BESS BALANCE kWh DUE TO LIMITED DISCHARGE =====
+                # Calculate energy savings from limited discharge
+                original_energy_would_use = original_discharge_required * interval_hours
+                revised_energy_will_use = revised_discharge_power * interval_hours
+                energy_conserved_kwh = original_energy_would_use - revised_energy_will_use
+                
+                # ===== STEP 3: REVISE ACTUAL TARGET ACHIEVED WITH CONSERVATION CONSTRAINTS =====
+                # Calculate what target can actually be achieved with conservation limits
+                if original_discharge_required > 0:
+                    # Net demand with conservation constraints
+                    revised_net_demand = current_demand - revised_discharge_power
+                    # How much above target we still are after conservation
+                    revised_target_achieved = max(0, monthly_target - revised_net_demand)
+                else:
+                    revised_target_achieved = 0
+                
+                # ===== STEP 4: IMPROVE SOC % THROUGH ENERGY CONSERVATION =====
+                # Calculate SOC improvement from conserved energy
+                soc_improvement = (energy_conserved_kwh / usable_capacity) * 100
+                
+                # ===== STORE CASCADE WORKFLOW METRICS =====
+                revised_discharge_power_cascade[i] = revised_discharge_power
+                revised_bess_balance_cascade[i] = energy_conserved_kwh
+                revised_target_achieved_cascade[i] = revised_target_achieved
+                soc_improvement_cascade[i] = soc_improvement
+                
+                # ===== FEEDBACK LOOP: Update excess for subsequent battery operation =====
+                # This creates the cascade effect where conservation affects all downstream calculations
+                excess = revised_discharge_power
                 
             # Still track running minimum exceedance for debugging purposes
             if excess > 0:
@@ -5517,12 +5567,13 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
         else:
             # Conservation disabled - no power conservation
             running_min_exceedance[i] = np.inf
-            conservation_activated[i] = False
-            battery_power_conserved[i] = 0.0
         
         # Use monthly target as the active target (conservation affects battery power, not target)
         active_target = monthly_target
-        excess = max(0, current_demand - active_target)
+        
+        # Only calculate excess if conservation hasn't already adjusted it
+        if not (conservation_enabled and conservation_activated[i]):
+            excess = max(0, current_demand - active_target)
         
         # Determine if discharge is allowed based on tariff type
         should_discharge = excess > 0
@@ -5539,8 +5590,8 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
             # For General tariffs, discharge anytime above target (24/7 MD recording)
         
         if should_discharge:  # V2 ENHANCED DISCHARGE LOGIC - Monthly Target Floor with C-rate constraints
-            # V2 CRITICAL CONSTRAINT: Calculate maximum discharge that keeps Net Demand >= Active Target (with conservation)
-            max_allowable_discharge = current_demand - active_target
+            # V2 CRITICAL CONSTRAINT: Use conservation-adjusted excess as maximum allowable discharge
+            max_allowable_discharge = excess  # This already accounts for conservation adjustments
             
             # Get current SOC for C-rate calculations
             current_soc_kwh = soc[i-1] if i > 0 else usable_capacity * 0.80  # Start at 80% SOC (within 5%-95% range)
@@ -5559,15 +5610,9 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
             )
             max_discharge_power_c_rate = power_limits['max_discharge_power_kw']
             
-            # Apply battery power conservation if active
-            if conservation_activated[i]:
-                # Reduce available battery power by the conservation amount
-                max_power_available = max(0, max_power - battery_power_conserved[i])
-                max_discharge_power_c_rate_available = max(0, max_discharge_power_c_rate - battery_power_conserved[i])
-            else:
-                # No conservation - use full power
-                max_power_available = max_power
-                max_discharge_power_c_rate_available = max_discharge_power_c_rate
+            # Conservation is already applied in max_allowable_discharge via excess calculation
+            max_power_available = max_power
+            max_discharge_power_c_rate_available = max_discharge_power_c_rate
             
             # Calculate required discharge power with ALL constraints including conservation
             required_discharge = min(
@@ -5793,12 +5838,18 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
     df_sim['Net_Demand_kW'] = net_demand
     df_sim['Peak_Shaved'] = df_sim['Original_Demand'] - df_sim['Net_Demand_kW']
     
-    # 🔋 CONSERVATION MODE COLUMNS
+    # 🔋 CONSERVATION CASCADE COLUMNS
     if conservation_enabled:
         df_sim['Conserve_Activated'] = conservation_activated
         df_sim['Battery Conserved kW'] = battery_kw_conserved_values.copy()  # Use actual kW conserved from user input
         df_sim['Battery_Power_Conserved_kW'] = battery_power_conserved
         df_sim['Running_Min_Exceedance'] = running_min_exceedance.copy()  # Keep for debugging
+        
+        # Conservation cascade workflow columns
+        df_sim['Revised_Discharge_Power_kW'] = revised_discharge_power_cascade
+        df_sim['Revised_BESS_Balance_kWh'] = revised_bess_balance_cascade
+        df_sim['Revised_Target_Achieved_kW'] = revised_target_achieved_cascade
+        df_sim['SOC_Improvement_Percent'] = soc_improvement_cascade
         df_sim['Running_Min_Exceedance'].replace(np.inf, np.nan, inplace=True)  # Replace inf with NaN for display
     else:
         # Add empty conservation columns for consistency
@@ -5966,7 +6017,7 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
         'debug_info': debug_info
     }
     
-    # Add conservation statistics if enabled
+    # Add conservation cascade statistics if enabled
     if conservation_enabled:
         conservation_periods = np.sum(conservation_activated)
         total_periods = len(conservation_activated)
@@ -5976,10 +6027,57 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
         valid_exceedances = running_min_exceedance[running_min_exceedance != np.inf]
         min_exceedance_observed = np.min(valid_exceedances) if len(valid_exceedances) > 0 else 0
         
+        # ===== CONSERVATION CASCADE WORKFLOW METRICS =====
+        # Step 1: Discharge power revision metrics
+        total_original_discharge = np.sum([max(0, df_sim.iloc[i]['Original_Demand'] - df_sim.iloc[i]['Monthly_Target']) 
+                                         for i in range(len(df_sim)) if conservation_activated[i]])
+        total_revised_discharge = np.sum(revised_discharge_power_cascade[conservation_activated])
+        total_power_conserved = total_original_discharge - total_revised_discharge
+        
+        # Step 2: BESS balance preservation metrics
+        total_energy_preserved_kwh = np.sum(revised_bess_balance_cascade[conservation_activated])
+        avg_energy_preserved_per_event = total_energy_preserved_kwh / conservation_periods if conservation_periods > 0 else 0
+        
+        # Step 3: Target achievement metrics with conservation
+        conservation_events = revised_target_achieved_cascade[conservation_activated]
+        avg_target_gap_with_conservation = np.mean(conservation_events) if len(conservation_events) > 0 else 0
+        max_target_gap_with_conservation = np.max(conservation_events) if len(conservation_events) > 0 else 0
+        
+        # Step 4: SOC improvement metrics
+        total_soc_improvement_percent = np.sum(soc_improvement_cascade[conservation_activated])
+        avg_soc_improvement_per_event = total_soc_improvement_percent / conservation_periods if conservation_periods > 0 else 0
+        max_soc_improvement_event = np.max(soc_improvement_cascade) if len(soc_improvement_cascade) > 0 else 0
+        
+        # Conservation effectiveness metrics
+        conservation_effectiveness = (total_power_conserved / total_original_discharge * 100) if total_original_discharge > 0 else 0
+        
         results.update({
             'conservation_periods': conservation_periods,
             'conservation_rate_percent': conservation_rate,
-            'min_exceedance_observed_kw': min_exceedance_observed
+            'min_exceedance_observed_kw': min_exceedance_observed,
+            
+            # ===== CASCADE STEP 1 METRICS: Discharge Power Revision =====
+            'total_original_discharge_kw': total_original_discharge,
+            'total_revised_discharge_kw': total_revised_discharge,
+            'total_power_conserved_kw': total_power_conserved,
+            'conservation_effectiveness_percent': conservation_effectiveness,
+            
+            # ===== CASCADE STEP 2 METRICS: BESS Balance Preservation =====
+            'total_energy_preserved_kwh': total_energy_preserved_kwh,
+            'avg_energy_preserved_per_event_kwh': avg_energy_preserved_per_event,
+            
+            # ===== CASCADE STEP 3 METRICS: Target Achievement with Conservation =====
+            'avg_target_gap_with_conservation_kw': avg_target_gap_with_conservation,
+            'max_target_gap_with_conservation_kw': max_target_gap_with_conservation,
+            
+            # ===== CASCADE STEP 4 METRICS: SOC Improvement =====
+            'total_soc_improvement_percent': total_soc_improvement_percent,
+            'avg_soc_improvement_per_event_percent': avg_soc_improvement_per_event,
+            'max_soc_improvement_event_percent': max_soc_improvement_event,
+            
+            # Overall cascade workflow status
+            'conservation_cascade_enabled': True,
+            'cascade_workflow_complete': True
         })
     
     # Add TOU-specific results if TOU tariff is detected
@@ -6510,6 +6608,28 @@ def _create_enhanced_battery_table(df_sim, selected_tariff=None, holidays=None):
     enhanced_columns['Revised Energy Required (kWh)'] = df_sim.apply(
         lambda row: max(0, row['Original_Demand'] - _calculate_revised_target_kw(row, holidays)) * interval_hours, axis=1
     ).round(2)
+    
+    # 🔋 CONSERVATION CASCADE WORKFLOW COLUMNS (new columns 22-25)
+    if 'Revised_Discharge_Power_kW' in df_sim.columns:
+        # 22. Revised Discharge Power (kW) - Step 1 of cascade
+        enhanced_columns['Revised Discharge Power (kW)'] = df_sim['Revised_Discharge_Power_kW'].round(1)
+        
+        # 23. BESS Balance Preserved (kWh) - Step 2 of cascade  
+        enhanced_columns['BESS Balance Preserved (kWh)'] = df_sim['Revised_BESS_Balance_kWh'].round(2)
+        
+        # 24. Target Achieved w/ Conservation (kW) - Step 3 of cascade
+        enhanced_columns['Target Achieved w/ Conservation (kW)'] = df_sim['Revised_Target_Achieved_kW'].round(1)
+        
+        # 25. SOC Improvement (%) - Step 4 of cascade
+        enhanced_columns['SOC Improvement (%)'] = df_sim['SOC_Improvement_Percent'].apply(
+            lambda x: f"+{x:.2f}%" if x > 0 else "0.00%"
+        )
+    else:
+        # Add empty columns if conservation cascade not available
+        enhanced_columns['Revised Discharge Power (kW)'] = 0.0
+        enhanced_columns['BESS Balance Preserved (kWh)'] = 0.0  
+        enhanced_columns['Target Achieved w/ Conservation (kW)'] = df_sim['Net_Demand_kW'].round(1)
+        enhanced_columns['SOC Improvement (%)'] = "0.00%"
     
     return pd.DataFrame(enhanced_columns)
 
