@@ -4181,31 +4181,7 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
     
     st.plotly_chart(fig4, use_container_width=True)
     
-    # Summary stats with V2 synchronized success rate
-    # Use synchronized calculation instead of local daily analysis for consistency
-    if 'Success_Status' in df_sim.columns:
-        sync_success_metrics = _calculate_success_rate_from_shaving_status(df_sim, holidays=holidays)
-        success_rate = sync_success_metrics['success_rate_percent']
-        successful_intervals = sync_success_metrics['successful_intervals']
-        total_md_intervals = sync_success_metrics['total_md_intervals']
-        
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("MD Intervals", f"{total_md_intervals}")
-        col2.metric("Successful Intervals", f"{successful_intervals}", delta=f"{success_rate:.1f}%")
-        col3.metric("Failed Intervals", f"{total_md_intervals - successful_intervals}", delta=f"{100-success_rate:.1f}%")
-        col4.metric("V2 Synchronized Success Rate", f"{success_rate:.1f}%")
-    else:
-        # Fallback to daily analysis if Success_Status not available
-        total_days = len(daily_analysis)
-        successful_days = sum(daily_analysis['Success'])
-        failed_days = total_days - successful_days
-        success_rate = (successful_days / total_days * 100) if total_days > 0 else 0
-        
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Total Days", f"{total_days}")
-        col2.metric("Successful Days", f"{successful_days}", delta=f"{success_rate:.1f}%")
-        col3.metric("Failed Days", f"{failed_days}", delta=f"{100-success_rate:.1f}%")
-        col4.metric("V2 Success Rate (Fallback)", f"{success_rate:.1f}%")
+
     
     # Panel 5: V2 Cumulative Energy Analysis with Monthly Target Context
     st.markdown("##### 5️⃣ V2 Cumulative Energy Analysis: Energy Discharged vs Required (MD Peak Periods)")
