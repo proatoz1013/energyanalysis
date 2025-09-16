@@ -2757,7 +2757,14 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                             else:
                                 st.info("🔄 Conservation mode was enabled but never activated (SOC stayed above 50%)")
                         
-                        # === STEP 6: Display the battery simulation chart ===
+                        # === STEP 6: Rate of Change Configuration UI ===
+                        st.subheader("📈 Rate of Change Analysis Configuration")
+                        st.markdown("**Configure rate of change analysis to replace Target_Violation with dynamic trend insights:**")
+                        
+                        # Display rate of change configuration options
+                        rate_of_change_config = display_rate_of_change_options()
+                        
+                        # === STEP 7: Display the battery simulation chart ===
                         st.subheader("📊 Battery Operation Simulation")
                         _display_v2_battery_simulation_chart(
                             simulation_results['df_simulation'],  # Simulated dataframe
@@ -5904,6 +5911,147 @@ def _calculate_success_rate_from_shaving_status(df_sim, holidays=None, debug=Fal
 # NUMBER FORMATTING UTILITIES
 # ===================================================================================================
 
+# === RATE OF CHANGE ANALYSIS FUNCTIONS ===
+
+def calculate_rate_of_change(df, column_name, method='simple', window=None):
+    """
+    Calculate rate of change for a specified column
+    
+    Parameters:
+    - df: DataFrame with time series data
+    - column_name: Column to calculate rate of change for
+    - method: 'simple', 'percentage', 'rolling_avg', 'smoothed', 'normalized'
+    - window: Window size for rolling calculations (if applicable)
+    """
+    
+    if method == 'simple':
+        # Simple difference between consecutive values
+        rate_of_change = df[column_name].diff()
+        
+    elif method == 'percentage':
+        # Percentage change between consecutive values
+        rate_of_change = df[column_name].pct_change() * 100
+        
+    elif method == 'rolling_avg':
+        # Rate of change using rolling average
+        if window is None:
+            window = 5  # Default window
+        rolling_avg = df[column_name].rolling(window=window, center=True).mean()
+        rate_of_change = rolling_avg.diff()
+        
+    elif method == 'smoothed':
+        # Smoothed rate of change using rolling standard deviation
+        if window is None:
+            window = 3
+        # Calculate rolling mean first to smooth the data
+        smoothed_values = df[column_name].rolling(window=window, center=True).mean()
+        rate_of_change = smoothed_values.diff()
+        
+    elif method == 'normalized':
+        # Normalized rate of change (useful for comparing different scales)
+        simple_change = df[column_name].diff()
+        rate_of_change = simple_change / df[column_name].abs()
+        
+    else:
+        raise ValueError("Method must be one of: 'simple', 'percentage', 'rolling_avg', 'smoothed', 'normalized'")
+    
+    return rate_of_change
+
+
+def add_rate_of_change_column(df, target_column='Original_Demand', method='simple', window=None):
+    """
+    Add rate of change column and replace Target_Violation in time series analysis
+    
+    Parameters:
+    - df: Your time series DataFrame
+    - target_column: Column to calculate rate of change for
+    - method: Calculation method
+    - window: Window size for rolling methods
+    """
+    
+    # Create a copy to avoid modifying original data
+    df_modified = df.copy()
+    
+    # Calculate rate of change
+    rate_of_change = calculate_rate_of_change(df_modified, target_column, method, window)
+    
+    # Add the new rate of change column
+    df_modified['Rate_of_Change'] = rate_of_change
+    
+    # Add interpretation columns
+    df_modified['Change_Direction'] = np.where(
+        rate_of_change > 0, 'Increasing',
+        np.where(rate_of_change < 0, 'Decreasing', 'Stable')
+    )
+    
+    # Add magnitude categories
+    if method == 'percentage':
+        df_modified['Change_Magnitude'] = pd.cut(
+            rate_of_change.abs(),
+            bins=[0, 1, 5, 10, float('inf')],
+            labels=['Minimal', 'Low', 'Medium', 'High'],
+            include_lowest=True
+        )
+    else:
+        # For absolute changes, adjust bins based on data scale
+        change_std = rate_of_change.std()
+        if pd.isna(change_std) or change_std == 0:
+            change_std = 1.0  # Fallback
+        df_modified['Change_Magnitude'] = pd.cut(
+            rate_of_change.abs(),
+            bins=[0, 0.5*change_std, change_std, 2*change_std, float('inf')],
+            labels=['Minimal', 'Low', 'Medium', 'High'],
+            include_lowest=True
+        )
+    
+    return df_modified
+
+
+def display_rate_of_change_options():
+    """UI for selecting rate of change calculation method"""
+    
+    st.markdown("##### 📈 Rate of Change Configuration")
+    st.markdown("**Advanced feature to analyze demand volatility and trends**")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        target_column = st.selectbox(
+            "Select Column for Rate of Change",
+            options=['Original_Demand', 'Net_Demand_kW', 'Battery_Power_kW'],
+            index=0,
+            key="v2_rate_of_change_column",
+            help="Choose which column to calculate rate of change for"
+        )
+        
+        method = st.selectbox(
+            "Calculation Method",
+            options=['simple', 'percentage', 'rolling_avg', 'smoothed', 'normalized'],
+            index=0,
+            key="v2_rate_of_change_method",
+            help="Choose how to calculate the rate of change"
+        )
+    
+    with col2:
+        if method in ['rolling_avg', 'smoothed']:
+            window = st.slider(
+                "Window Size", 
+                min_value=2, max_value=20, value=5,
+                key="v2_rate_of_change_window",
+                help="Number of data points to include in rolling calculation"
+            )
+        else:
+            window = None
+        
+        show_interpretation = st.checkbox(
+            "Add Interpretation Columns", 
+            value=True,
+            key="v2_rate_of_change_interpretation",
+            help="Add columns showing direction and magnitude of changes"
+        )
+    
+    return target_column, method, window, show_interpretation
+
 def _format_rm_value(value):
     """
     Format RM values according to specified rules:
@@ -6061,6 +6209,7 @@ def _calculate_revised_target_kw(row, holidays=None):
 def _create_enhanced_battery_table(df_sim, selected_tariff=None, holidays=None):
     """
     Create enhanced table with health and C-rate information for time-series analysis.
+    UPDATED: Replaces Target_Violation with Rate_of_Change analysis
     
     Args:
         df_sim: Simulation dataframe with battery operation data
@@ -6087,120 +6236,133 @@ def _create_enhanced_battery_table(df_sim, selected_tariff=None, holidays=None):
         time_diff = df_sim.index[1] - df_sim.index[0]
         interval_hours = time_diff.total_seconds() / 3600
     
+    # Add rate of change analysis to the simulation data
+    df_with_rate_change = add_rate_of_change_column(
+        df_sim, 
+        target_column='Original_Demand', 
+        method='simple'  # Using simple method as default
+    )
+    
     # Create enhanced columns in the specified order
     enhanced_columns = {}
     
     # 1. Timestamp
-    enhanced_columns['Timestamp'] = df_sim.index.strftime('%Y-%m-%d %H:%M')
+    enhanced_columns['Timestamp'] = df_with_rate_change.index.strftime('%Y-%m-%d %H:%M')
     
     # 2. Original_Demand_kW
-    enhanced_columns['Original_Demand_kW'] = df_sim['Original_Demand'].round(1)
+    enhanced_columns['Original_Demand_kW'] = df_with_rate_change['Original_Demand'].round(1)
     
     # 3. Monthly_Target_kW
-    enhanced_columns['Monthly_Target_kW'] = df_sim['Monthly_Target'].round(1)
+    enhanced_columns['Monthly_Target_kW'] = df_with_rate_change['Monthly_Target'].round(1)
     
     # 4. Battery_Action
-    enhanced_columns['Battery_Action'] = df_sim['Battery_Power_kW'].apply(
+    enhanced_columns['Battery_Action'] = df_with_rate_change['Battery_Power_kW'].apply(
         lambda x: f"Discharge {x:.1f}kW" if x > 0 else f"Charge {abs(x):.1f}kW" if x < 0 else "Standby"
     )
     
     # 5. Target_Shave_kW
-    enhanced_columns['Target_Shave_kW'] = df_sim.apply(
+    enhanced_columns['Target_Shave_kW'] = df_with_rate_change.apply(
         lambda row: _calculate_target_shave_kw_holiday_aware(row, holidays), axis=1
     ).round(1)
     
     # 6. Charge/Discharge kW (new column)
-    enhanced_columns['Charge/Discharge kW'] = df_sim['Battery_Power_kW'].round(1)
+    enhanced_columns['Charge/Discharge kW'] = df_with_rate_change['Battery_Power_kW'].round(1)
     
     # 7. C Rate (new column)
-    enhanced_columns['C Rate'] = df_sim['Battery_Power_kW'].apply(
+    enhanced_columns['C Rate'] = df_with_rate_change['Battery_Power_kW'].apply(
         lambda x: f"{abs(x) / max(battery_capacity_kwh, 1):.2f}C" if x != 0 else "0.00C"
     )
     
     # 8. Orignal_Shave_kW (new column - original shave before any adjustments)
-    enhanced_columns['Orignal_Shave_kW'] = df_sim.apply(
+    enhanced_columns['Orignal_Shave_kW'] = df_with_rate_change.apply(
         lambda row: max(0, row['Original_Demand'] - row['Monthly_Target']), axis=1
     ).round(1)
     
     # 9. Net_Demand_kW
-    enhanced_columns['Net_Demand_kW'] = df_sim['Net_Demand_kW'].round(1)
+    enhanced_columns['Net_Demand_kW'] = df_with_rate_change['Net_Demand_kW'].round(1)
     
     # 10. Charge (+ve)/Discharge (-ve) kW
-    enhanced_columns['Charge (+ve)/Discharge (-ve) kW'] = df_sim['Battery_Power_kW'].apply(
+    enhanced_columns['Charge (+ve)/Discharge (-ve) kW'] = df_with_rate_change['Battery_Power_kW'].apply(
         lambda x: f"+{abs(x):.1f}" if x < 0 else f"-{x:.1f}" if x > 0 else "0.0"
     )
     
     # 11. BESS_Balance_kWh
-    enhanced_columns['BESS_Balance_kWh'] = df_sim['Battery_SOC_kWh'].round(1)
+    enhanced_columns['BESS_Balance_kWh'] = df_with_rate_change['Battery_SOC_kWh'].round(1)
     
     # 12. SOC_%
-    enhanced_columns['SOC_%'] = df_sim['Battery_SOC_Percent'].round(1)
+    enhanced_columns['SOC_%'] = df_with_rate_change['Battery_SOC_Percent'].round(1)
     
     # 13. SOC_Status
-    enhanced_columns['SOC_Status'] = df_sim['Battery_SOC_Percent'].apply(
+    enhanced_columns['SOC_Status'] = df_with_rate_change['Battery_SOC_Percent'].apply(
         lambda x: '🔴 Critical' if x < 25 else '🟡 Low' if x < 40 else '🟢 Normal' if x < 80 else '🔵 High'
     )
     
     # 14. MD_Period
-    enhanced_columns['MD_Period'] = df_sim.index.map(lambda x: '🔴 Peak' if is_md_window(x, holidays) else '🟢 Off-Peak')
+    enhanced_columns['MD_Period'] = df_with_rate_change.index.map(lambda x: '🔴 Peak' if is_md_window(x, holidays) else '🟢 Off-Peak')
     
-    # 15. Target_Violation
-    enhanced_columns['Target_Violation'] = df_sim.apply(lambda row: _calculate_md_aware_target_violation(row, selected_tariff), axis=1)
+    # 15. REPLACED: Rate_of_Change instead of Target_Violation
+    enhanced_columns['Rate_of_Change'] = df_with_rate_change['Rate_of_Change'].round(3)
     
-    # 16. Conserve_Activated
-    if 'Conserve_Activated' in df_sim.columns:
-        enhanced_columns['Conserve_Activated'] = df_sim['Conserve_Activated'].apply(
+    # 16. NEW: Change_Direction (replaces Target_Violation functionality)
+    enhanced_columns['Change_Direction'] = df_with_rate_change['Change_Direction']
+    
+    # 17. NEW: Change_Magnitude (provides actionable insight)
+    enhanced_columns['Change_Magnitude'] = df_with_rate_change['Change_Magnitude'].astype(str)
+    
+    # 18. Conserve_Activated
+    if 'Conserve_Activated' in df_with_rate_change.columns:
+        enhanced_columns['Conserve_Activated'] = df_with_rate_change['Conserve_Activated'].apply(
             lambda x: '🔋 ACTIVE' if x else '⚪ Normal'
         )
     else:
         enhanced_columns['Conserve_Activated'] = '⚪ Normal'
     
-    # 17. Battery Conserved kW
-    if 'Battery Conserved kW' in df_sim.columns:
-        enhanced_columns['Battery Conserved kW'] = df_sim['Battery Conserved kW'].round(1)
+    # 19. Battery Conserved kW
+    if 'Battery Conserved kW' in df_with_rate_change.columns:
+        enhanced_columns['Battery Conserved kW'] = df_with_rate_change['Battery Conserved kW'].round(1)
     else:
         enhanced_columns['Battery Conserved kW'] = 0.0
     
-    # 18. Revised_Target_kW
-    enhanced_columns['Revised_Target_kW'] = df_sim.apply(
+    # 20. Revised_Target_kW
+    enhanced_columns['Revised_Target_kW'] = df_with_rate_change.apply(
         lambda row: _calculate_revised_target_kw(row, holidays), axis=1
     ).round(1)
     
-    # 19. SOC for Conservation (new column)
-    enhanced_columns['SOC for Conservation'] = df_sim['Battery_SOC_Percent'].apply(
+    # 21. SOC for Conservation (new column)
+    enhanced_columns['SOC for Conservation'] = df_with_rate_change['Battery_SOC_Percent'].apply(
         lambda x: f"{x:.1f}% {'🔋 LOW' if x < 50 else '✅ OK'}"
     )
     
-    # 20. Revised Shave kW (new column)
-    enhanced_columns['Revised Shave kW'] = df_sim.apply(
+    # 22. Revised Shave kW (new column)
+    enhanced_columns['Revised Shave kW'] = df_with_rate_change.apply(
         lambda row: max(0, row['Original_Demand'] - _calculate_revised_target_kw(row, holidays)), axis=1
     ).round(1)
     
-    # 21. Revised Energy Required (kWh) (new column)
-    enhanced_columns['Revised Energy Required (kWh)'] = df_sim.apply(
+    # 23. Revised Energy Required (kWh) (new column)
+    enhanced_columns['Revised Energy Required (kWh)'] = df_with_rate_change.apply(
         lambda row: max(0, row['Original_Demand'] - _calculate_revised_target_kw(row, holidays)) * interval_hours, axis=1
     ).round(2)
     
-    # 🔋 CONSERVATION CASCADE WORKFLOW COLUMNS (new columns 22-25)
-    if 'Revised_Discharge_Power_kW' in df_sim.columns:
-        # 22. Revised Discharge Power (kW) - Step 1 of cascade
-        enhanced_columns['Revised Discharge Power (kW)'] = df_sim['Revised_Discharge_Power_kW'].round(1)
+    # 🔋 CONSERVATION CASCADE WORKFLOW COLUMNS (new columns 24-27)
+    if 'Revised_Discharge_Power_kW' in df_with_rate_change.columns:
+        # 24. Revised Discharge Power (kW) - Step 1 of cascade
+        enhanced_columns['Revised Discharge Power (kW)'] = df_with_rate_change['Revised_Discharge_Power_kW'].round(1)
         
-        # 23. BESS Balance Preserved (kWh) - Step 2 of cascade  
-        enhanced_columns['BESS Balance Preserved (kWh)'] = df_sim['Revised_BESS_Balance_kWh'].round(2)
+        # 25. BESS Balance Preserved (kWh) - Step 2 of cascade  
+        enhanced_columns['BESS Balance Preserved (kWh)'] = df_with_rate_change['Revised_BESS_Balance_kWh'].round(2)
         
-        # 24. Target Achieved w/ Conservation (kW) - Step 3 of cascade
-        enhanced_columns['Target Achieved w/ Conservation (kW)'] = df_sim['Revised_Target_Achieved_kW'].round(1)
+        # 26. Target Achieved w/ Conservation (kW) - Step 3 of cascade
+        enhanced_columns['Target Achieved w/ Conservation (kW)'] = df_with_rate_change['Revised_Target_Achieved_kW'].round(1)
         
-        # 25. SOC Improvement (%) - Step 4 of cascade
-        enhanced_columns['SOC Improvement (%)'] = df_sim['SOC_Improvement_Percent'].apply(
+        # 27. SOC Improvement (%) - Step 4 of cascade
+        enhanced_columns['SOC Improvement (%)'] = df_with_rate_change['SOC_Improvement_Percent'].apply(
             lambda x: f"+{x:.2f}%" if x > 0 else "0.00%"
         )
     else:
         # Add empty columns if conservation cascade not available
         enhanced_columns['Revised Discharge Power (kW)'] = 0.0
         enhanced_columns['BESS Balance Preserved (kWh)'] = 0.0  
-        enhanced_columns['Target Achieved w/ Conservation (kW)'] = df_sim['Net_Demand_kW'].round(1)
+        enhanced_columns['Target Achieved w/ Conservation (kW)'] = df_with_rate_change['Net_Demand_kW'].round(1)
         enhanced_columns['SOC Improvement (%)'] = "0.00%"
     
     return pd.DataFrame(enhanced_columns)
