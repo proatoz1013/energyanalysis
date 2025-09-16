@@ -6581,12 +6581,11 @@ def _display_battery_simulation_tables(df_sim, simulation_results, selected_tari
     st.markdown("##### 1️⃣.1 📋 Battery Simulation Data Tables")
     
     # Tab-based layout for different table views
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4 = st.tabs([
         "📊 Time Series Data (Chart Filtered)", 
         "📅 Daily Summary",
         "📆 Monthly Summary", 
-        "🎯 KPI Summary",
-        "🔍 Filtered View"
+        "🎯 KPI Summary"
     ])
     
     with tab1:
@@ -6792,26 +6791,3 @@ def _display_battery_simulation_tables(df_sim, simulation_results, selected_tari
         interval_hours = _get_dynamic_interval_hours(df_sim)
         kpi_data = _create_kpi_summary_table(simulation_results, df_sim, interval_hours)
         st.dataframe(kpi_data, use_container_width=True, hide_index=True)
-    
-    with tab5:
-        st.markdown("**Custom Filtered View**")
-        
-        # Advanced filters
-        col1, col2 = st.columns(2)
-        with col1:
-            if len(df_sim) > 0:
-                date_range = st.date_input("Select date range", 
-                                         [df_sim.index.min().date(), df_sim.index.max().date()],
-                                         key="filter_date_range")
-        with col2:
-            soc_range = st.slider("SOC Range (%)", 0, 100, (0, 100), key="filter_soc_range")
-        
-        # Apply advanced filters
-        if len(df_sim) > 0 and len(date_range) == 2:
-            mask = (df_sim.index.date >= date_range[0]) & (df_sim.index.date <= date_range[1])
-            mask &= (df_sim['Battery_SOC_Percent'] >= soc_range[0]) & (df_sim['Battery_SOC_Percent'] <= soc_range[1])
-            
-            filtered_advanced = _create_enhanced_battery_table(df_sim[mask], selected_tariff, holidays)
-            st.dataframe(filtered_advanced, use_container_width=True, height=400)
-        else:
-            st.info("Please select a valid date range to view filtered data.")
