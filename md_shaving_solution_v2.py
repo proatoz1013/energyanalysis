@@ -4389,8 +4389,12 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
     if not insights:
         insights.append("✅ **Optimal V2 Performance**: Battery system operating within acceptable parameters with monthly targets")
     
-    for insight in insights:
-        st.info(insight)
+    # UPDATED: Combine all insights into a single info box with proper line breaks (like V2 Data Source Alignment Confirmation)
+    combined_insights = "\n".join([f"- {insight}" for insight in insights])
+    st.info(f"""
+    **🔍 V2 Key Insights from Enhanced Monthly Target Analysis:**
+    {combined_insights}
+    """)
 
 
 def _create_v2_dynamic_target_series(simulation_index, monthly_targets):
@@ -5435,15 +5439,15 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
     
     # Store TOU feedback for display
     if len(tou_feedback_messages) > 0:
+        # UPDATED: Combine all TOU feedback messages into a single info box with proper line breaks
+        combined_tou_messages = "\n".join([f"- {msg}" for msg in tou_feedback_messages[-5:]])  # Show last 5 messages to avoid clutter
+        
         # Display TOU messages using streamlit if available
         try:
-            for msg in tou_feedback_messages[-5:]:  # Show last 5 messages to avoid clutter
-                if "🚨" in msg or "⚠️" in msg:
-                    st.warning(msg)
-                elif "✅" in msg:
-                    st.success(msg)
-                else:
-                    st.info(msg)
+            st.info(f"""
+            **🔋 TOU Battery Simulation Status:**
+            {combined_tou_messages}
+            """)
         except ImportError:
             pass  # Streamlit not available
     
