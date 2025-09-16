@@ -808,7 +808,7 @@ def _perform_md_shaving_analysis(df, power_col, selected_tariff, holidays, targe
     total_md_rate = capacity_rate + network_rate
     
     # Detect peak events first to get actual MD cost impact
-    event_summaries = _detect_peak_events(df, power_col, target_demand, total_md_rate, interval_hours, selected_tariff)
+    event_summaries = _detect_peak_events_tou_aware(df, power_col, target_demand, total_md_rate, interval_hours, selected_tariff, holidays)
     
     # Calculate actual potential saving from maximum MD cost impact
     max_md_cost_impact = 0
@@ -958,6 +958,207 @@ def _detect_peak_events(df, power_col, target_demand, total_md_rate, interval_ho
             # General tariffs: ALL events above target have MD cost impact 24/7
             md_peak_load_during_event = peak_load
             md_peak_time = group[group[power_col] == peak_load].index[0]
+            md_excess_during_peak = excess
+            has_md_cost_impact = True
+        
+        md_cost_impact = md_excess_during_peak * total_md_rate if md_excess_during_peak > 0 and total_md_rate > 0 else 0
+        
+        event_summaries.append({
+            'Start Date': start_time.date(),
+            'Start Time': start_time.strftime('%H:%M'),
+            'End Date': end_time.date(),
+            'End Time': end_time.strftime('%H:%M'),
+            'General Peak Load (kW)': peak_load,
+            'General Excess (kW)': excess,
+            'TOU Peak Load (kW)': md_peak_load_during_event,
+            'TOU Excess (kW)': md_excess_during_peak,
+            'TOU Peak Time': md_peak_time.strftime('%H:%M') if md_peak_time else 'N/A',
+            'Duration (min)': duration_minutes,
+            'General Required Energy (kWh)': total_energy_to_shave,
+            'TOU Required Energy (kWh)': md_peak_energy_to_shave,
+            'MD Cost Impact (RM)': md_cost_impact,
+            'Has MD Cost Impact': has_md_cost_impact,
+            'Tariff Type': 'TOU' if is_tou_tariff else 'General'
+        })
+    
+    return event_summaries
+
+
+def _detect_peak_events_tou_aware(df, power_col, target_demand, total_md_rate, interval_hours, selected_tariff=None, holidays=None):
+    """
+    Enhanced peak event detection with TOU-aware MD recording window logic.
+    
+    TOU Tariffs: Peak events only start during MD recording periods (2PM-10PM weekdays, excluding holidays)
+    General Tariffs: Peak events can start anytime (24/7 MD recording)
+    
+    Args:
+        df: DataFrame with power data
+        power_col: Column name for power values
+        target_demand: Target demand threshold
+        total_md_rate: Total MD rate for cost calculation
+        interval_hours: Data sampling interval in hours
+        selected_tariff: Tariff configuration dict
+        holidays: Set of holiday dates
+    
+    Returns:
+        List of peak event summaries with enhanced TOU-aware logic
+    """
+    from tariffs.peak_logic import is_peak_rp4, get_malaysia_holidays
+    
+    # Import detection function for MD window validation
+    def is_md_window(timestamp, holidays_set):
+        """Check if timestamp falls within MD recording window based on tariff type"""
+        return is_peak_rp4(timestamp, holidays_set if holidays_set else set())
+    
+    # Determine tariff type for event start logic
+    tariff_type = selected_tariff.get('Type', '').lower() if selected_tariff else 'general'
+    tariff_name = selected_tariff.get('Tariff', '').lower() if selected_tariff else ''
+    is_tou_tariff = tariff_type == 'tou' or 'tou' in tariff_name
+    
+    # Use provided holidays or auto-detect from data years
+    if holidays is None:
+        years = df.index.year.unique()
+        holidays = set()
+        for year in years:
+            holidays.update(get_malaysia_holidays(year))
+    
+    # Enhanced peak event detection with TOU-aware logic
+    event_summaries = []
+    in_event = False
+    event_start = None
+    event_data = []
+    
+    for timestamp, row in df.iterrows():
+        power_value = row[power_col]
+        
+        # Determine if this timestamp can be a peak event start based on tariff type
+        if is_tou_tariff:
+            # TOU Tariff: Only during MD recording periods (2PM-10PM weekdays, excluding holidays)
+            can_be_peak_event = is_md_window(timestamp, holidays)
+        else:
+            # General Tariff: Anytime above target (24/7 MD recording)
+            can_be_peak_event = True
+        
+        # Peak event logic with TOU awareness
+        if not in_event and power_value > target_demand and can_be_peak_event:
+            # Start new peak event (only if within valid window for tariff type)
+            in_event = True
+            event_start = timestamp
+            event_data = [(timestamp, power_value)]
+            
+        elif in_event and power_value > target_demand and (not is_tou_tariff or can_be_peak_event):
+            # Continue peak event only if:
+            # - For General tariffs: always continue while above target
+            # - For TOU tariffs: continue only while still in MD window (14:00-22:00)
+            event_data.append((timestamp, power_value))
+            
+        elif in_event and (power_value <= target_demand or 
+                          (is_tou_tariff and not can_be_peak_event)):
+            # End peak event when:
+            # 1. Power drops below target, OR
+            # 2. For TOU tariffs: leaving MD recording window (at 22:00)
+            in_event = False
+            
+            # Process completed event
+            if event_data:
+                event_df = pd.DataFrame(event_data, columns=['timestamp', 'power'])
+                event_df.set_index('timestamp', inplace=True)
+                
+                start_time = event_df.index[0]
+                end_time = event_df.index[-1]
+                peak_load = event_df['power'].max()
+                excess = peak_load - target_demand
+                duration_minutes = (end_time - start_time).total_seconds() / 60
+                
+                # Calculate energy to shave for entire event duration
+                total_energy_to_shave = ((event_df['power'] - target_demand) * interval_hours).sum()
+                
+                # Calculate energy to shave during MD peak period only (2PM-10PM weekdays)
+                md_peak_mask = event_df.index.to_series().apply(
+                    lambda ts: is_md_window(ts, holidays)
+                )
+                event_md_peak = event_df[md_peak_mask]
+                md_peak_energy_to_shave = ((event_md_peak['power'] - target_demand) * interval_hours).sum() if not event_md_peak.empty else 0
+                
+                # Tariff-specific MD cost impact calculation
+                md_excess_during_peak = 0
+                md_peak_load_during_event = 0
+                md_peak_time = None
+                has_md_cost_impact = False
+                
+                if is_tou_tariff:
+                    # TOU tariffs: Only events during MD recording periods have MD cost impact
+                    if not event_md_peak.empty:
+                        md_peak_load_during_event = event_md_peak['power'].max()
+                        md_peak_time = event_md_peak[event_md_peak['power'] == md_peak_load_during_event].index[0]
+                        md_excess_during_peak = md_peak_load_during_event - target_demand
+                        has_md_cost_impact = True
+                else:
+                    # General tariffs: ALL events above target have MD cost impact 24/7
+                    md_peak_load_during_event = peak_load
+                    md_peak_time = event_df[event_df['power'] == peak_load].index[0]
+                    md_excess_during_peak = excess
+                    has_md_cost_impact = True
+                
+                md_cost_impact = md_excess_during_peak * total_md_rate if md_excess_during_peak > 0 and total_md_rate > 0 else 0
+                
+                event_summaries.append({
+                    'Start Date': start_time.date(),
+                    'Start Time': start_time.strftime('%H:%M'),
+                    'End Date': end_time.date(),
+                    'End Time': end_time.strftime('%H:%M'),
+                    'General Peak Load (kW)': peak_load,
+                    'General Excess (kW)': excess,
+                    'TOU Peak Load (kW)': md_peak_load_during_event,
+                    'TOU Excess (kW)': md_excess_during_peak,
+                    'TOU Peak Time': md_peak_time.strftime('%H:%M') if md_peak_time else 'N/A',
+                    'Duration (min)': duration_minutes,
+                    'General Required Energy (kWh)': total_energy_to_shave,
+                    'TOU Required Energy (kWh)': md_peak_energy_to_shave,
+                    'MD Cost Impact (RM)': md_cost_impact,
+                    'Has MD Cost Impact': has_md_cost_impact,
+                    'Tariff Type': 'TOU' if is_tou_tariff else 'General'
+                })
+            
+            # Reset for next potential event
+            event_data = []
+    
+    # Handle case where event is still ongoing at end of data
+    if in_event and event_data:
+        event_df = pd.DataFrame(event_data, columns=['timestamp', 'power'])
+        event_df.set_index('timestamp', inplace=True)
+        
+        start_time = event_df.index[0]
+        end_time = event_df.index[-1]
+        peak_load = event_df['power'].max()
+        excess = peak_load - target_demand
+        duration_minutes = (end_time - start_time).total_seconds() / 60
+        
+        # Calculate energy to shave for entire event duration
+        total_energy_to_shave = ((event_df['power'] - target_demand) * interval_hours).sum()
+        
+        # Calculate energy to shave during MD peak period only
+        md_peak_mask = event_df.index.to_series().apply(
+            lambda ts: is_md_window(ts, holidays)
+        )
+        event_md_peak = event_df[md_peak_mask]
+        md_peak_energy_to_shave = ((event_md_peak['power'] - target_demand) * interval_hours).sum() if not event_md_peak.empty else 0
+        
+        # Tariff-specific MD cost impact calculation
+        md_excess_during_peak = 0
+        md_peak_load_during_event = 0
+        md_peak_time = None
+        has_md_cost_impact = False
+        
+        if is_tou_tariff:
+            if not event_md_peak.empty:
+                md_peak_load_during_event = event_md_peak['power'].max()
+                md_peak_time = event_md_peak[event_md_peak['power'] == md_peak_load_during_event].index[0]
+                md_excess_during_peak = md_peak_load_during_event - target_demand
+                has_md_cost_impact = True
+        else:
+            md_peak_load_during_event = peak_load
+            md_peak_time = event_df[event_df['power'] == peak_load].index[0]
             md_excess_during_peak = excess
             has_md_cost_impact = True
         
@@ -2895,7 +3096,7 @@ def get_tariff_period_classification(timestamp, selected_tariff, holidays=None):
     tariff_type = selected_tariff.get('Type', '').lower()
     
     # Check if it's a TOU (Time of Use) tariff
-    is_tou_tariff = tariff_type == 'tou' or 'tou' in tariff_name
+    is_tou_tariff = tariff_type == 'tou' or 'tou' in tariff_name.lower()
     
     if is_tou_tariff:
         # For TOU tariffs, use time-based classification (peak vs off-peak rates)

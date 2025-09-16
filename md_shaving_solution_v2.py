@@ -30,6 +30,7 @@ from md_shaving_solution import (
     _configure_tariff_selection,
     create_conditional_demand_line_with_peak_logic,
     _detect_peak_events,
+    _detect_peak_events_tou_aware,
     _display_battery_simulation_chart,
     _simulate_battery_operation,
     _get_tariff_description
@@ -1706,8 +1707,8 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                         rates = selected_tariff.get('Rates', {})
                         total_md_rate = rates.get('Capacity Rate', 0) + rates.get('Network Rate', 0)
                     
-                    peak_events = _detect_peak_events(
-                        month_data, power_col, target_value, total_md_rate, interval_hours, selected_tariff
+                    peak_events = _detect_peak_events_tou_aware(
+                        month_data, power_col, target_value, total_md_rate, interval_hours, selected_tariff, holidays
                     )
                     
                     # Add month info to each event including both reference peaks
