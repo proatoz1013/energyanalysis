@@ -2642,12 +2642,111 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                         safety_margin = 0.0  # Not used in battery conservation mode
                         min_exceedance_multiplier = 1.0  # Not used in battery conservation mode
                         
+                        # Add day selection with simple input method
+                        st.markdown("**Active Day(s) Selection**")
+                        
+                        # Multi-select dropdown approach with hierarchical options
+                        available_dates = []
+                        if not df.empty:
+                            # Get all unique dates from the loaded data
+                            unique_dates = sorted(set(df.index.date))
+                            available_dates = [date.strftime('%Y-%m-%d') for date in unique_dates]
+                        
+                        # Create dropdown options with hierarchical structure
+                        dropdown_options = ["All Days"]
+                        if available_dates:
+                            dropdown_options.extend(available_dates)
+                        
+                        # Multi-select dropdown for date selection
+                        selected_conservation_options = st.multiselect(
+                            "📅 Select dates for Battery Conservation Mode:",
+                            options=dropdown_options,
+                            default=["All Days"],
+                            help="Select 'All Days' to apply to all dates, or choose specific dates. You can select multiple options."
+                        )
+                        
+                        # Process the selected options
+                        conservation_dates = []
+                        conservation_date_strings = []
+                        
+                        if not selected_conservation_options:
+                            # If nothing selected, default to "All Days"
+                            selected_conservation_options = ["All Days"]
+                        
+                        if "All Days" in selected_conservation_options:
+                            # If "All Days" is selected, ignore specific dates
+                            conservation_dates = []  # Empty means all days
+                            conservation_date_strings = []
+                            conservation_day_type = "All Days"
+                        else:
+                            # Process specific selected dates
+                            for date_str in selected_conservation_options:
+                                if date_str != "All Days":  # Skip "All Days" if somehow still present
+                                    try:
+                                        # Validate date format
+                                        parsed_date = pd.to_datetime(date_str, format='%Y-%m-%d')
+                                        conservation_dates.append(parsed_date.date())
+                                        conservation_date_strings.append(date_str)
+                                    except ValueError:
+                                        st.error(f"❌ Invalid date format: '{date_str}'. Please report this issue.")
+                            conservation_day_type = f"{len(conservation_dates)} Specific Dates"
+                        
+                        # Store day selection settings for potential future use
+                        conservation_specific_dates = conservation_date_strings
+                        
+                        # Display selection info
+                        if conservation_dates:
+                            st.success(f"✅ Battery Conservation Mode will be active on {len(conservation_dates)} specific dates:")
+                            # Show the dates in a nice format
+                            if len(conservation_dates) <= 10:
+                                # Show all dates if 10 or fewer
+                                date_display = ", ".join(conservation_date_strings)
+                                st.info(f"📅 **Active Dates**: {date_display}")
+                            else:
+                                # Show first 5 and last 5 dates if more than 10
+                                first_5 = ", ".join(conservation_date_strings[:5])
+                                last_5 = ", ".join(conservation_date_strings[-5:])
+                                st.info(f"📅 **Active Dates**: {first_5} ... {last_5} ({len(conservation_dates)} total)")
+                        else:
+                            st.info("📅 **Active Days**: All Days (conservation applies to all dates)")
+                        
+                        # Add helpful selection summary
+                        if "All Days" in selected_conservation_options:
+                            st.info("🌍 **Selection**: All Days - Conservation mode will be active every day when SOC threshold is met")
+                        else:
+                            st.info(f"🗓️ **Selection**: {len(selected_conservation_options)} specific dates selected from {len(available_dates)} available dates")
+                        
+                        # Validation info
+                        if conservation_dates:
+                            # Check if dates are within data range
+                            if not df.empty:
+                                data_start = df.index.min().date()
+                                data_end = df.index.max().date()
+                                
+                                valid_dates = [d for d in conservation_dates if data_start <= d <= data_end]
+                                invalid_dates = [d for d in conservation_dates if d < data_start or d > data_end]
+                                
+                                if invalid_dates:
+                                    invalid_date_strs = [d.strftime('%Y-%m-%d') for d in invalid_dates]
+                                    st.warning(f"⚠️ Some dates are outside your data range ({data_start} to {data_end}): {', '.join(invalid_date_strs)}")
+                                
+                                if valid_dates:
+                                    st.info(f"✅ {len(valid_dates)} dates are within your data range and will be used.")
+                            else:
+                                st.warning("⚠️ Cannot validate dates - no data loaded yet.")
+                        
                         # Show simplified conservation approach
+                        if conservation_dates:
+                            active_days_text = f"{len(conservation_dates)} specific dates ({conservation_date_strings[0]}" + (f" ... {conservation_date_strings[-1]}" if len(conservation_dates) > 1 else "") + ")"
+                        else:
+                            active_days_text = "All Days"
+                            
                         st.info(f"""
                         🎯 **Battery Conservation Mode**: 
                         `When SOC < {soc_threshold}% → Conserve {battery_kw_conserved} kW battery power`
                         
                         **Effect**: Battery will reduce maximum discharge by {battery_kw_conserved} kW to preserve energy
+                        **Active**: {active_days_text}
                         """)
                     else:
                         # Set default values when conservation is disabled
@@ -2655,6 +2754,10 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                         battery_kw_conserved = 100.0  # Default value (not used when disabled)
                         safety_margin = 0.0  # Not used
                         min_exceedance_multiplier = 1.0  # Not used
+                        conservation_day_type = "All Days"  # Default day type
+                        conservation_specific_day = "All Days"  # Default specific day
+                        conservation_dates = []  # No specific dates when conservation is disabled
+                        conservation_date_strings = []  # No specific date strings when conservation is disabled
                     
                     if conservation_enabled:
                         st.info(f"🛡️ **Conservation Mode Active**: When SOC < {soc_threshold}%, system will conserve {battery_kw_conserved} kW of battery power")
@@ -2675,8 +2778,16 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                         conservation_enabled,          # Battery conservation mode toggle
                         soc_threshold,                 # SOC threshold for conservation activation
                         battery_kw_conserved if conservation_enabled else 0.0,  # Battery power to conserve
-                        1.0                            # Not used in battery conservation mode
+                        1.0,                           # Not used in battery conservation mode
+                        conservation_dates if conservation_enabled and 'conservation_dates' in locals() else None  # Date-specific conservation
                     )
+                    
+                    # Store conservation day settings in session state for potential future use
+                    try:
+                        st.session_state.conservation_day_type = conservation_day_type
+                        st.session_state.conservation_specific_dates = conservation_specific_dates
+                    except Exception:
+                        pass  # Silently handle any session state issues
                     
                     # === STEP 5: Display results and metrics ===
                     if simulation_results and 'df_simulation' in simulation_results:
@@ -4370,7 +4481,8 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
             insights.append("✅ **Excellent V2 MD Coverage**: Battery effectively handles all monthly target energy requirements")
     
     # Check V2 success rate
-    if 'success_rate' in locals():
+    if 'daily_analysis' in locals() and len(daily_analysis) > 0:
+        success_rate = (daily_analysis['Success'].sum() / len(daily_analysis) * 100)
         if success_rate > 90:
             insights.append("✅ **High V2 Success Rate**: Battery effectively manages most peak events against dynamic monthly targets")
         elif success_rate < 60:
@@ -4946,7 +5058,7 @@ def _get_tou_charging_urgency(current_timestamp, soc_percent, holidays=None):
     }
 
 
-def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizing, battery_params, interval_hours, selected_tariff=None, holidays=None, conservation_enabled=False, soc_threshold=50, battery_kw_conserved=100.0, unused_param=1.0):
+def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizing, battery_params, interval_hours, selected_tariff=None, holidays=None, conservation_enabled=False, soc_threshold=50, battery_kw_conserved=100.0, unused_param=1.0, conservation_dates=None):
     """
     V2-specific battery simulation that ensures Net Demand NEVER goes below monthly targets.
     
@@ -5043,7 +5155,18 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
         
         if conservation_enabled:
             # CONSERVATION CASCADE WORKFLOW: Four-step feedback loop process
-            if current_soc_percent < soc_threshold:
+            
+            # Check if conservation should be active based on SOC threshold and date filtering
+            soc_condition_met = current_soc_percent < soc_threshold
+            
+            # Date filtering logic: if conservation_dates is provided, check if current date is in the list
+            date_condition_met = True  # Default to True (all days) if no specific dates provided
+            if conservation_dates and len(conservation_dates) > 0:
+                current_date = current_timestamp.date()
+                date_condition_met = current_date in conservation_dates
+            
+            # Conservation activates only when BOTH conditions are met
+            if soc_condition_met and date_condition_met:
                 conservation_activated[i] = True
                 
                 # Calculate original discharge requirement (before conservation)
@@ -6206,6 +6329,77 @@ def _calculate_revised_target_kw(row, holidays=None):
     
     return round(revised_target, 1)
 
+def _classify_daily_performance_type(row, holidays=None):
+    """
+    Classify each interval into daily performance categories for Level 1 filtering.
+    
+    This function analyzes the daily performance pattern and assigns a category
+    that can be used for filtering the time-series data by day type.
+    
+    Categories:
+    - 🟢 Success Days: Days where overall peak shaving targets were met
+    - 🟡 Partial Days: Days with some success but not complete target achievement  
+    - 🔴 Failed Days: Days where peak shaving failed or battery issues occurred
+    - ⚪ Not Applicable: Non-working days (weekends/holidays) or off-peak periods
+    
+    Args:
+        row: DataFrame row with simulation data
+        holidays: Set of holiday dates (optional)
+        
+    Returns:
+        str: Daily performance classification
+    """
+    # Get required data from row
+    timestamp = row.name
+    original_demand = row.get('Original_Demand', 0)
+    net_demand = row.get('Net_Demand_kW', 0)
+    monthly_target = row.get('Monthly_Target', 0)
+    battery_power = row.get('Battery_Power_kW', 0)
+    soc_percent = row.get('Battery_SOC_Percent', 50)
+    
+    # Check if this is a non-working day (weekends or holidays)
+    is_weekend = timestamp.weekday() >= 5
+    is_holiday = holidays and timestamp.date() in holidays
+    
+    if is_weekend or is_holiday:
+        return '⚪ Not Applicable'
+    
+    # Check if this is outside MD recording window (off-peak for TOU)
+    is_md_period = (14 <= timestamp.hour < 22)
+    if not is_md_period:
+        return '⚪ Not Applicable'
+    
+    # For working days during MD periods, classify based on performance
+    
+    # Calculate daily context: we need to determine this interval's contribution to daily performance
+    # Since we can't access the full day's data from a single row, we'll use interval-level heuristics
+    # that reflect typical daily patterns
+    
+    # No shaving needed - already below target
+    if original_demand <= monthly_target:
+        return '🟢 Success Days'
+    
+    # Critical battery issues prevent operation
+    if soc_percent < 10:
+        return '🔴 Failed Days'
+    
+    # Calculate shaving effectiveness for this interval
+    demand_excess = original_demand - monthly_target
+    actual_reduction = original_demand - net_demand
+    
+    if net_demand <= monthly_target * 1.05:  # Within 5% tolerance
+        return '🟢 Success Days'
+    elif actual_reduction >= demand_excess * 0.7:  # 70%+ of required shaving achieved
+        return '🟡 Partial Days'
+    elif battery_power > 0:  # Battery is trying but not enough
+        return '🟡 Partial Days'
+    else:
+        # Should be shaving but battery is not operating
+        if soc_percent < 30:
+            return '🔴 Failed Days'  # Low SOC causing failure
+        else:
+            return '🔴 Failed Days'  # Other failure reasons
+
 def _create_enhanced_battery_table(df_sim, selected_tariff=None, holidays=None):
     """
     Create enhanced table with health and C-rate information for time-series analysis.
@@ -6254,19 +6448,22 @@ def _create_enhanced_battery_table(df_sim, selected_tariff=None, holidays=None):
     
     # 3. Monthly_Target_kW
     enhanced_columns['Monthly_Target_kW'] = df_with_rate_change['Monthly_Target'].round(1)
+
     
-    # 4. Battery_Action
+    # 4. Target_Shave_kW
+    enhanced_columns['Target_Shave_kW'] = df_with_rate_change.apply(
+        lambda row: _calculate_target_shave_kw_holiday_aware(row, holidays), axis=1
+    ).round(1)
+
+    # 5. Battery_Action
     enhanced_columns['Battery_Action'] = df_with_rate_change['Battery_Power_kW'].apply(
         lambda x: f"Discharge {x:.1f}kW" if x > 0 else f"Charge {abs(x):.1f}kW" if x < 0 else "Standby"
     )
     
-    # 5. Target_Shave_kW
-    enhanced_columns['Target_Shave_kW'] = df_with_rate_change.apply(
-        lambda row: _calculate_target_shave_kw_holiday_aware(row, holidays), axis=1
-    ).round(1)
-    
-    # 6. Charge/Discharge kW (new column)
-    enhanced_columns['Charge/Discharge kW'] = df_with_rate_change['Battery_Power_kW'].round(1)
+    # 6. Charge (+ve)/Discharge (-ve) kW
+    enhanced_columns['Charge (+ve)/Discharge (-ve) kW'] = df_with_rate_change['Battery_Power_kW'].apply(
+        lambda x: f"+{abs(x):.1f}" if x < 0 else f"-{x:.1f}" if x > 0 else "0.0"
+    )
     
     # 7. C Rate (new column)
     enhanced_columns['C Rate'] = df_with_rate_change['Battery_Power_kW'].apply(
@@ -6289,27 +6486,35 @@ def _create_enhanced_battery_table(df_sim, selected_tariff=None, holidays=None):
     # 11. BESS_Balance_kWh
     enhanced_columns['BESS_Balance_kWh'] = df_with_rate_change['Battery_SOC_kWh'].round(1)
     
-    # 12. SOC_%
+    # 12. Daily Performance Type (NEW - Level 1 Filter by Day Type)
+    enhanced_columns['Daily Performance Type'] = df_with_rate_change.apply(
+        lambda row: _classify_daily_performance_type(row, holidays), axis=1
+    )
+    
+    # 13. SOC_%
     enhanced_columns['SOC_%'] = df_with_rate_change['Battery_SOC_Percent'].round(1)
     
-    # 13. SOC_Status
+    # 13. SOC_%
+    enhanced_columns['SOC_%'] = df_with_rate_change['Battery_SOC_Percent'].round(1)
+    
+    # 14. SOC_Status
     enhanced_columns['SOC_Status'] = df_with_rate_change['Battery_SOC_Percent'].apply(
         lambda x: '🔴 Critical' if x < 25 else '🟡 Low' if x < 40 else '🟢 Normal' if x < 80 else '🔵 High'
     )
     
-    # 14. MD_Period
+    # 15. MD_Period
     enhanced_columns['MD_Period'] = df_with_rate_change.index.map(lambda x: '🔴 Peak' if is_md_window(x, holidays) else '🟢 Off-Peak')
     
-    # 15. REPLACED: Rate_of_Change instead of Target_Violation
+    # 16. REPLACED: Rate_of_Change instead of Target_Violation
     enhanced_columns['Rate_of_Change'] = df_with_rate_change['Rate_of_Change'].round(3)
     
-    # 16. NEW: Change_Direction (replaces Target_Violation functionality)
+    # 17. NEW: Change_Direction (replaces Target_Violation functionality)
     enhanced_columns['Change_Direction'] = df_with_rate_change['Change_Direction']
     
-    # 17. NEW: Change_Magnitude (provides actionable insight)
+    # 18. NEW: Change_Magnitude (provides actionable insight)
     enhanced_columns['Change_Magnitude'] = df_with_rate_change['Change_Magnitude'].astype(str)
     
-    # 18. Conserve_Activated
+    # 19. Conserve_Activated
     if 'Conserve_Activated' in df_with_rate_change.columns:
         enhanced_columns['Conserve_Activated'] = df_with_rate_change['Conserve_Activated'].apply(
             lambda x: '🔋 ACTIVE' if x else '⚪ Normal'
@@ -6317,44 +6522,44 @@ def _create_enhanced_battery_table(df_sim, selected_tariff=None, holidays=None):
     else:
         enhanced_columns['Conserve_Activated'] = '⚪ Normal'
     
-    # 19. Battery Conserved kW
+    # 20. Battery Conserved kW
     if 'Battery Conserved kW' in df_with_rate_change.columns:
         enhanced_columns['Battery Conserved kW'] = df_with_rate_change['Battery Conserved kW'].round(1)
     else:
         enhanced_columns['Battery Conserved kW'] = 0.0
     
-    # 20. Revised_Target_kW
+    # 21. Revised_Target_kW
     enhanced_columns['Revised_Target_kW'] = df_with_rate_change.apply(
         lambda row: _calculate_revised_target_kw(row, holidays), axis=1
     ).round(1)
     
-    # 21. SOC for Conservation (new column)
+    # 22. SOC for Conservation (new column)
     enhanced_columns['SOC for Conservation'] = df_with_rate_change['Battery_SOC_Percent'].apply(
         lambda x: f"{x:.1f}% {'🔋 LOW' if x < 50 else '✅ OK'}"
     )
     
-    # 22. Revised Shave kW (new column)
+    # 23. Revised Shave kW (new column)
     enhanced_columns['Revised Shave kW'] = df_with_rate_change.apply(
         lambda row: max(0, row['Original_Demand'] - _calculate_revised_target_kw(row, holidays)), axis=1
     ).round(1)
     
-    # 23. Revised Energy Required (kWh) (new column)
+    # 24. Revised Energy Required (kWh) (new column)
     enhanced_columns['Revised Energy Required (kWh)'] = df_with_rate_change.apply(
         lambda row: max(0, row['Original_Demand'] - _calculate_revised_target_kw(row, holidays)) * interval_hours, axis=1
     ).round(2)
     
-    # 🔋 CONSERVATION CASCADE WORKFLOW COLUMNS (new columns 24-27)
+    # 🔋 CONSERVATION CASCADE WORKFLOW COLUMNS (new columns 25-28)
     if 'Revised_Discharge_Power_kW' in df_with_rate_change.columns:
-        # 24. Revised Discharge Power (kW) - Step 1 of cascade
+        # 25. Revised Discharge Power (kW) - Step 1 of cascade
         enhanced_columns['Revised Discharge Power (kW)'] = df_with_rate_change['Revised_Discharge_Power_kW'].round(1)
         
-        # 25. BESS Balance Preserved (kWh) - Step 2 of cascade  
+        # 26. BESS Balance Preserved (kWh) - Step 2 of cascade  
         enhanced_columns['BESS Balance Preserved (kWh)'] = df_with_rate_change['Revised_BESS_Balance_kWh'].round(2)
         
-        # 26. Target Achieved w/ Conservation (kW) - Step 3 of cascade
+        # 27. Target Achieved w/ Conservation (kW) - Step 3 of cascade
         enhanced_columns['Target Achieved w/ Conservation (kW)'] = df_with_rate_change['Revised_Target_Achieved_kW'].round(1)
         
-        # 27. SOC Improvement (%) - Step 4 of cascade
+        # 28. SOC Improvement (%) - Step 4 of cascade
         enhanced_columns['SOC Improvement (%)'] = df_with_rate_change['SOC_Improvement_Percent'].apply(
             lambda x: f"+{x:.2f}%" if x > 0 else "0.00%"
         )
@@ -6478,10 +6683,15 @@ def _create_daily_summary_table(df_sim, selected_tariff=None, interval_hours=Non
         else:
             target_md_shave_kw = 0.0
         
-        # 7. Actual MD Shave (kW) - Maximum actual shaving achieved during peak events
+        # 7. FIXED: Actual MD Shave (kW) - Daily peak reduction for MD billing
         if total_peak_events > 0:
+            # Get daily peaks during MD periods only
             peak_event_data = day_data[day_data['Is_Peak_Event']]
-            actual_md_shave_kw = (peak_event_data['Original_Demand'] - peak_event_data['Net_Demand_kW']).max()
+            daily_original_peak_md = peak_event_data['Original_Demand'].max()
+            daily_net_peak_md = peak_event_data['Net_Demand_kW'].max()
+            
+            # CORRECTED: Actual MD shaving = Daily peak reduction, not max interval shaving
+            actual_md_shave_kw = max(0, daily_original_peak_md - daily_net_peak_md)
         else:
             actual_md_shave_kw = 0.0
         
@@ -6650,7 +6860,34 @@ def _create_monthly_summary_table(df_sim, selected_tariff=None, interval_hours=N
     
     # Calculate MD excess and success shaved based on tariff-specific periods
     monthly_data['MD_Excess_kW'] = (monthly_data['Original_Demand'] - monthly_data['Monthly_Target']).apply(lambda x: max(0, x))
-    monthly_data['Success_Shaved_kW'] = (monthly_data['Original_Demand'] - monthly_data['Net_Demand_kW']).apply(lambda x: max(0, x))  # Max Original - Max Net per month
+    
+    # FIXED: Calculate Success Shaved using daily-level analysis first
+    # This ensures Success Shaved = MAX(Daily Actual MD Shave) per month instead of Max Original - Max Net
+    
+    # Step 1: Calculate daily summary to get daily "Actual MD Shave" values
+    daily_summary = _create_daily_summary_table(df_sim, selected_tariff, interval_hours)
+    
+    if daily_summary.empty:
+        # Fallback to old method if daily summary fails
+        monthly_data['Success_Shaved_kW'] = (monthly_data['Original_Demand'] - monthly_data['Net_Demand_kW']).apply(lambda x: max(0, x))
+    else:
+        # Step 2: Add Month column to daily summary for grouping
+        daily_summary['Month'] = pd.to_datetime(daily_summary['Date']).dt.to_period('M')
+        
+        # Step 3: Convert formatted strings back to numeric for calculations
+        def extract_numeric(value):
+            """Extract numeric value from formatted string"""
+            if isinstance(value, str):
+                return float(value.replace(',', ''))
+            return float(value)
+        
+        daily_summary['Actual_MD_Shave_Numeric'] = daily_summary['Actual MD Shave (kW)'].apply(extract_numeric)
+        
+        # Step 4: Group by month and get MAXIMUM daily Actual MD Shave
+        monthly_success_shaved = daily_summary.groupby('Month')['Actual_MD_Shave_Numeric'].max()
+        
+        # Step 5: Map monthly success shaved values to monthly_data
+        monthly_data['Success_Shaved_kW'] = monthly_data.index.map(lambda period: monthly_success_shaved.get(period, 0))
     monthly_data['Cost_Saving_RM'] = monthly_data['Success_Shaved_kW'] * md_rate_rm_per_kw
     
     # Merge EFC cycles data (corrected column name)

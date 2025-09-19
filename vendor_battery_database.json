@@ -156,5 +156,22 @@
       "UN 38.3"
     ],
     "notes": "Optional transformer cabinet required for off-grid mode"
+  },
+  "DELTA-CE0261-CI": {
+    "company": "Delta",
+    "model": "CE0261",
+    "c_rate": 0.5,
+    "power_kW": 125,
+    "energy_kWh": 261.2,
+    "voltage_V": 832,
+    "lifespan_years": null,
+    "eol_capacity_pct": null,
+    "cycles_per_day": null,
+    "cooling": "Liquid-cooling",
+    "weight_kg": 3000,
+    "dimensions_mm": [1350, 1350, 2300],
+    "depth_of_discharge": null,
+    "round_trip_efficiency": null,
+    "chemistry": "LFP"
   }
 }
