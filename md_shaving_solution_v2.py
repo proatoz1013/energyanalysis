@@ -2868,14 +2868,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                             else:
                                 st.info("🔄 Conservation mode was enabled but never activated (SOC stayed above 50%)")
                         
-                        # === STEP 6: Rate of Change Configuration UI ===
-                        st.subheader("📈 Rate of Change Analysis Configuration")
-                        st.markdown("**Configure rate of change analysis to replace Target_Violation with dynamic trend insights:**")
-                        
-                        # Display rate of change configuration options
-                        rate_of_change_config = display_rate_of_change_options()
-                        
-                        # === STEP 7: Display the battery simulation chart ===
+                        # === STEP 6: Display the battery simulation chart ===
                         st.subheader("📊 Battery Operation Simulation")
                         _display_v2_battery_simulation_chart(
                             simulation_results['df_simulation'],  # Simulated dataframe
@@ -4212,7 +4205,7 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
         daily_analysis['Est_Monthly_Saving'] = daily_analysis['Peak_Reduction'] * md_rate_estimate
         
         # V2 SUCCESS LOGIC: Compare against monthly targets instead of static target
-        daily_analysis['Success'] = daily_analysis['Net_Peak_MD'] <= daily_analysis['Monthly_Target'] * 1.05  # 5% tolerance
+        daily_analysis['Success'] = daily_analysis['Net_Peak_MD'] <= daily_analysis['Monthly_Target']  # No tolerance - exact target
         daily_analysis['Peak_Shortfall'] = (daily_analysis['Net_Peak_MD'] - daily_analysis['Monthly_Target']).clip(lower=0)
         daily_analysis['Required_Additional_Power'] = daily_analysis['Peak_Shortfall']
         
@@ -5620,8 +5613,8 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
         # Use synchronized success rate calculation
         success_metrics = _calculate_success_rate_from_shaving_status(df_sim, holidays=holidays)
         success_rate = success_metrics['success_rate_percent']
-        successful_days = success_metrics['successful_intervals']
-        total_days = success_metrics['total_md_intervals']
+        successful_days = success_metrics['successful_days']  # FIXED: Use actual successful days count
+        total_days = success_metrics['total_days']  # FIXED: Use actual total days count
         md_focused_calculation = True
         
         # V2 DAILY ANALYSIS: Still needed for peak reduction calculation
@@ -5631,14 +5624,14 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
             'Monthly_Target': 'first'  # V2: Get monthly target for each day
         }).reset_index()
         daily_md_analysis.columns = ['Date', 'Original_Peak_MD', 'Net_Peak_MD', 'Monthly_Target']
-        daily_md_analysis['Success'] = daily_md_analysis['Net_Peak_MD'] <= daily_md_analysis['Monthly_Target'] * 1.05
+        daily_md_analysis['Success'] = daily_md_analysis['Net_Peak_MD'] <= daily_md_analysis['Monthly_Target']
         
         # Store synchronized debug info
         debug_info['md_calculation_details'] = {
             'calculation_method': success_metrics['calculation_method'],
             'md_period_logic': success_metrics['md_period_logic'],
-            'successful_intervals': successful_days,
-            'total_md_intervals': total_days,
+            'successful_days': successful_days,  # FIXED: Use correct day count
+            'total_days': total_days,  # FIXED: Use correct day count
             'success_rate_percent': success_rate,
             'synchronized': True
         }
@@ -5646,14 +5639,14 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
         # Fallback: Use synchronized calculation even without MD peak data
         success_metrics = _calculate_success_rate_from_shaving_status(df_sim, holidays=holidays)
         success_rate = success_metrics['success_rate_percent']
-        successful_days = success_metrics['successful_intervals']
-        total_days = success_metrics['total_md_intervals']
+        successful_days = success_metrics['successful_days']  # FIXED: Use actual successful days count
+        total_days = success_metrics['total_days']  # FIXED: Use actual total days count
         md_focused_calculation = False
         
         debug_info['md_calculation_details'] = {
             'calculation_method': success_metrics['calculation_method'],
-            'successful_intervals': successful_days,
-            'total_intervals': total_days,
+            'successful_days': successful_days,  # FIXED: Use correct day count
+            'total_days': total_days,  # FIXED: Use correct day count
             'synchronized': True
         }
     
@@ -5819,7 +5812,7 @@ def _get_simplified_battery_status(row, holidays=None):
         reduction_percentage = (reduction_achieved / excess_before * 100) if excess_before > 0 else 0
         
         # Complete success - got demand to target level
-        if net_demand <= monthly_target * 1.05:  # 5% tolerance
+        if net_demand <= monthly_target:  # No tolerance - exact target
             return '✅ Success'
         
         # Partial success - some reduction but not complete
@@ -5945,7 +5938,7 @@ def _calculate_success_rate_from_shaving_status(df_sim, holidays=None, debug=Fal
         # Daily success criteria: same logic as daily analysis
         if original_peak <= monthly_target:
             daily_status = 'Success'  # No shaving needed
-        elif net_peak <= monthly_target * 1.05:  # 5% tolerance
+        elif net_peak <= monthly_target:  # No tolerance - exact target
             daily_status = 'Success'  # Successful shaving
         else:
             daily_status = 'Failed'   # Failed to reach target
@@ -6387,7 +6380,7 @@ def _classify_daily_performance_type(row, holidays=None):
     demand_excess = original_demand - monthly_target
     actual_reduction = original_demand - net_demand
     
-    if net_demand <= monthly_target * 1.05:  # Within 5% tolerance
+    if net_demand <= monthly_target:  # No tolerance - exact target
         return '🟢 Success Days'
     elif actual_reduction >= demand_excess * 0.7:  # 70%+ of required shaving achieved
         return '🟡 Partial Days'
@@ -6703,7 +6696,7 @@ def _create_daily_summary_table(df_sim, selected_tariff=None, interval_hours=Non
             peak_event_data = day_data[day_data['Is_Peak_Event']]
             max_net_demand_during_peaks = peak_event_data['Net_Demand_kW'].max()
             monthly_target = day_data['Monthly_Target'].iloc[0]
-            target_success = '✅' if max_net_demand_during_peaks <= monthly_target * 1.05 else '❌'  # 5% tolerance
+            target_success = '✅' if max_net_demand_during_peaks <= monthly_target else '❌'  # No tolerance - exact target
         else:
             target_success = '✅'  # No peak events means success by default
         

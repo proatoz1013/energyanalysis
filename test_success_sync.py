@@ -172,8 +172,8 @@ def test_daily_vs_interval_consistency():
         }).reset_index()
         daily_analysis.columns = ['Date', 'Original_Peak_MD', 'Net_Peak_MD', 'Monthly_Target']
         
-        # Apply same 5% tolerance as enhanced shaving success
-        daily_analysis['Success'] = daily_analysis['Net_Peak_MD'] <= daily_analysis['Monthly_Target'] * 1.05
+        # Apply exact target match like enhanced shaving success
+        daily_analysis['Success'] = daily_analysis['Net_Peak_MD'] <= daily_analysis['Monthly_Target']
         
         daily_success_rate = (sum(daily_analysis['Success']) / len(daily_analysis) * 100) if len(daily_analysis) > 0 else 0
         
@@ -195,16 +195,16 @@ def test_daily_vs_interval_consistency():
         return False
 
 def test_tolerance_consistency():
-    """Test that all methods use consistent tolerance values."""
+    """Test that all methods use consistent target evaluation (no tolerance)."""
     print("\n" + "=" * 60)
     print("TEST 4: Tolerance Consistency Check")
     print("=" * 60)
     
-    # Create edge case data right at the tolerance boundary
+    # Create edge case data right at the target boundary
     test_cases = [
         {'original': 800, 'net': 750, 'target': 750, 'expected': 'Complete Success'},  # Exact match
-        {'original': 800, 'net': 785, 'target': 750, 'expected': 'Complete Success'},  # Within 5% tolerance
-        {'original': 800, 'net': 790, 'target': 750, 'expected': 'Partial'},         # Just over 5% tolerance
+        {'original': 800, 'net': 751, 'target': 750, 'expected': 'Partial'},          # 1kW over target
+        {'original': 800, 'net': 760, 'target': 750, 'expected': 'Partial'},          # 10kW over target
     ]
     
     tolerance_consistent = True
@@ -221,15 +221,14 @@ def test_tolerance_consistency():
         
         status = _get_enhanced_shaving_success(df_test.iloc[0])
         
-        # Check tolerance boundary behavior
-        target_with_tolerance = case['target'] * 1.05
-        is_within_tolerance = case['net'] <= target_with_tolerance
+        # Check exact target boundary behavior
+        is_at_or_below_target = case['net'] <= case['target']
         
         print(f"Test Case {i+1}:")
         print(f"  Original: {case['original']} kW, Net: {case['net']} kW, Target: {case['target']} kW")
-        print(f"  Target + 5%: {target_with_tolerance:.1f} kW")
+        print(f"  At/Below Target: {is_at_or_below_target}")
         print(f"  Status: {status}")
-        print(f"  Within Tolerance: {is_within_tolerance}")
+        print(f"  Within Target: {is_at_or_below_target}")
         
         if case['expected'] == 'Complete Success':
             if '✅ Complete Success' not in status:
@@ -246,9 +245,9 @@ def test_tolerance_consistency():
         print()
     
     if tolerance_consistent:
-        print("✅ All tolerance checks passed - 5% tolerance consistently applied")
+        print("✅ All target checks passed - exact target matching enforced")
     else:
-        print("❌ Tolerance inconsistency detected")
+        print("❌ Target inconsistency detected")
     
     return tolerance_consistent
 

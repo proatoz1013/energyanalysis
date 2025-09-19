@@ -2207,7 +2207,7 @@ def _simulate_battery_operation(df, power_col, target_demand, battery_sizing, ba
         }).reset_index()
         daily_md_analysis.columns = ['Date', 'Original_Peak_MD', 'Net_Peak_MD']
         # Use EXACT same success criteria as Daily Peak Shave Effectiveness
-        daily_md_analysis['Success'] = daily_md_analysis['Net_Peak_MD'] <= target_demand * 1.05  # 5% tolerance
+        daily_md_analysis['Success'] = daily_md_analysis['Net_Peak_MD'] <= target_demand  # No tolerance
         
         successful_days = sum(daily_md_analysis['Success'])
         total_days = len(daily_md_analysis)
@@ -2224,7 +2224,7 @@ def _simulate_battery_operation(df, power_col, target_demand, battery_sizing, ba
         # Fallback to original calculation if no MD peak data
         successful_shaves = len(df_sim[
             (df_sim['Original_Demand'] > target_demand) & 
-            (df_sim['Net_Demand_kW'] <= target_demand * 1.05)  # Allow 5% tolerance
+            (df_sim['Net_Demand_kW'] <= target_demand)  # Exact target match
         ])
         total_peak_events = len(df_sim[df_sim['Original_Demand'] > target_demand])
         success_rate = (successful_shaves / total_peak_events * 100) if total_peak_events > 0 else 0
@@ -2535,7 +2535,7 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None, s
     if len(df_md_peak_sim) > 0:
         success_intervals = len(df_md_peak_sim[
             (df_md_peak_sim['Original_Demand'] > target_demand) & 
-            (df_md_peak_sim[net_col] <= target_demand * 1.05)
+            (df_md_peak_sim[net_col] <= target_demand)
         ])
         total_peak_intervals = len(df_md_peak_sim[df_md_peak_sim['Original_Demand'] > target_demand])
         
@@ -2649,7 +2649,7 @@ def _display_battery_simulation_chart(df_sim, target_demand=None, sizing=None, s
         md_rate_estimate = 97.06  # RM/kW from Medium Voltage TOU
         daily_analysis['Peak_Reduction'] = daily_analysis['Original_Peak_MD'] - daily_analysis['Net_Peak_MD']
         daily_analysis['Est_Monthly_Saving'] = daily_analysis['Peak_Reduction'] * md_rate_estimate
-        daily_analysis['Success'] = daily_analysis['Net_Peak_MD'] <= target_demand * 1.05  # 5% tolerance
+        daily_analysis['Success'] = daily_analysis['Net_Peak_MD'] <= target_demand  # No tolerance
         daily_analysis['Peak_Shortfall'] = (daily_analysis['Net_Peak_MD'] - target_demand).clip(lower=0)
         daily_analysis['Required_Additional_Power'] = daily_analysis['Peak_Shortfall']
         
