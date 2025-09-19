@@ -6721,10 +6721,40 @@ def _create_daily_summary_table(df_sim, selected_tariff=None, interval_hours=Non
         # Use throughput method as primary (industry default for warranties)
         equivalent_full_cycles = efc_throughput
         
+        # 11. TARIFF-AWARE Max Original Demand (kW) - Maximum original demand during MD recording periods
+        if is_tou_tariff:
+            # TOU: Only consider MD recording periods (2PM-10PM weekdays, excluding holidays)
+            md_periods_data = day_data[(day_data.index.hour >= 14) & (day_data.index.hour < 22)]
+            if len(md_periods_data) > 0:
+                max_original_demand_kw = md_periods_data['Original_Demand'].max()
+            else:
+                max_original_demand_kw = 0.0  # No MD recording periods for this day
+        else:
+            # General: Consider all periods (24/7 MD recording)
+            max_original_demand_kw = day_data['Original_Demand'].max()
+        
+        # 12. TARIFF-AWARE Max of Net Demand (kW) - Maximum net demand during MD recording periods
+        if is_tou_tariff:
+            # TOU: Only consider MD recording periods (2PM-10PM weekdays, excluding holidays)
+            md_periods_data = day_data[(day_data.index.hour >= 14) & (day_data.index.hour < 22)]
+            if len(md_periods_data) > 0:
+                max_net_demand_kw = md_periods_data['Net_Demand_kW'].max()
+            else:
+                max_net_demand_kw = 0.0  # No MD recording periods for this day
+        else:
+            # General: Consider all periods (24/7 MD recording)
+            max_net_demand_kw = day_data['Net_Demand_kW'].max()
+        
+        # 13. Monthly Target (kW) - The monthly target for this day
+        monthly_target_kw = day_data['Monthly_Target'].iloc[0]  # Same for all intervals in a day
+        
         # Append daily summary with proper formatting
         daily_summary.append({
             'Date': date_str,
             'Total Peak Events': _format_number_value(total_peak_events),
+            'Max Original Demand (kW)': _format_number_value(max_original_demand_kw),
+            'Monthly Target (kW)': _format_number_value(monthly_target_kw),
+            'Max of Net Demand (kW)': _format_number_value(max_net_demand_kw),
             f'{tariff_label} MD Excess (kW)': _format_number_value(md_excess_kw),
             'Total Energy Charge (kWh)': _format_number_value(total_energy_charge_kwh),
             'Total Energy Discharge (kWh)': _format_number_value(total_energy_discharge_kwh),
@@ -6862,7 +6892,8 @@ def _create_monthly_summary_table(df_sim, selected_tariff=None, interval_hours=N
     monthly_data['MD_Excess_kW'] = (monthly_data['Original_Demand'] - monthly_data['Monthly_Target']).apply(lambda x: max(0, x))
     
     # FIXED: Calculate Success Shaved using daily-level analysis first
-    # This ensures Success Shaved = MAX(Daily Actual MD Shave) per month instead of Max Original - Max Net
+    # This ensures Success Shaved = Actual MD Shave from the specific day with peak MD excess
+    # (not maximum shave across all days, but shave from the day that determines monthly MD billing)
     
     # Step 1: Calculate daily summary to get daily "Actual MD Shave" values
     daily_summary = _create_daily_summary_table(df_sim, selected_tariff, interval_hours)
@@ -6882,9 +6913,22 @@ def _create_monthly_summary_table(df_sim, selected_tariff=None, interval_hours=N
             return float(value)
         
         daily_summary['Actual_MD_Shave_Numeric'] = daily_summary['Actual MD Shave (kW)'].apply(extract_numeric)
+        daily_summary['MD_Excess_Numeric'] = daily_summary[f'{tariff_label} MD Excess (kW)'].apply(extract_numeric)
         
-        # Step 4: Group by month and get MAXIMUM daily Actual MD Shave
-        monthly_success_shaved = daily_summary.groupby('Month')['Actual_MD_Shave_Numeric'].max()
+        # Step 4: CORRECTED - Get Actual MD Shave from the specific day with peak MD excess (not maximum shave)
+        monthly_success_shaved = {}
+        for month_period in daily_summary['Month'].unique():
+            month_data = daily_summary[daily_summary['Month'] == month_period]
+            
+            # Find the day with maximum MD excess in this month
+            if len(month_data) > 0 and month_data['MD_Excess_Numeric'].max() > 0:
+                peak_excess_day_idx = month_data['MD_Excess_Numeric'].idxmax()
+                # Get the Actual MD Shave from that specific peak event day
+                actual_shave_on_peak_day = month_data.loc[peak_excess_day_idx, 'Actual_MD_Shave_Numeric']
+                monthly_success_shaved[month_period] = actual_shave_on_peak_day
+            else:
+                # No MD excess in this month, so no shaving achieved
+                monthly_success_shaved[month_period] = 0.0
         
         # Step 5: Map monthly success shaved values to monthly_data
         monthly_data['Success_Shaved_kW'] = monthly_data.index.map(lambda period: monthly_success_shaved.get(period, 0))
