@@ -33,13 +33,22 @@ def _format_number_value(value: float) -> str:
         return f"{value:.2f}"
 
 def read_uploaded_file(uploaded_file):
-    """Read uploaded CSV or Excel file."""
+    """
+    Read uploaded CSV or Excel file with robust error handling and data cleaning.
+    
+    Handles problematic files like:
+    - Pivot tables with "Grand Total" rows
+    - Files with summary rows mixed with data
+    - Multi-level headers
+    - Invalid data formats
+    """
     if uploaded_file is None:
         return None
     
     try:
         file_extension = uploaded_file.name.split('.')[-1].lower()
         
+        # Read the file
         if file_extension == 'csv':
             df = pd.read_csv(uploaded_file)
         elif file_extension in ['xlsx', 'xls']:
@@ -48,9 +57,230 @@ def read_uploaded_file(uploaded_file):
             st.error("Unsupported file format. Please upload CSV or Excel files.")
             return None
         
-        return df
+        # Basic validation
+        if df.empty:
+            st.error("❌ The uploaded file is empty.")
+            return None
+            
+        if len(df.columns) == 0:
+            st.error("❌ The uploaded file has no columns.")
+            return None
+        
+        # Clean the dataframe
+        df_cleaned = clean_dataframe(df, uploaded_file.name)
+        
+        return df_cleaned
+        
     except Exception as e:
-        st.error(f"Error reading file: {str(e)}")
+        st.error(f"❌ Error reading file '{uploaded_file.name}': {str(e)}")
+        return None
+
+
+def clean_dataframe(df, filename):
+    """
+    Clean dataframe by removing problematic rows and validating data structure.
+    
+    Args:
+        df: Raw dataframe from file
+        filename: Name of the source file for user feedback
+        
+    Returns:
+        Cleaned dataframe with problematic rows removed
+    """
+    original_rows = len(df)
+    
+    # Remove completely empty rows
+    df = df.dropna(how='all')
+    
+    # Detect and handle pivot table structures
+    problematic_indicators = [
+        'grand total', 'total', 'summary', 'subtotal', 
+        'average', 'mean', 'sum', 'count', 'max', 'min'
+    ]
+    
+    # Check first column for problematic entries
+    if len(df) > 0 and len(df.columns) > 0:
+        first_col = df.iloc[:, 0].astype(str).str.lower()
+        
+        # Find rows with problematic text in first column
+        problematic_mask = first_col.str.contains('|'.join(problematic_indicators), na=False)
+        problematic_rows = problematic_mask.sum()
+        
+        if problematic_rows > 0:
+            st.warning(f"⚠️ **File '{filename}'**: Detected {problematic_rows} problematic rows (e.g., 'Grand Total', summary rows)")
+            
+            # Show example of problematic rows
+            if problematic_rows <= 5:
+                problematic_examples = df[problematic_mask].iloc[:, 0].tolist()
+                st.info(f"**Removing rows with:** {', '.join(problematic_examples)}")
+            else:
+                sample_examples = df[problematic_mask].iloc[:3, 0].tolist()
+                st.info(f"**Sample rows being removed:** {', '.join(sample_examples)} (and {problematic_rows-3} others)")
+            
+            # Remove problematic rows
+            df = df[~problematic_mask]
+            
+            if df.empty:
+                st.error(f"❌ **File '{filename}'**: No valid data rows remaining after cleaning. Please check your file format.")
+                return pd.DataFrame()
+    
+    # Remove rows where first column contains only non-alphanumeric characters
+    if len(df) > 0:
+        first_col = df.iloc[:, 0].astype(str)
+        # Keep rows where first column has some alphanumeric content
+        valid_content_mask = first_col.str.contains(r'[a-zA-Z0-9]', na=False)
+        invalid_content_rows = (~valid_content_mask).sum()
+        
+        if invalid_content_rows > 0:
+            st.info(f"🧹 **File '{filename}'**: Removing {invalid_content_rows} rows with invalid characters in first column")
+            df = df[valid_content_mask]
+    
+    # Reset index after cleaning
+    df = df.reset_index(drop=True)
+    
+    cleaned_rows = len(df)
+    rows_removed = original_rows - cleaned_rows
+    
+    if rows_removed > 0:
+        st.success(f"✅ **File '{filename}'**: Cleaned data - removed {rows_removed} problematic rows, {cleaned_rows} valid rows remaining")
+    
+    # Final validation
+    if df.empty:
+        st.error(f"❌ **File '{filename}'**: No valid data remaining after cleaning.")
+        return pd.DataFrame()
+    
+    # Detect potential datetime columns and warn about format issues
+    detect_datetime_issues(df, filename)
+    
+    return df
+
+
+def detect_datetime_issues(df, filename):
+    """
+    Detect potential issues with datetime columns and provide user guidance.
+    
+    Args:
+        df: Cleaned dataframe  
+        filename: Name of source file
+    """
+    datetime_candidates = []
+    
+    # Look for columns that might contain datetime data
+    for col in df.columns:
+        col_name_lower = str(col).lower()
+        
+        # Check column names that suggest datetime
+        if any(keyword in col_name_lower for keyword in ['date', 'time', 'timestamp', 'period']):
+            datetime_candidates.append(col)
+            continue
+            
+        # Check first few values for datetime patterns
+        sample_values = df[col].dropna().head(10)
+        if len(sample_values) > 0:
+            datetime_count = 0
+            for val in sample_values:
+                try:
+                    pd.to_datetime(str(val))
+                    datetime_count += 1
+                except:
+                    pass
+            
+            # If more than 70% of samples parse as datetime, it's likely a datetime column
+            if datetime_count >= len(sample_values) * 0.7:
+                datetime_candidates.append(col)
+    
+    # Warn about potential datetime formatting issues
+    for col in datetime_candidates:
+        sample_values = df[col].dropna().head(5).astype(str).tolist()
+        
+        # Check for problematic datetime formats
+        has_text_dates = any('grand' in val.lower() or 'total' in val.lower() for val in sample_values)
+        has_mixed_formats = len(set(len(val.split()) for val in sample_values if val.strip())) > 1
+        
+        if has_text_dates:
+            st.warning(f"⚠️ **Column '{col}' in '{filename}'**: Contains text entries that may cause datetime parsing issues")
+            st.info(f"**Sample values:** {', '.join(sample_values[:3])}")
+        elif has_mixed_formats:
+            st.info(f"ℹ️ **Column '{col}' in '{filename}'**: Mixed datetime formats detected. Ensure consistent format for best results.")
+            st.info(f"**Sample values:** {', '.join(sample_values[:3])}")
+
+
+def process_datetime_column(datetime_series, filename):
+    """
+    Process datetime column with robust error handling and data cleaning.
+    
+    Args:
+        datetime_series: Pandas series containing datetime data
+        filename: Name of source file for user feedback
+        
+    Returns:
+        Cleaned datetime series or None if processing fails
+    """
+    try:
+        # Convert to string first to handle mixed types
+        datetime_str = datetime_series.astype(str)
+        
+        # Remove problematic text entries that can't be parsed as dates
+        problematic_patterns = [
+            'grand total', 'total', 'summary', 'subtotal', 'average', 
+            'mean', 'sum', 'count', 'max', 'min', 'none', 'nan', 'null'
+        ]
+        
+        # Create mask for valid datetime entries
+        valid_mask = ~datetime_str.str.lower().str.contains('|'.join(problematic_patterns), na=False)
+        
+        # Also remove entries that are too short or too long to be valid dates
+        valid_mask &= datetime_str.str.len().between(8, 25)  # Reasonable length for dates
+        
+        # Filter to valid entries only
+        valid_datetime_str = datetime_str[valid_mask]
+        
+        if valid_datetime_str.empty:
+            st.error(f"❌ **File '{filename}'**: No valid datetime entries found in selected column.")
+            return None
+        
+        # Try to parse datetime with error handling
+        try:
+            parsed_datetime = pd.to_datetime(valid_datetime_str, errors='coerce')
+        except Exception as e:
+            st.error(f"❌ **File '{filename}'**: Error parsing datetime column: {str(e)}")
+            return None
+        
+        # Check for parsing failures
+        failed_parsing = parsed_datetime.isna().sum()
+        total_valid = len(valid_datetime_str)
+        
+        if failed_parsing > 0:
+            success_rate = (total_valid - failed_parsing) / total_valid * 100
+            st.warning(f"⚠️ **File '{filename}'**: {failed_parsing} of {total_valid} datetime entries could not be parsed ({success_rate:.1f}% success rate)")
+            
+            if success_rate < 50:
+                st.error(f"❌ **File '{filename}'**: Too many datetime parsing failures ({success_rate:.1f}% success rate). Please check your datetime column format.")
+                return None
+        
+        # Remove failed parsing entries
+        final_datetime = parsed_datetime.dropna()
+        
+        if final_datetime.empty:
+            st.error(f"❌ **File '{filename}'**: No valid datetime entries remaining after parsing.")
+            return None
+        
+        # Create full series with original index, NaN for invalid entries
+        result_series = pd.Series(index=datetime_series.index, dtype='datetime64[ns]')
+        result_series.loc[valid_mask] = parsed_datetime
+        
+        # Report results
+        original_count = len(datetime_series)
+        final_count = result_series.notna().sum()
+        removed_count = original_count - final_count
+        
+        if removed_count > 0:
+            st.info(f"🧹 **File '{filename}'**: Removed {removed_count} invalid datetime entries, {final_count} valid entries remaining")
+        
+        return result_series
+        
+    except Exception as e:
+        st.error(f"❌ **File '{filename}'**: Unexpected error processing datetime column: {str(e)}")
         return None
 
 def extract_all_tariffs() -> Dict[str, Dict]:
@@ -288,11 +518,23 @@ def show():
                             # Create standardized columns
                             processed_df = pd.DataFrame()
                             
-                            # Process datetime column
-                            processed_df['datetime'] = pd.to_datetime(df[datetime_col])
+                            # Process datetime column with robust error handling
+                            datetime_series = process_datetime_column(df[datetime_col], file_info['name'])
+                            if datetime_series is None or datetime_series.empty:
+                                st.error(f"❌ Cannot process datetime column in '{file_info['name']}'. Please check your column selection.")
+                                continue
+                            
+                            processed_df['datetime'] = datetime_series
                             
                             # Process power/demand (required)
                             processed_df['power_demand'] = pd.to_numeric(df[power_col], errors='coerce')
+                            
+                            # Remove rows with invalid datetime or power data
+                            processed_df = processed_df.dropna(subset=['datetime', 'power_demand'])
+                            
+                            if processed_df.empty:
+                                st.error(f"❌ No valid data remaining in '{file_info['name']}' after cleaning datetime and power columns.")
+                                continue
                             
                             # Calculate energy consumption from power demand (kW to kWh)
                             # Assume interval between readings (default to 1 hour if not specified)
