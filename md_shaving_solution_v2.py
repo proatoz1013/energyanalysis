@@ -1262,7 +1262,7 @@ def render_md_shaving_v2():
                         shave_percent = st.slider(
                             "Percentage to Shave (%)", 
                             min_value=1, 
-                            max_value=50, 
+                            max_value=100, 
                             value=default_shave_percent, 
                             step=1,
                             key="v2_shave_percent",
@@ -4176,9 +4176,10 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
     st.markdown("##### 4️⃣ V2 Daily Peak Shave Effectiveness & Success Analysis (MD Peak Periods Only)")
     st.info("🆕 **V2 Enhancement**: Success/failure calculated against dynamic monthly targets")
     
-    # Filter data for MD peak periods only (2 PM-10 PM, weekdays)
+    # Filter data for MD peak periods only (2 PM-10 PM, weekdays, excluding holidays)
     def is_md_peak_period_for_effectiveness(timestamp):
-        return timestamp.weekday() < 5 and 14 <= timestamp.hour < 22
+        # Use the proper holiday-aware function for consistency
+        return is_peak_rp4(timestamp, holidays if holidays else set())
         
     df_md_peak = df_sim[df_sim.index.to_series().apply(is_md_peak_period_for_effectiveness)]
     
@@ -6566,7 +6567,7 @@ def _create_enhanced_battery_table(df_sim, selected_tariff=None, holidays=None):
     return pd.DataFrame(enhanced_columns)
 
 
-def _create_daily_summary_table(df_sim, selected_tariff=None, interval_hours=None):
+def _create_daily_summary_table(df_sim, selected_tariff=None, interval_hours=None, holidays=None):
     """
     Create revised daily summary of battery performance with RP4 tariff-aware peak events analysis.
     
@@ -6574,6 +6575,7 @@ def _create_daily_summary_table(df_sim, selected_tariff=None, interval_hours=Non
         df_sim: Simulation dataframe with battery operation data
         selected_tariff: Selected tariff configuration for RP4 tariff-aware analysis
         interval_hours: Time interval in hours (if None, will be detected dynamically)
+        holidays: Set of holiday dates for proper holiday-aware RP4 logic
         
     Returns:
         pd.DataFrame: Daily performance summary with RP4 tariff-aware peak events analysis
@@ -6584,6 +6586,18 @@ def _create_daily_summary_table(df_sim, selected_tariff=None, interval_hours=Non
     # Get dynamic interval hours if not provided
     if interval_hours is None:
         interval_hours = _get_dynamic_interval_hours(df_sim)
+    
+    # Auto-detect holidays if not provided
+    if holidays is None:
+        from tariffs.peak_logic import detect_holidays_from_data
+        try:
+            holidays = detect_holidays_from_data(df_sim, 'timestamp')
+        except:
+            # Fallback to current year holidays
+            from tariffs.peak_logic import get_malaysia_holidays
+            import datetime
+            current_year = datetime.datetime.now().year
+            holidays = get_malaysia_holidays(current_year)
     
     # Determine tariff type for RP4 tariff-aware analysis
     is_tou_tariff = False
@@ -6612,7 +6626,7 @@ def _create_daily_summary_table(df_sim, selected_tariff=None, interval_hours=Non
     def is_peak_event_rp4(row):
         """
         Determine if this interval contains a peak event based on RP4 tariff logic:
-        - TOU Tariff: Peak events only during MD recording periods (2PM-10PM weekdays)
+        - TOU Tariff: Peak events only during MD recording periods (2PM-10PM weekdays, excluding holidays)
         - General Tariff: Peak events anytime (24/7 MD recording)
         """
         timestamp = row.name
@@ -6623,11 +6637,14 @@ def _create_daily_summary_table(df_sim, selected_tariff=None, interval_hours=Non
         if original_demand <= monthly_target:
             return False
         
-        # Apply RP4 tariff-specific logic - IMPROVED HIERARCHY
+        # Apply RP4 tariff-specific logic with PROPER HOLIDAY AWARENESS
         if is_tou_tariff:
-            # TOU: Only count as peak event during MD recording window (2PM-10PM weekdays, excluding holidays)
-            # Note: This inline logic doesn't have holidays parameter, would need function call for complete accuracy
-            return (timestamp.weekday() < 5 and 14 <= timestamp.hour < 22)
+            # TOU: Use proper holiday-aware RP4 logic
+            # FIXED: Now uses is_peak_rp4() from peak_logic.py with holidays parameter
+            # This ensures events during holidays (like 2025-06-27 Awal Muharram) are correctly 
+            # classified as off-peak for TOU tariffs, fixing the Target_Success calculation
+            from tariffs.peak_logic import is_peak_rp4
+            return is_peak_rp4(timestamp, holidays if holidays else set())
         else:
             # General: Any time above target is a peak event (24/7 MD recording)
             return True
@@ -6889,7 +6906,7 @@ def _create_monthly_summary_table(df_sim, selected_tariff=None, interval_hours=N
     # (not maximum shave across all days, but shave from the day that determines monthly MD billing)
     
     # Step 1: Calculate daily summary to get daily "Actual MD Shave" values
-    daily_summary = _create_daily_summary_table(df_sim, selected_tariff, interval_hours)
+    daily_summary = _create_daily_summary_table(df_sim, selected_tariff, interval_hours, holidays=None)
     
     if daily_summary.empty:
         # Fallback to old method if daily summary fails
@@ -7077,9 +7094,9 @@ def _display_battery_simulation_tables(df_sim, simulation_results, selected_tari
     with tab2:
         st.markdown("**Daily Performance Summary with RP4 Tariff-Aware Peak Events**")
         
-        # UPDATED: Pass selected_tariff and interval_hours to daily summary function
+        # UPDATED: Pass selected_tariff, interval_hours and holidays to daily summary function
         interval_hours = _get_dynamic_interval_hours(df_sim)
-        daily_data = _create_daily_summary_table(df_sim, selected_tariff, interval_hours)
+        daily_data = _create_daily_summary_table(df_sim, selected_tariff, interval_hours, holidays)
         
         if len(daily_data) > 0:
             st.dataframe(daily_data, use_container_width=True)
