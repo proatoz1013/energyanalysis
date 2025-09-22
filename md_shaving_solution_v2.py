@@ -5305,7 +5305,9 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
             soc_percentage = (soc[i] / usable_capacity) * 100
             
             # Calculate dynamic demand thresholds based on recent patterns
-            lookback_periods = min(96, len(df_sim))  # 24 hours of 15-min data or available
+            # Dynamic lookback: 24 hours based on actual data interval
+            intervals_per_24h = int(24 / interval_hours) if interval_hours > 0 else 96  # Fallback to 96 for 15-min
+            lookback_periods = min(intervals_per_24h, len(df_sim))  # 24 hours of data or available
             start_idx = max(0, i - lookback_periods)
             recent_demand = df_sim[power_col].iloc[start_idx:i+1]
             
@@ -5335,7 +5337,9 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
                         should_charge = (soc_percentage < 95) and (current_demand < avg_demand * 1.2)
                         charge_rate_factor = min(1.0, 0.8 * tou_info['charge_rate_multiplier'])  # Up to 1.0x (max power)
                         
-                        if i % 4 == 0:  # Log every 4 intervals (1 hour for 15-min data)
+                        # Dynamic logging: every hour based on actual data interval
+                        intervals_per_hour = int(1 / interval_hours) if interval_hours > 0 else 4  # Fallback to 4 for 15-min
+                        if i % intervals_per_hour == 0:  # Log every hour
                             tou_feedback_messages.append(f"🚨 CRITICAL TOU Charging: {tou_info['hours_until_md']:.1f}h until MD window, SOC: {soc_percentage:.1f}%")
                             
                     elif tou_info['urgency_level'] == 'high':
@@ -5343,7 +5347,9 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
                         should_charge = (soc_percentage < 95) and (current_demand < avg_demand * 1.0)
                         charge_rate_factor = 0.6 * tou_info['charge_rate_multiplier']
                         
-                        if i % 8 == 0:  # Log every 8 intervals
+                        # Dynamic logging: every 2 hours based on actual data interval
+                        intervals_per_2_hours = int(2 / interval_hours) if interval_hours > 0 else 8  # Fallback to 8 for 15-min
+                        if i % intervals_per_2_hours == 0:  # Log every 2 hours
                             tou_feedback_messages.append(f"⚡ HIGH TOU Charging: {tou_info['hours_until_md']:.1f}h until MD window, SOC: {soc_percentage:.1f}%")
                             
                     else:
@@ -5351,7 +5357,9 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
                         should_charge = (soc_percentage < 95) and (current_demand < avg_demand * 0.8)
                         charge_rate_factor = 0.5
                         
-                        if i % 16 == 0:  # Log every 16 intervals
+                        # Dynamic logging: every 4 hours based on actual data interval
+                        intervals_per_4_hours = int(4 / interval_hours) if interval_hours > 0 else 16  # Fallback to 16 for 15-min
+                        if i % intervals_per_4_hours == 0:  # Log every 4 hours
                             tou_feedback_messages.append(f"🔋 Standard TOU Charging: {tou_info['hours_until_md']:.1f}h until MD window, SOC: {soc_percentage:.1f}%")
                 
                 # Outside TOU charging window - use standard tariff-aware logic
@@ -5466,7 +5474,9 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
                         net_demand.iloc[i] = current_demand + final_charge_power
                         
                     # Add debug feedback for significant charging events
-                    if final_charge_power > 50 and i % 8 == 0:  # Log every 8 intervals for large charging
+                    # Dynamic logging: every 2 hours based on actual data interval
+                    intervals_per_2_hours = int(2 / interval_hours) if interval_hours > 0 else 8  # Fallback to 8 for 15-min
+                    if final_charge_power > 50 and i % intervals_per_2_hours == 0:  # Log every 2 hours for large charging
                         period_type = "MD" if is_md_recording_period else "Off-Peak"
                         tou_feedback_messages.append(f"🔋 Charging {final_charge_power:.1f}kW during {period_type} period, SOC: {soc_percentage:.1f}% → {(soc[i]/usable_capacity)*100:.1f}%")
                         
@@ -5475,7 +5485,9 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
                     net_demand.iloc[i] = current_demand
                     
                     # Debug feedback for why charging didn't occur (only for low SOC)
-                    if soc_percentage < 50 and i % 16 == 0:  # Log every 16 intervals
+                    # Dynamic logging: every 4 hours based on actual data interval
+                    intervals_per_4_hours = int(4 / interval_hours) if interval_hours > 0 else 16  # Fallback to 16 for 15-min
+                    if soc_percentage < 50 and i % intervals_per_4_hours == 0:  # Log every 4 hours
                         period_type = "MD" if is_md_recording_period else "Off-Peak" 
                         if not should_charge:
                             tou_feedback_messages.append(f"⏸️ No charging: demand too high ({current_demand:.0f}kW > threshold) during {period_type}, SOC: {soc_percentage:.1f}%")
