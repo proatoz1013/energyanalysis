@@ -1692,8 +1692,8 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                 
                 if not month_data.empty:
                     # Find peak events for this month using V1's detection logic
-                    # Auto-detect sampling interval from this month's data
-                    interval_hours = _infer_interval_hours(month_data.index, fallback=0.25)
+                    # Auto-detect sampling interval from this month's data using centralized function
+                    interval_hours = _get_dynamic_interval_hours(month_data)
                     
                     # Save detected interval to session state for transparency
                     try:
@@ -2590,8 +2590,8 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                         'depth_of_discharge': 80.0  # Max usable % of capacity
                     }
                     
-                    # Auto-detect global sampling interval (fallback to 15 minutes)
-                    interval_hours = _infer_interval_hours(df_for_v1.index, fallback=0.25)
+                    # Auto-detect global sampling interval using centralized function
+                    interval_hours = _get_dynamic_interval_hours(df_for_v1)
                     try:
                         st.session_state['data_interval_hours'] = interval_hours
                     except Exception:
@@ -3167,7 +3167,7 @@ if __name__ == "__main__":
     render_md_shaving_v2()
 
 
-def cluster_peak_events(events_df, battery_params, md_hours, working_days):
+def cluster_peak_events(events_df, battery_params, md_hours, working_days, interval_hours=None):
     """
     Mock clustering function for peak events analysis.
     
@@ -3176,12 +3176,17 @@ def cluster_peak_events(events_df, battery_params, md_hours, working_days):
         battery_params: Dictionary with battery parameters
         md_hours: Tuple of (start_hour, end_hour) for MD period
         working_days: List of working days
+        interval_hours: Data interval in hours (e.g., 0.25 for 15-min)
         
     Returns:
         tuple: (clusters_df, events_for_clustering)
     """
     if events_df.empty:
         return pd.DataFrame(), events_df
+    
+    # Get dynamic interval detection if not provided
+    if interval_hours is None:
+        interval_hours = _get_dynamic_interval_hours(events_df)
     
     # Create a simple clustering based on date grouping
     events_for_clustering = events_df.copy()
@@ -3195,7 +3200,7 @@ def cluster_peak_events(events_df, battery_params, md_hours, working_days):
         clusters_data.append({
             'cluster_id': cluster_id,
             'num_events_in_cluster': len(group),
-            'cluster_duration_hr': len(group) * 0.5 if len(group) > 1 else 0,  # Multi-event clusters
+            'cluster_duration_hr': len(group) * interval_hours if len(group) > 1 else 0,  # Dynamic interval
             'peak_abs_kw_in_cluster': group.get('General Peak Load (kW)', pd.Series([0])).max(),
             'peak_abs_kw_sum_in_cluster': group.get('General Peak Load (kW)', pd.Series([0])).sum(),
             'total_energy_above_threshold_kwh': group.get('General Required Energy (kWh)', pd.Series([0])).sum(),
@@ -6411,7 +6416,6 @@ def _create_enhanced_battery_table(df_sim, selected_tariff=None, holidays=None):
     battery_capacity_kwh = 100  # Default
     c_rate = 1.0  # Default
     max_power_kw = 100  # Default
-    interval_hours = 0.25  # Default to 15-minute intervals
     
     if hasattr(st.session_state, 'tabled_analysis_selected_battery'):
         battery_spec = st.session_state.tabled_analysis_selected_battery['spec']
@@ -6419,10 +6423,8 @@ def _create_enhanced_battery_table(df_sim, selected_tariff=None, holidays=None):
         c_rate = battery_spec.get('c_rate', 1.0)
         max_power_kw = battery_spec.get('power_kW', 100)
     
-    # Detect interval hours from data
-    if len(df_sim) > 1:
-        time_diff = df_sim.index[1] - df_sim.index[0]
-        interval_hours = time_diff.total_seconds() / 3600
+    # Detect interval hours from data using centralized function
+    interval_hours = _get_dynamic_interval_hours(df_sim)
     
     # Add rate of change analysis to the simulation data
     df_with_rate_change = add_rate_of_change_column(
