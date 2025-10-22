@@ -6491,8 +6491,8 @@ def _create_enhanced_battery_table(df_sim, selected_tariff=None, holidays=None):
     # 9. Net_Demand_kW
     enhanced_columns['Net_Demand_kW'] = df_with_rate_change['Net_Demand_kW'].round(1)
     
-    # 10. BESS_Balance_kWh
-    enhanced_columns['BESS_Balance_kWh'] = df_with_rate_change['Battery_SOC_kWh'].round(1)
+    # 10. Battery_SOC_kWh (renamed from BESS_Balance_kWh for consistency)
+    enhanced_columns['Battery_SOC_kWh'] = df_with_rate_change['Battery_SOC_kWh'].round(1)
     
     # 11. Daily Performance Type (NEW - Level 1 Filter by Day Type)
     enhanced_columns['Daily Performance Type'] = df_with_rate_change.apply(
