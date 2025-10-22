@@ -6473,7 +6473,12 @@ def _create_enhanced_battery_table(df_sim, selected_tariff=None, holidays=None):
         lambda x: f"+{abs(x):.1f}" if x < 0 else f"-{x:.1f}" if x > 0 else "0.0"
     )
     
-    # 7. C Rate (new column)
+    # 7. Charge (+ve)/Discharge (-ve) kWh (NEW COLUMN - Energy equivalent)
+    enhanced_columns['Charge (+ve)/Discharge (-ve) kWh'] = df_with_rate_change['Battery_Power_kW'].apply(
+        lambda x: f"+{abs(x * interval_hours):.2f}" if x < 0 else f"-{x * interval_hours:.2f}" if x > 0 else "0.00"
+    )
+    
+    # 8. C Rate (new column)
     enhanced_columns['C Rate'] = df_with_rate_change['Battery_Power_kW'].apply(
         lambda x: f"{abs(x) / max(battery_capacity_kwh, 1):.2f}C" if x != 0 else "0.00C"
     )
@@ -6486,43 +6491,35 @@ def _create_enhanced_battery_table(df_sim, selected_tariff=None, holidays=None):
     # 9. Net_Demand_kW
     enhanced_columns['Net_Demand_kW'] = df_with_rate_change['Net_Demand_kW'].round(1)
     
-    # 10. Charge (+ve)/Discharge (-ve) kW
-    enhanced_columns['Charge (+ve)/Discharge (-ve) kW'] = df_with_rate_change['Battery_Power_kW'].apply(
-        lambda x: f"+{abs(x):.1f}" if x < 0 else f"-{x:.1f}" if x > 0 else "0.0"
-    )
-    
-    # 11. BESS_Balance_kWh
+    # 10. BESS_Balance_kWh
     enhanced_columns['BESS_Balance_kWh'] = df_with_rate_change['Battery_SOC_kWh'].round(1)
     
-    # 12. Daily Performance Type (NEW - Level 1 Filter by Day Type)
+    # 11. Daily Performance Type (NEW - Level 1 Filter by Day Type)
     enhanced_columns['Daily Performance Type'] = df_with_rate_change.apply(
         lambda row: _classify_daily_performance_type(row, holidays), axis=1
     )
     
-    # 13. SOC_%
+    # 12. SOC_%
     enhanced_columns['SOC_%'] = df_with_rate_change['Battery_SOC_Percent'].round(1)
     
-    # 13. SOC_%
-    enhanced_columns['SOC_%'] = df_with_rate_change['Battery_SOC_Percent'].round(1)
-    
-    # 14. SOC_Status
+    # 13. SOC_Status
     enhanced_columns['SOC_Status'] = df_with_rate_change['Battery_SOC_Percent'].apply(
         lambda x: '🔴 Critical' if x < 25 else '🟡 Low' if x < 40 else '🟢 Normal' if x < 80 else '🔵 High'
     )
     
-    # 15. MD_Period
+    # 14. MD_Period
     enhanced_columns['MD_Period'] = df_with_rate_change.index.map(lambda x: '🔴 Peak' if is_md_window(x, holidays) else '🟢 Off-Peak')
     
-    # 16. REPLACED: Rate_of_Change instead of Target_Violation
+    # 15. REPLACED: Rate_of_Change instead of Target_Violation
     enhanced_columns['Rate_of_Change'] = df_with_rate_change['Rate_of_Change'].round(3)
     
-    # 17. NEW: Change_Direction (replaces Target_Violation functionality)
+    # 16. NEW: Change_Direction (replaces Target_Violation functionality)
     enhanced_columns['Change_Direction'] = df_with_rate_change['Change_Direction']
     
-    # 18. NEW: Change_Magnitude (provides actionable insight)
+    # 17. NEW: Change_Magnitude (provides actionable insight)
     enhanced_columns['Change_Magnitude'] = df_with_rate_change['Change_Magnitude'].astype(str)
     
-    # 19. Conserve_Activated
+    # 18. Conserve_Activated
     if 'Conserve_Activated' in df_with_rate_change.columns:
         enhanced_columns['Conserve_Activated'] = df_with_rate_change['Conserve_Activated'].apply(
             lambda x: '🔋 ACTIVE' if x else '⚪ Normal'
@@ -6530,44 +6527,44 @@ def _create_enhanced_battery_table(df_sim, selected_tariff=None, holidays=None):
     else:
         enhanced_columns['Conserve_Activated'] = '⚪ Normal'
     
-    # 20. Battery Conserved kW
+    # 19. Battery Conserved kW
     if 'Battery Conserved kW' in df_with_rate_change.columns:
         enhanced_columns['Battery Conserved kW'] = df_with_rate_change['Battery Conserved kW'].round(1)
     else:
         enhanced_columns['Battery Conserved kW'] = 0.0
     
-    # 21. Revised_Target_kW
+    # 20. Revised_Target_kW
     enhanced_columns['Revised_Target_kW'] = df_with_rate_change.apply(
         lambda row: _calculate_revised_target_kw(row, holidays), axis=1
     ).round(1)
     
-    # 22. SOC for Conservation (new column)
+    # 21. SOC for Conservation (new column)
     enhanced_columns['SOC for Conservation'] = df_with_rate_change['Battery_SOC_Percent'].apply(
         lambda x: f"{x:.1f}% {'🔋 LOW' if x < 50 else '✅ OK'}"
     )
     
-    # 23. Revised Shave kW (new column)
+    # 22. Revised Shave kW (new column)
     enhanced_columns['Revised Shave kW'] = df_with_rate_change.apply(
         lambda row: max(0, row['Original_Demand'] - _calculate_revised_target_kw(row, holidays)), axis=1
     ).round(1)
     
-    # 24. Revised Energy Required (kWh) (new column)
+    # 23. Revised Energy Required (kWh) (new column)
     enhanced_columns['Revised Energy Required (kWh)'] = df_with_rate_change.apply(
         lambda row: max(0, row['Original_Demand'] - _calculate_revised_target_kw(row, holidays)) * interval_hours, axis=1
     ).round(2)
     
-    # 🔋 CONSERVATION CASCADE WORKFLOW COLUMNS (new columns 25-28)
+    # 🔋 CONSERVATION CASCADE WORKFLOW COLUMNS (new columns 24-27)
     if 'Revised_Discharge_Power_kW' in df_with_rate_change.columns:
-        # 25. Revised Discharge Power (kW) - Step 1 of cascade
+        # 24. Revised Discharge Power (kW) - Step 1 of cascade
         enhanced_columns['Revised Discharge Power (kW)'] = df_with_rate_change['Revised_Discharge_Power_kW'].round(1)
         
-        # 26. BESS Balance Preserved (kWh) - Step 2 of cascade  
+        # 25. BESS Balance Preserved (kWh) - Step 2 of cascade  
         enhanced_columns['BESS Balance Preserved (kWh)'] = df_with_rate_change['Revised_BESS_Balance_kWh'].round(2)
         
-        # 27. Target Achieved w/ Conservation (kW) - Step 3 of cascade
+        # 26. Target Achieved w/ Conservation (kW) - Step 3 of cascade
         enhanced_columns['Target Achieved w/ Conservation (kW)'] = df_with_rate_change['Revised_Target_Achieved_kW'].round(1)
         
-        # 28. SOC Improvement (%) - Step 4 of cascade
+        # 27. SOC Improvement (%) - Step 4 of cascade
         enhanced_columns['SOC Improvement (%)'] = df_with_rate_change['SOC_Improvement_Percent'].apply(
             lambda x: f"+{x:.2f}%" if x > 0 else "0.00%"
         )
