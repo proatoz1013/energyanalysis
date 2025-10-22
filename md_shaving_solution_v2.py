@@ -5143,7 +5143,7 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
         
         # 🔋 CONSERVATION CASCADE WORKFLOW - Comprehensive Conservation Logic
         # STEP 1: Initialize conservation parameters for this interval
-        current_soc_percent = (soc[i-1] / usable_capacity * 100) if i > 0 else 80
+        current_soc_percent = (soc[i-1] / battery_capacity * 100) if i > 0 else 95
         conservation_activated[i] = False
         battery_power_conserved[i] = 0.0
         battery_kw_conserved_values[i] = 0.0
@@ -5199,7 +5199,7 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
                 
                 # ===== STEP 4: IMPROVE SOC % THROUGH ENERGY CONSERVATION =====
                 # Calculate SOC improvement from conserved energy
-                soc_improvement = (energy_conserved_kwh / usable_capacity) * 100
+                soc_improvement = (energy_conserved_kwh / battery_capacity) * 100
                 
                 # ===== STORE CASCADE WORKFLOW METRICS =====
                 revised_discharge_power_cascade[i] = revised_discharge_power
@@ -5252,8 +5252,8 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
             max_allowable_discharge = excess  # This already accounts for conservation adjustments
             
             # Get current SOC for C-rate calculations
-            current_soc_kwh = soc[i-1] if i > 0 else usable_capacity * 0.80  # Start at 80% SOC (within 5%-95% range)
-            current_soc_percent = (current_soc_kwh / usable_capacity) * 100
+            current_soc_kwh = soc[i-1] if i > 0 else battery_capacity * 0.95  # Start at 95% of total capacity
+            current_soc_percent = (current_soc_kwh / battery_capacity) * 100  # Use total capacity for percentage
             
             # Get battery specifications with C-rate constraints
             if hasattr(st.session_state, 'tabled_analysis_selected_battery'):
@@ -5297,12 +5297,12 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
             if i > 0:
                 soc[i] = soc[i-1]
             else:
-                soc[i] = usable_capacity * 0.8
+                soc[i] = battery_capacity * 0.95  # Start at 95% of total capacity
             
             # Enhanced charging logic with TOU precondition support
             current_time = df_sim.index[i]
             hour = current_time.hour
-            soc_percentage = (soc[i] / usable_capacity) * 100
+            soc_percentage = (soc[i] / battery_capacity) * 100  # Use total capacity for percentage
             
             # Calculate dynamic demand thresholds based on recent patterns
             # Dynamic lookback: 24 hours based on actual data interval
@@ -5478,7 +5478,7 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
                     intervals_per_2_hours = int(2 / interval_hours) if interval_hours > 0 else 8  # Fallback to 8 for 15-min
                     if final_charge_power > 50 and i % intervals_per_2_hours == 0:  # Log every 2 hours for large charging
                         period_type = "MD" if is_md_recording_period else "Off-Peak"
-                        tou_feedback_messages.append(f"🔋 Charging {final_charge_power:.1f}kW during {period_type} period, SOC: {soc_percentage:.1f}% → {(soc[i]/usable_capacity)*100:.1f}%")
+                        tou_feedback_messages.append(f"🔋 Charging {final_charge_power:.1f}kW during {period_type} period, SOC: {soc_percentage:.1f}% → {(soc[i]/battery_capacity)*100:.1f}%")
                         
                 else:
                     # No charging possible
@@ -5498,8 +5498,9 @@ def _simulate_battery_operation_v2(df, power_col, monthly_targets, battery_sizin
                 net_demand.iloc[i] = current_demand
         
         # Ensure SOC stays within 5%-95% limits for standardized battery protection
-        soc[i] = max(usable_capacity * 0.05, min(soc[i], usable_capacity * 0.95))
-        soc_percent[i] = (soc[i] / usable_capacity) * 100
+        # FIXED: Use battery_capacity for upper limit to eliminate double limitation
+        soc[i] = max(usable_capacity * 0.05, min(soc[i], battery_capacity * 0.95))
+        soc_percent[i] = (soc[i] / battery_capacity) * 100  # Use total capacity for percentage calculation
     
     # Add V2 simulation results to dataframe
     df_sim['Battery_Power_kW'] = battery_power
