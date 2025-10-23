@@ -3920,19 +3920,65 @@ def _display_v2_battery_simulation_chart(df_sim, monthly_targets=None, sizing=No
                 📊 **Level 1 Filter Results**: Showing {len(df_sim_filtered):,} records from {filtered_days} days of {len(df_sim):,} total records ({filtered_days}/{total_days} days, {len(df_sim_filtered)/len(df_sim)*100:.1f}%)
                 
                 **Day Breakdown:**
-                - ✅ **Success Days**: {success_days} days
-                - 🟡 **Partial Days**: {partial_days} days
-                - 🔴 **Failed Days**: {failed_days} days
+                - ✅ **Success Days**: {success_days} days (Net Demand ≤ Monthly Target)
+                - 🟡 **Partial Days**: {partial_days} days (≥20% excess reduction but target not met)
+                - 🔴 **Failed Days**: {failed_days} days (<20% reduction, low SOC <25%, or critical SOC <5%)
                 """)
+                
+                # Add expandable section with detailed threshold explanations for filtered view
+                with st.expander("ℹ️ Day Classification Threshold Details"):
+                    st.markdown("""
+                    **🎯 Success Classification (✅ Green):**
+                    - Net Demand ≤ Monthly Target
+                    - Complete target achievement during MD recording hours
+                    
+                    **🟡 Partial Success Threshold:**
+                    - Reduction percentage ≥ **20%** of excess demand
+                    - At least 20% of the excess above target was successfully reduced
+                    - Formula: `(Original - Net) / (Original - Target) ≥ 0.20`
+                    
+                    **🔴 Failed Day Thresholds:**
+                    - **Insufficient Reduction**: <20% of excess demand reduced
+                    - **Low SOC Prevention**: Battery SOC <25% prevented discharge
+                    - **No Discharge**: Battery failed to discharge when needed (SOC ≥25%)
+                    - **Critical SOC**: Battery SOC dropped below 5% (safety limit)
+                    
+                    **Battery State of Charge (SOC) Limits:**
+                    - **25% SOC**: Minimum threshold for allowing discharge
+                    - **5% SOC**: Critical safety limit (system protection)
+                    """)
         else:
             # Always show day breakdown even when no filters are applied
             st.info(f"""
             📊 **All Days**: Showing {len(df_sim_filtered):,} records from {total_days} days
             
             **Day Breakdown:**
-            - ✅ **Success Days**: {success_days} days
-            - 🟡 **Partial Days**: {partial_days} days
-            - 🔴 **Failed Days**: {failed_days} days
+            - ✅ **Success Days**: {success_days} days (Net Demand ≤ Monthly Target)
+            - 🟡 **Partial Days**: {partial_days} days (≥20% excess reduction but target not met)
+            - 🔴 **Failed Days**: {failed_days} days (<20% reduction, low SOC <25%, or critical SOC <5%)
+            """)
+        
+        # Add expandable section with detailed threshold explanations
+        with st.expander("ℹ️ Day Classification Threshold Details"):
+            st.markdown("""
+            **🎯 Success Classification (✅ Green):**
+            - Net Demand ≤ Monthly Target
+            - Complete target achievement during MD recording hours
+            
+            **🟡 Partial Success Threshold:**
+            - Reduction percentage ≥ **20%** of excess demand
+            - At least 20% of the excess above target was successfully reduced
+            - Formula: `(Original - Net) / (Original - Target) ≥ 0.20`
+            
+            **🔴 Failed Day Thresholds:**
+            - **Insufficient Reduction**: <20% of excess demand reduced
+            - **Low SOC Prevention**: Battery SOC <25% prevented discharge
+            - **No Discharge**: Battery failed to discharge when needed (SOC ≥25%)
+            - **Critical SOC**: Battery SOC dropped below 5% (safety limit)
+            
+            **Battery State of Charge (SOC) Limits:**
+            - **25% SOC**: Minimum threshold for allowing discharge
+            - **5% SOC**: Critical safety limit (system protection)
             """)
         
         # Use filtered data for the rest of the chart function
