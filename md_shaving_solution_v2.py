@@ -6535,48 +6535,78 @@ def _create_enhanced_battery_table(df_sim, selected_tariff=None, holidays=None):
         calculate_energy_with_efficiency
     )
     
-    # 8. C Rate (new column)
+    # 8. Energy Loss (kWh) - Shows efficiency losses during charging/discharging
+    def calculate_energy_loss(power_kw):
+        """Calculate energy loss due to round-trip efficiency"""
+        if power_kw == 0:
+            return "0.00"
+        
+        # Get efficiency from selected battery specifications
+        efficiency_percent = 95.0  # Default efficiency
+        if hasattr(st.session_state, 'tabled_analysis_selected_battery'):
+            battery_spec = st.session_state.tabled_analysis_selected_battery['spec']
+            efficiency_percent = battery_spec.get('round_trip_efficiency', 95.0)
+        
+        # Calculate base energy without efficiency losses
+        base_energy = abs(power_kw) * interval_hours
+        
+        if power_kw < 0:  # Charging
+            # Energy loss = Grid energy required - Battery energy stored
+            grid_energy = base_energy / (efficiency_percent / 100)
+            energy_loss = grid_energy - base_energy
+        else:  # Discharging  
+            # Energy loss = Battery energy consumed - Grid energy delivered
+            battery_energy = base_energy / (efficiency_percent / 100)
+            energy_loss = battery_energy - base_energy
+        
+        return f"{energy_loss:.3f}"
+    
+    enhanced_columns['Energy Loss (kWh)'] = df_with_rate_change['Battery_Power_kW'].apply(
+        calculate_energy_loss
+    )
+    
+    # 9. C Rate (new column)
     enhanced_columns['C Rate'] = df_with_rate_change['Battery_Power_kW'].apply(
         lambda x: f"{abs(x) / max(battery_capacity_kwh, 1):.2f}C" if x != 0 else "0.00C"
     )
     
-    # 8. Orignal_Shave_kW (new column - original shave before any adjustments)
+    # 10. Orignal_Shave_kW (new column - original shave before any adjustments)
     enhanced_columns['Orignal_Shave_kW'] = df_with_rate_change.apply(
         lambda row: max(0, row['Original_Demand'] - row['Monthly_Target']), axis=1
     ).round(1)
     
-    # 9. Net_Demand_kW
+    # 11. Net_Demand_kW
     enhanced_columns['Net_Demand_kW'] = df_with_rate_change['Net_Demand_kW'].round(1)
     
-    # 10. Battery_SOC_kWh (renamed from BESS_Balance_kWh for consistency)
+    # 12. Battery_SOC_kWh (renamed from BESS_Balance_kWh for consistency)
     enhanced_columns['Battery_SOC_kWh'] = df_with_rate_change['Battery_SOC_kWh'].round(1)
     
-    # 11. Daily Performance Type (NEW - Level 1 Filter by Day Type)
+    # 13. Daily Performance Type (NEW - Level 1 Filter by Day Type)
     enhanced_columns['Daily Performance Type'] = df_with_rate_change.apply(
         lambda row: _classify_daily_performance_type(row, holidays), axis=1
     )
     
-    # 12. SOC_%
+    # 14. SOC_%
     enhanced_columns['SOC_%'] = df_with_rate_change['Battery_SOC_Percent'].round(1)
     
-    # 13. SOC_Status
+    # 15. SOC_Status
     enhanced_columns['SOC_Status'] = df_with_rate_change['Battery_SOC_Percent'].apply(
         lambda x: '🔴 Critical' if x < 25 else '🟡 Low' if x < 40 else '🟢 Normal' if x < 80 else '🔵 High'
     )
     
-    # 14. MD_Period
+    # 16. MD_Period
     enhanced_columns['MD_Period'] = df_with_rate_change.index.map(lambda x: '🔴 Peak' if is_md_window(x, holidays) else '🟢 Off-Peak')
     
-    # 15. REPLACED: Rate_of_Change instead of Target_Violation
+    # 17. REPLACED: Rate_of_Change instead of Target_Violation
     enhanced_columns['Rate_of_Change'] = df_with_rate_change['Rate_of_Change'].round(3)
     
-    # 16. NEW: Change_Direction (replaces Target_Violation functionality)
+    # 18. NEW: Change_Direction (replaces Target_Violation functionality)
     enhanced_columns['Change_Direction'] = df_with_rate_change['Change_Direction']
     
-    # 17. NEW: Change_Magnitude (provides actionable insight)
+    # 19. NEW: Change_Magnitude (provides actionable insight)
     enhanced_columns['Change_Magnitude'] = df_with_rate_change['Change_Magnitude'].astype(str)
     
-    # 18. Conserve_Activated
+    # 20. Conserve_Activated
     if 'Conserve_Activated' in df_with_rate_change.columns:
         enhanced_columns['Conserve_Activated'] = df_with_rate_change['Conserve_Activated'].apply(
             lambda x: '🔋 ACTIVE' if x else '⚪ Normal'
@@ -6590,38 +6620,38 @@ def _create_enhanced_battery_table(df_sim, selected_tariff=None, holidays=None):
     else:
         enhanced_columns['Battery Conserved kW'] = 0.0
     
-    # 20. Revised_Target_kW
+    # 22. Revised_Target_kW
     enhanced_columns['Revised_Target_kW'] = df_with_rate_change.apply(
         lambda row: _calculate_revised_target_kw(row, holidays), axis=1
     ).round(1)
     
-    # 21. SOC for Conservation (new column)
+    # 23. SOC for Conservation (new column)
     enhanced_columns['SOC for Conservation'] = df_with_rate_change['Battery_SOC_Percent'].apply(
         lambda x: f"{x:.1f}% {'🔋 LOW' if x < 50 else '✅ OK'}"
     )
     
-    # 22. Revised Shave kW (new column)
+    # 24. Revised Shave kW (new column)
     enhanced_columns['Revised Shave kW'] = df_with_rate_change.apply(
         lambda row: max(0, row['Original_Demand'] - _calculate_revised_target_kw(row, holidays)), axis=1
     ).round(1)
     
-    # 23. Revised Energy Required (kWh) (new column)
+    # 25. Revised Energy Required (kWh) (new column)
     enhanced_columns['Revised Energy Required (kWh)'] = df_with_rate_change.apply(
         lambda row: max(0, row['Original_Demand'] - _calculate_revised_target_kw(row, holidays)) * interval_hours, axis=1
     ).round(2)
     
-    # 🔋 CONSERVATION CASCADE WORKFLOW COLUMNS (new columns 24-27)
+    # 🔋 CONSERVATION CASCADE WORKFLOW COLUMNS (new columns 26-29)
     if 'Revised_Discharge_Power_kW' in df_with_rate_change.columns:
-        # 24. Revised Discharge Power (kW) - Step 1 of cascade
+        # 26. Revised Discharge Power (kW) - Step 1 of cascade
         enhanced_columns['Revised Discharge Power (kW)'] = df_with_rate_change['Revised_Discharge_Power_kW'].round(1)
         
-        # 25. BESS Balance Preserved (kWh) - Step 2 of cascade  
+        # 27. BESS Balance Preserved (kWh) - Step 2 of cascade  
         enhanced_columns['BESS Balance Preserved (kWh)'] = df_with_rate_change['Revised_BESS_Balance_kWh'].round(2)
         
-        # 26. Target Achieved w/ Conservation (kW) - Step 3 of cascade
+        # 28. Target Achieved w/ Conservation (kW) - Step 3 of cascade
         enhanced_columns['Target Achieved w/ Conservation (kW)'] = df_with_rate_change['Revised_Target_Achieved_kW'].round(1)
         
-        # 27. SOC Improvement (%) - Step 4 of cascade
+        # 29. SOC Improvement (%) - Step 4 of cascade
         enhanced_columns['SOC Improvement (%)'] = df_with_rate_change['SOC_Improvement_Percent'].apply(
             lambda x: f"+{x:.2f}%" if x > 0 else "0.00%"
         )
