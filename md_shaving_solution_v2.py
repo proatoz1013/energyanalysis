@@ -713,6 +713,29 @@ def _render_battery_selection_dropdown():
                     'label': selected_battery_label
                 }
                 
+                # Add cost per kWh input for financial calculations
+                st.markdown("**💰 Battery Cost Configuration:**")
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    cost_per_kwh = st.number_input(
+                        "Battery Cost (RM per kWh):",
+                        min_value=500.0,
+                        max_value=5000.0,
+                        value=1250.0,
+                        step=50.0,
+                        key="battery_cost_per_kwh",
+                        help="Enter the estimated cost per kWh for battery investment calculations"
+                    )
+                
+                with col2:
+                    total_battery_cost = selected_battery_data['capacity_kwh'] * cost_per_kwh
+                    st.metric("Estimated Battery Cost", f"RM {total_battery_cost:,.0f}")
+                
+                # Store cost info in battery data for use in calculations
+                selected_battery_data['cost_per_kwh'] = cost_per_kwh
+                selected_battery_data['total_cost'] = total_battery_cost
+                
                 return selected_battery_data
             else:
                 st.info("💡 Select a battery from the dropdown above to view detailed specifications and analysis.")
@@ -6878,11 +6901,17 @@ def _create_daily_summary_table(df_sim, selected_tariff=None, interval_hours=Non
         # 11. TARIFF-AWARE Max Original Demand (kW) - Maximum original demand during MD recording periods
         if is_tou_tariff:
             # TOU: Only consider MD recording periods (2PM-10PM weekdays, excluding holidays)
-            md_periods_data = day_data[(day_data.index.hour >= 14) & (day_data.index.hour < 22)]
-            if len(md_periods_data) > 0:
-                max_original_demand_kw = md_periods_data['Original_Demand'].max()
+            # FIXED: Added holiday exclusion for proper TOU MD window filtering
+            is_holiday = holidays and date in holidays
+            if not is_holiday and date.weekday() < 5:
+                # Only weekdays, excluding holidays
+                md_periods_data = day_data[(day_data.index.hour >= 14) & (day_data.index.hour < 22)]
+                if len(md_periods_data) > 0:
+                    max_original_demand_kw = md_periods_data['Original_Demand'].max()
+                else:
+                    max_original_demand_kw = 0.0  # No MD recording periods for this day
             else:
-                max_original_demand_kw = 0.0  # No MD recording periods for this day
+                max_original_demand_kw = 0.0  # Holiday or weekend - no MD charges for TOU
         else:
             # General: Consider all periods (24/7 MD recording)
             max_original_demand_kw = day_data['Original_Demand'].max()
@@ -6890,11 +6919,17 @@ def _create_daily_summary_table(df_sim, selected_tariff=None, interval_hours=Non
         # 12. TARIFF-AWARE Max of Net Demand (kW) - Maximum net demand during MD recording periods
         if is_tou_tariff:
             # TOU: Only consider MD recording periods (2PM-10PM weekdays, excluding holidays)
-            md_periods_data = day_data[(day_data.index.hour >= 14) & (day_data.index.hour < 22)]
-            if len(md_periods_data) > 0:
-                max_net_demand_kw = md_periods_data['Net_Demand_kW'].max()
+            # FIXED: Added holiday exclusion for proper TOU MD window filtering
+            is_holiday = holidays and date in holidays
+            if not is_holiday and date.weekday() < 5:
+                # Only weekdays, excluding holidays
+                md_periods_data = day_data[(day_data.index.hour >= 14) & (day_data.index.hour < 22)]
+                if len(md_periods_data) > 0:
+                    max_net_demand_kw = md_periods_data['Net_Demand_kW'].max()
+                else:
+                    max_net_demand_kw = 0.0  # No MD recording periods for this day
             else:
-                max_net_demand_kw = 0.0  # No MD recording periods for this day
+                max_net_demand_kw = 0.0  # Holiday or weekend - no MD charges for TOU
         else:
             # General: Consider all periods (24/7 MD recording)
             max_net_demand_kw = day_data['Net_Demand_kW'].max()
@@ -7379,7 +7414,16 @@ def _display_battery_simulation_tables(df_sim, simulation_results, selected_tari
                     quantity = getattr(st.session_state, 'tabled_analysis_battery_quantity', 1)
                     battery_spec = selected_battery['spec']
                     total_energy_kwh = battery_spec.get('energy_kWh', 100) * quantity
-                    estimated_cost_per_kwh = 1250  # RM per kWh
+                    
+                    # Get user-configured cost per kWh from widget or use default
+                    # Try to get from current widget state first, then fallback to default
+                    try:
+                        # Access the widget value directly using st.session_state key
+                        estimated_cost_per_kwh = st.session_state.get('battery_cost_per_kwh', 1250.0)
+                    except:
+                        # Fallback to default if widget not available
+                        estimated_cost_per_kwh = 1250.0
+                    
                     total_battery_cost = total_energy_kwh * estimated_cost_per_kwh
                 
                 # Calculate payback period (years)
