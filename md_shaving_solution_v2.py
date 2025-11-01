@@ -7049,7 +7049,7 @@ def _create_monthly_summary_table(df_sim, selected_tariff=None, interval_hours=N
     # This ensures Success Shaved = Actual MD Shave from the specific day with peak MD excess
     # (not maximum shave across all days, but shave from the day that determines monthly MD billing)
     
-    # Step 1: Calculate daily summary to get daily "Actual MD Shave" values
+    # Step 1: Calculate daily summary to get daily demand data for monthly calculations
     daily_summary = _create_daily_summary_table(df_sim, selected_tariff, interval_hours, holidays=None)
     
     if daily_summary.empty:
@@ -7070,19 +7070,27 @@ def _create_monthly_summary_table(df_sim, selected_tariff=None, interval_hours=N
         daily_summary['MD_Excess_Numeric'] = daily_summary[f'{tariff_label} MD Excess (kW)'].apply(extract_numeric)
         daily_summary['Max_Original_Demand_Numeric'] = daily_summary['Max Original Demand (kW)'].apply(extract_numeric)
         
-        # Step 4: FIXED - Get Actual MD Shave from the day with HIGHEST ORIGINAL DEMAND (billing peak day)
-        # This corrects the critical logic error that was causing ~70% overestimation of savings
+        # Step 4: CORRECTED - Calculate monthly MD savings as difference between monthly peak demands
+        # Monthly MD Savings = Highest Original Demand in Month - Highest Net Demand in Month
+        # This represents the true monthly billing impact for MD cost calculations
         monthly_success_shaved = {}
         for month_period in daily_summary['Month'].unique():
             month_data = daily_summary[daily_summary['Month'] == month_period]
             
-            # CRITICAL FIX: Find the day with MAXIMUM ORIGINAL DEMAND (determines monthly MD billing)
-            # NOT the day with maximum MD excess (which was causing overestimation)
             if len(month_data) > 0:
-                peak_billing_day_idx = month_data['Max_Original_Demand_Numeric'].idxmax()
-                # Get the Actual MD Shave from the specific day that determines monthly billing
-                actual_shave_on_billing_day = month_data.loc[peak_billing_day_idx, 'Actual_MD_Shave_Numeric']
-                monthly_success_shaved[month_period] = actual_shave_on_billing_day
+                # Find the highest original demand across the entire month (monthly billing peak)
+                max_original_demand = month_data['Max_Original_Demand_Numeric'].max()
+                
+                # Find the highest net demand across the entire month 
+                # Note: We need to get Net Demand data from daily summary
+                # For now, we'll calculate it as Original - Actual Shave for each day, then take max
+                month_data_copy = month_data.copy()
+                month_data_copy['Net_Demand_Numeric'] = month_data_copy['Max_Original_Demand_Numeric'] - month_data_copy['Actual_MD_Shave_Numeric']
+                max_net_demand = month_data_copy['Net_Demand_Numeric'].max()
+                
+                # Monthly MD Savings = Max Original - Max Net across the month
+                monthly_md_saving = max(0, max_original_demand - max_net_demand)
+                monthly_success_shaved[month_period] = monthly_md_saving
             else:
                 # No data in this month
                 monthly_success_shaved[month_period] = 0.0
