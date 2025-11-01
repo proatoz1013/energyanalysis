@@ -898,7 +898,7 @@ def _render_battery_sizing_analysis(max_power_shaving_required, recommended_ener
             md_shaving_percentage = (md_shaved_kw / max_power_shaving_required * 100) if max_power_shaving_required > 0 else 0
 
             # Column 5: Cost of batteries
-            estimated_cost_per_kwh = 1400  # RM per kWh (consistent with main app)
+            estimated_cost_per_kwh = 1250  # RM per kWh (consistent with main app)
             total_battery_cost = total_energy_kwh * estimated_cost_per_kwh
             
             # Create analysis table
@@ -2631,7 +2631,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                             battery_kw_conserved = st.number_input(
                                 "Battery kW to be Conserved",
                                 min_value=0.0,
-                                max_value=500.0,
+                                max_value=5000.0,
                                 value=100.0,
                                 step=10.0,
                                 key="conservation_battery_kw_conserved",
@@ -7068,20 +7068,23 @@ def _create_monthly_summary_table(df_sim, selected_tariff=None, interval_hours=N
         
         daily_summary['Actual_MD_Shave_Numeric'] = daily_summary['Actual MD Shave (kW)'].apply(extract_numeric)
         daily_summary['MD_Excess_Numeric'] = daily_summary[f'{tariff_label} MD Excess (kW)'].apply(extract_numeric)
+        daily_summary['Max_Original_Demand_Numeric'] = daily_summary['Max Original Demand (kW)'].apply(extract_numeric)
         
-        # Step 4: CORRECTED - Get Actual MD Shave from the specific day with peak MD excess (not maximum shave)
+        # Step 4: FIXED - Get Actual MD Shave from the day with HIGHEST ORIGINAL DEMAND (billing peak day)
+        # This corrects the critical logic error that was causing ~70% overestimation of savings
         monthly_success_shaved = {}
         for month_period in daily_summary['Month'].unique():
             month_data = daily_summary[daily_summary['Month'] == month_period]
             
-            # Find the day with maximum MD excess in this month
-            if len(month_data) > 0 and month_data['MD_Excess_Numeric'].max() > 0:
-                peak_excess_day_idx = month_data['MD_Excess_Numeric'].idxmax()
-                # Get the Actual MD Shave from that specific peak event day
-                actual_shave_on_peak_day = month_data.loc[peak_excess_day_idx, 'Actual_MD_Shave_Numeric']
-                monthly_success_shaved[month_period] = actual_shave_on_peak_day
+            # CRITICAL FIX: Find the day with MAXIMUM ORIGINAL DEMAND (determines monthly MD billing)
+            # NOT the day with maximum MD excess (which was causing overestimation)
+            if len(month_data) > 0:
+                peak_billing_day_idx = month_data['Max_Original_Demand_Numeric'].idxmax()
+                # Get the Actual MD Shave from the specific day that determines monthly billing
+                actual_shave_on_billing_day = month_data.loc[peak_billing_day_idx, 'Actual_MD_Shave_Numeric']
+                monthly_success_shaved[month_period] = actual_shave_on_billing_day
             else:
-                # No MD excess in this month, so no shaving achieved
+                # No data in this month
                 monthly_success_shaved[month_period] = 0.0
         
         # Step 5: Map monthly success shaved values to monthly_data
@@ -7358,29 +7361,51 @@ def _display_battery_simulation_tables(df_sim, simulation_results, selected_tari
                 total_success_shaved = success_shaved_values.sum()
                 total_md_excess = md_excess_values.sum()
                 
+                # Calculate estimated annual saving
+                estimated_annual_saving = avg_monthly_saving * 12
+                
+                # Calculate total battery investment for payback period
+                total_battery_cost = 0
+                if hasattr(st.session_state, 'tabled_analysis_selected_battery') and st.session_state.tabled_analysis_selected_battery:
+                    selected_battery = st.session_state.tabled_analysis_selected_battery
+                    quantity = getattr(st.session_state, 'tabled_analysis_battery_quantity', 1)
+                    battery_spec = selected_battery['spec']
+                    total_energy_kwh = battery_spec.get('energy_kWh', 100) * quantity
+                    estimated_cost_per_kwh = 1250  # RM per kWh
+                    total_battery_cost = total_energy_kwh * estimated_cost_per_kwh
+                
+                # Calculate payback period (years)
+                payback_period_years = total_battery_cost / estimated_annual_saving if estimated_annual_saving > 0 else float('inf')
+                
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
                     st.metric("Total Cost Saving", _format_rm_value(total_cost_saving))
                 with col2:
                     st.metric("Average Monthly Saving", _format_rm_value(avg_monthly_saving))
                 with col3:
+                    st.metric("Estimated Annual Saving", _format_rm_value(estimated_annual_saving))
+                with col4:
+                    st.metric("Analysis Period", f"{len(monthly_data)} months")
+                    
+                # Additional metrics row
+                col1, col2, col3, col4, col5 = st.columns(5)
+                with col1:
+                    st.metric("Avg Cycles/Month", _format_number_value(avg_monthly_cycles))
+                with col2:
                     # Update metric label based on available data
                     if 'Accumulating Charging Cycles' in monthly_data.columns:
                         st.metric("Total Accumulating Cycles", _format_number_value(total_charging_cycles))
                     else:
                         st.metric("Total Charging Cycles", _format_number_value(total_charging_cycles))
-                with col4:
-                    st.metric("Analysis Period", f"{len(monthly_data)} months")
-                    
-                # Additional metrics row
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Avg Cycles/Month", _format_number_value(avg_monthly_cycles))
-                with col2:
-                    st.metric("Total Success Shaved", f"{_format_number_value(total_success_shaved)} kW")
                 with col3:
-                    tariff_type = "TOU" if 'TOU' in monthly_data.columns[1] else "General"
-                    st.metric(f"Total {tariff_type} MD Excess", f"{_format_number_value(total_md_excess)} kW")
+                    st.metric("💰 Total Investment", _format_rm_value(total_battery_cost))
+                with col4:
+                    if payback_period_years != float('inf'):
+                        st.metric("📅 Payback Period", f"{payback_period_years:.1f} years")
+                    else:
+                        st.metric("📅 Payback Period", "N/A")
+                with col5:
+                    st.metric("Total Success Shaved", f"{_format_number_value(total_success_shaved)} kW")
         else:
             st.info("No monthly data available for analysis.")
     
