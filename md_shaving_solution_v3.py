@@ -2610,157 +2610,216 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                         help="When enabled and SOC drops below threshold, system locks in a reduced shaving target based on minimum exceedance observed so far"
                     )
                     
-                    # === CONSERVATION PARAMETERS (Show when enabled) ===
+                    # === CONSERVATION MODE TABS (Show when conservation is enabled) ===
                     if conservation_enabled:
-                        st.markdown("##### 🔧 Conservation Parameters")
+                        st.markdown("##### 🎛️ Conservation Mode Configuration")
                         
-                        col1, col2 = st.columns(2)
+                        # Create tabs for Simple vs Smart conservation modes
+                        conservation_tab1, conservation_tab2 = st.tabs(["🔧 Simple Conservation", "🧠 Smart Conservation"])
                         
-                        with col1:
-                            soc_threshold = st.slider(
-                                "SOC Activation Threshold (%)",
-                                min_value=20,
-                                max_value=70,
-                                value=50,
-                                step=5,
-                                key="conservation_soc_threshold",
-                                help="SOC level below which conservation mode activates"
+                        with conservation_tab1:
+                            st.markdown("**Manual Conservation Parameters**")
+                            st.markdown("*Configure conservation settings manually with fixed parameters*")
+                            
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                soc_threshold = st.slider(
+                                    "SOC Activation Threshold (%)",
+                                    min_value=20,
+                                    max_value=70,
+                                    value=50,
+                                    step=5,
+                                    key="simple_conservation_soc_threshold",
+                                    help="SOC level below which conservation mode activates"
+                                )
+                            
+                            with col2:
+                                battery_kw_conserved = st.number_input(
+                                    "Battery kW to be Conserved",
+                                    min_value=0.0,
+                                    max_value=500.0,
+                                    value=100.0,
+                                    step=10.0,
+                                    key="simple_conservation_battery_kw_conserved",
+                                    help="Amount of battery power (kW) to hold back during conservation mode"
+                                )
+                            
+                            # Set values for simple conservation approach
+                            safety_margin = 0.0  # Not used in simple conservation mode
+                            min_exceedance_multiplier = 1.0  # Not used in simple conservation mode
+                            conservation_mode_type = "simple"
+                            
+                            # Add day selection with simple input method
+                            st.markdown("**Active Day(s) Selection**")
+                            
+                            # Multi-select dropdown approach with hierarchical options
+                            available_dates = []
+                            if not df.empty:
+                                # Get all unique dates from the loaded data
+                                unique_dates = sorted(set(df.index.date))
+                                available_dates = [date.strftime('%Y-%m-%d') for date in unique_dates]
+                            
+                            # Create dropdown options with hierarchical structure
+                            dropdown_options = ["All Days"]
+                            if available_dates:
+                                dropdown_options.extend(available_dates)
+                            
+                            # Multi-select dropdown for date selection
+                            selected_conservation_options = st.multiselect(
+                                "📅 Select dates for Simple Conservation Mode:",
+                                options=dropdown_options,
+                                default=["All Days"],
+                                help="Select 'All Days' to apply to all dates, or choose specific dates. You can select multiple options.",
+                                key="simple_conservation_dates"
                             )
+                            
+                            # Process the selected options
+                            conservation_dates = []
+                            conservation_date_strings = []
+                            
+                            if not selected_conservation_options:
+                                # If nothing selected, default to "All Days"
+                                selected_conservation_options = ["All Days"]
+                            
+                            if "All Days" in selected_conservation_options:
+                                # If "All Days" is selected, ignore specific dates
+                                conservation_dates = []  # Empty means all days
+                                conservation_date_strings = []
+                                conservation_day_type = "All Days"
+                            else:
+                                # Process specific selected dates
+                                for date_str in selected_conservation_options:
+                                    if date_str != "All Days":  # Skip "All Days" if somehow still present
+                                        try:
+                                            # Validate date format
+                                            parsed_date = pd.to_datetime(date_str, format='%Y-%m-%d')
+                                            conservation_dates.append(parsed_date.date())
+                                            conservation_date_strings.append(date_str)
+                                        except ValueError:
+                                            st.error(f"❌ Invalid date format: '{date_str}'. Please report this issue.")
+                                conservation_day_type = f"{len(conservation_dates)} Specific Dates"
+                            
+                            # Display simple conservation summary
+                            if conservation_dates:
+                                active_days_text = f"{len(conservation_dates)} specific dates ({conservation_date_strings[0]}" + (f" ... {conservation_date_strings[-1]}" if len(conservation_dates) > 1 else "") + ")"
+                            else:
+                                active_days_text = "All Days"
+                                
+                            st.success(f"""
+                            ✅ **Simple Conservation Mode Configured**: 
+                            `When SOC < {soc_threshold}% → Conserve {battery_kw_conserved} kW battery power`
+                            
+                            **Effect**: Battery will reduce maximum discharge by {battery_kw_conserved} kW to preserve energy
+                            **Active**: {active_days_text}
+                            **Mode**: Simple (Manual Parameters)
+                            """)
                         
-                        with col2:
-                            battery_kw_conserved = st.number_input(
-                                "Battery kW to be Conserved",
-                                min_value=0.0,
-                                max_value=500.0,
-                                value=100.0,
-                                step=10.0,
-                                key="conservation_battery_kw_conserved",
-                                help="Amount of battery power (kW) to hold back during conservation mode"
-                            )
+                        with conservation_tab2:
+                            st.markdown("**AI-Powered Conservation Strategy**")
+                            st.markdown("*Intelligent conservation decisions based on predictive analytics and machine learning*")
+                            
+                            # Check if smart conservation module is available
+                            try:
+                                # Placeholder import - create smart_conservation.py file in your project root
+                                # from smart_conservation import SmartConservationCalculator
+                                smart_conservation_available = False  # Set to True when module is ready
+                                st.info("� **Smart Conservation Module**: Under development - placeholder active")
+                            except ImportError:
+                                st.error("❌ Smart Conservation module not found. Please ensure 'smart_conservation.py' is in your project directory.")
+                                smart_conservation_available = False
+                            
+                            if smart_conservation_available:
+                                # Smart conservation interface (will be implemented)
+                                st.markdown("##### 🤖 AI-Powered Conservation Interface")
+                                
+                                # Smart conservation parameters
+                                col1, col2 = st.columns(2)
+                                
+                                with col1:
+                                    prediction_horizon = st.slider(
+                                        "Prediction Horizon (hours)",
+                                        min_value=2,
+                                        max_value=24,
+                                        value=6,
+                                        key="smart_conservation_horizon",
+                                        help="How far ahead to predict demand patterns"
+                                    )
+                                
+                                with col2:
+                                    conservation_aggressiveness = st.slider(
+                                        "Conservation Aggressiveness",
+                                        min_value=0.1,
+                                        max_value=1.0,
+                                        value=0.5,
+                                        step=0.1,
+                                        key="smart_conservation_aggressiveness",
+                                        help="Higher values = more aggressive conservation"
+                                    )
+                                
+                                # Smart conservation calculations would go here
+                                # smart_params = smart_calc.calculate_smart_parameters(...)
+                                
+                                # Use smart parameters
+                                soc_threshold = 45  # AI-optimized threshold
+                                battery_kw_conserved = 120.0  # AI-optimized reserve
+                                conservation_mode_type = "smart"
+                                conservation_dates = []  # All days for smart mode
+                                
+                            else:
+                                # Smart conservation not available - show development info
+                                st.info(f"""
+                                **🔧 Smart Conservation Development Status:**
+                                
+                                **Planned Features:**
+                                - **AI-Powered SOC Management**: Dynamic threshold adjustment based on demand patterns
+                                - **Predictive Analytics**: Forecast upcoming peak events and optimize battery reserves
+                                - **Machine Learning Integration**: Learn from historical data to improve conservation decisions
+                                - **Confidence Scoring**: Provide confidence levels for conservation recommendations
+                                - **Adaptive Parameters**: Self-tuning conservation parameters based on performance
+                                
+                                **Implementation Roadmap:**
+                                1. Create `smart_conservation.py` module with `SmartConservationCalculator` class
+                                2. Implement demand pattern analysis and forecasting algorithms
+                                3. Add machine learning models for conservation optimization
+                                4. Integrate confidence scoring and adaptive learning
+                                5. Add advanced visualization for smart conservation insights
+                                
+                                **Current Status**: Framework ready, awaiting smart algorithm implementation
+                                """)
+                                
+                                # Use simple conservation parameters as fallback
+                                soc_threshold = 50
+                                battery_kw_conserved = 100.0
+                                conservation_mode_type = "simple_fallback"
+                                conservation_dates = []
                         
-                        # Set values for battery conservation approach
-                        safety_margin = 0.0  # Not used in battery conservation mode
-                        min_exceedance_multiplier = 1.0  # Not used in battery conservation mode
+                        # Store conservation settings for session state
+                        conservation_specific_dates = conservation_date_strings if 'conservation_date_strings' in locals() else []
                         
-                        # Add day selection with simple input method
-                        st.markdown("**Active Day(s) Selection**")
-                        
-                        # Multi-select dropdown approach with hierarchical options
-                        available_dates = []
-                        if not df.empty:
-                            # Get all unique dates from the loaded data
-                            unique_dates = sorted(set(df.index.date))
-                            available_dates = [date.strftime('%Y-%m-%d') for date in unique_dates]
-                        
-                        # Create dropdown options with hierarchical structure
-                        dropdown_options = ["All Days"]
-                        if available_dates:
-                            dropdown_options.extend(available_dates)
-                        
-                        # Multi-select dropdown for date selection
-                        selected_conservation_options = st.multiselect(
-                            "📅 Select dates for Battery Conservation Mode:",
-                            options=dropdown_options,
-                            default=["All Days"],
-                            help="Select 'All Days' to apply to all dates, or choose specific dates. You can select multiple options."
-                        )
-                        
-                        # Process the selected options
+                    else:
+                        # Conservation disabled - set default values
+                        soc_threshold = 50
+                        battery_kw_conserved = 100.0
+                        safety_margin = 0.0
+                        min_exceedance_multiplier = 1.0
+                        conservation_day_type = "All Days"
+                        conservation_specific_day = "All Days"
                         conservation_dates = []
                         conservation_date_strings = []
-                        
-                        if not selected_conservation_options:
-                            # If nothing selected, default to "All Days"
-                            selected_conservation_options = ["All Days"]
-                        
-                        if "All Days" in selected_conservation_options:
-                            # If "All Days" is selected, ignore specific dates
-                            conservation_dates = []  # Empty means all days
-                            conservation_date_strings = []
-                            conservation_day_type = "All Days"
-                        else:
-                            # Process specific selected dates
-                            for date_str in selected_conservation_options:
-                                if date_str != "All Days":  # Skip "All Days" if somehow still present
-                                    try:
-                                        # Validate date format
-                                        parsed_date = pd.to_datetime(date_str, format='%Y-%m-%d')
-                                        conservation_dates.append(parsed_date.date())
-                                        conservation_date_strings.append(date_str)
-                                    except ValueError:
-                                        st.error(f"❌ Invalid date format: '{date_str}'. Please report this issue.")
-                            conservation_day_type = f"{len(conservation_dates)} Specific Dates"
-                        
-                        # Store day selection settings for potential future use
-                        conservation_specific_dates = conservation_date_strings
-                        
-                        # Display selection info
-                        if conservation_dates:
-                            st.success(f"✅ Battery Conservation Mode will be active on {len(conservation_dates)} specific dates:")
-                            # Show the dates in a nice format
-                            if len(conservation_dates) <= 10:
-                                # Show all dates if 10 or fewer
-                                date_display = ", ".join(conservation_date_strings)
-                                st.info(f"📅 **Active Dates**: {date_display}")
-                            else:
-                                # Show first 5 and last 5 dates if more than 10
-                                first_5 = ", ".join(conservation_date_strings[:5])
-                                last_5 = ", ".join(conservation_date_strings[-5:])
-                                st.info(f"📅 **Active Dates**: {first_5} ... {last_5} ({len(conservation_dates)} total)")
-                        else:
-                            st.info("📅 **Active Days**: All Days (conservation applies to all dates)")
-                        
-                        # Add helpful selection summary
-                        if "All Days" in selected_conservation_options:
-                            st.info("🌍 **Selection**: All Days - Conservation mode will be active every day when SOC threshold is met")
-                        else:
-                            st.info(f"🗓️ **Selection**: {len(selected_conservation_options)} specific dates selected from {len(available_dates)} available dates")
-                        
-                        # Validation info
-                        if conservation_dates:
-                            # Check if dates are within data range
-                            if not df.empty:
-                                data_start = df.index.min().date()
-                                data_end = df.index.max().date()
-                                
-                                valid_dates = [d for d in conservation_dates if data_start <= d <= data_end]
-                                invalid_dates = [d for d in conservation_dates if d < data_start or d > data_end]
-                                
-                                if invalid_dates:
-                                    invalid_date_strs = [d.strftime('%Y-%m-%d') for d in invalid_dates]
-                                    st.warning(f"⚠️ Some dates are outside your data range ({data_start} to {data_end}): {', '.join(invalid_date_strs)}")
-                                
-                                if valid_dates:
-                                    st.info(f"✅ {len(valid_dates)} dates are within your data range and will be used.")
-                            else:
-                                st.warning("⚠️ Cannot validate dates - no data loaded yet.")
-                        
-                        # Show simplified conservation approach
-                        if conservation_dates:
-                            active_days_text = f"{len(conservation_dates)} specific dates ({conservation_date_strings[0]}" + (f" ... {conservation_date_strings[-1]}" if len(conservation_dates) > 1 else "") + ")"
-                        else:
-                            active_days_text = "All Days"
-                            
-                        st.info(f"""
-                        🎯 **Battery Conservation Mode**: 
-                        `When SOC < {soc_threshold}% → Conserve {battery_kw_conserved} kW battery power`
-                        
-                        **Effect**: Battery will reduce maximum discharge by {battery_kw_conserved} kW to preserve energy
-                        **Active**: {active_days_text}
-                        """)
-                    else:
-                        # Set default values when conservation is disabled
-                        soc_threshold = 50
-                        battery_kw_conserved = 100.0  # Default value (not used when disabled)
-                        safety_margin = 0.0  # Not used
-                        min_exceedance_multiplier = 1.0  # Not used
-                        conservation_day_type = "All Days"  # Default day type
-                        conservation_specific_day = "All Days"  # Default specific day
-                        conservation_dates = []  # No specific dates when conservation is disabled
-                        conservation_date_strings = []  # No specific date strings when conservation is disabled
+                        conservation_mode_type = "disabled"
                     
                     if conservation_enabled:
-                        st.info(f"🛡️ **Conservation Mode Active**: When SOC < {soc_threshold}%, system will conserve {battery_kw_conserved} kW of battery power")
+                        # Display conservation status based on mode
+                        if 'conservation_mode_type' in locals():
+                            if conservation_mode_type == "simple":
+                                st.info(f"� **Simple Conservation Mode Active**: When SOC < {soc_threshold}%, system will conserve {battery_kw_conserved} kW of battery power")
+                            elif conservation_mode_type == "smart":
+                                st.info(f"🧠 **Smart Conservation Mode Active**: AI-optimized conservation with {soc_threshold}% SOC threshold and {battery_kw_conserved} kW reserve")
+                            else:
+                                st.info(f"�️ **Conservation Mode Active**: When SOC < {soc_threshold}%, system will conserve {battery_kw_conserved} kW of battery power")
+                        else:
+                            st.info(f"🛡️ **Conservation Mode Active**: When SOC < {soc_threshold}%, system will conserve {battery_kw_conserved} kW of battery power")
                         st.info("📊 **Tracking**: Conservation effects will be shown in diagnostic columns")
                     else:
                         st.info("🔄 **Normal Mode**: Battery operates with full power regardless of SOC level")
