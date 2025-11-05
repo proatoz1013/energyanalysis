@@ -740,11 +740,23 @@ def _render_battery_selection_dropdown():
             battery_list.sort()
             battery_list.insert(0, "-- Select a Battery --")
             
+            # Determine default index - last option if user hasn't selected, otherwise maintain selection
+            if "independent_battery_selection" not in st.session_state:
+                # First time - default to last battery (last real option, not the placeholder)
+                default_index = len(battery_list) - 1 if len(battery_list) > 1 else 0
+            else:
+                # User has interacted before - maintain their choice or use last option
+                current_selection = st.session_state.get("independent_battery_selection", "-- Select a Battery --")
+                if current_selection in battery_list:
+                    default_index = battery_list.index(current_selection)
+                else:
+                    default_index = len(battery_list) - 1 if len(battery_list) > 1 else 0
+            
             # Battery selection dropdown
             selected_battery_label = st.selectbox(
                 "🔋 Select Battery for Analysis:",
                 options=battery_list,
-                index=0,
+                index=default_index,
                 key="independent_battery_selection",
                 help="Choose a battery from the vendor database to view specifications and analysis"
             )
