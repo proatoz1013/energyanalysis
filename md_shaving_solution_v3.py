@@ -344,7 +344,7 @@ def _generate_monthly_summary_table(all_monthly_events, selected_tariff, holiday
     return df_summary
 
 
-def _collect_md_endurance_config(df_for_v1, power_col, monthly_targets, interval_hours, selected_tariff,
+def _collect_smart_conservation_config(df_for_v1, power_col, monthly_targets, interval_hours, selected_tariff,
                                 battery_params, battery_sizing, total_battery_capacity, soc_threshold, 
                                 battery_kw_conserved, conservation_enabled, conservation_dates, 
                                 conservation_day_type, holidays, prediction_horizon, conservation_aggressiveness):
@@ -377,7 +377,7 @@ def _collect_md_endurance_config(df_for_v1, power_col, monthly_targets, interval
     """
     
     # Collect all available variables for SmartConservation module initialization
-    md_endurance_config = {
+    smart_conservation_config = {
         # Load & target context
         "df_sim": df_for_v1,                    # Demand dataframe (V1-compatible)
         "power_col": power_col,                 # Column name containing power demand
@@ -409,7 +409,7 @@ def _collect_md_endurance_config(df_for_v1, power_col, monthly_targets, interval
         "conservation_aggressiveness": conservation_aggressiveness,  # 0.1-1.0 scale
     }
     
-    return md_endurance_config
+    return smart_conservation_config
 
 
 def build_daily_simulator_structure(df, threshold_kw, clusters_df, selected_tariff=None):
@@ -2842,7 +2842,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                             # =====================================================================
                             
                             # Collect all available variables for SmartConservation module initialization
-                            md_endurance_config = _collect_md_endurance_config(
+                            smart_conservation_config = _collect_smart_conservation_config(
                                 df_for_v1=df_for_v1,
                                 power_col=power_col,
                                 monthly_targets=monthly_targets,
@@ -2870,36 +2870,36 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                             with config_col1:
                                 st.metric(
                                     "Data Points", 
-                                    f"{len(md_endurance_config['df_sim'])} rows" if md_endurance_config['df_sim'] is not None else "No data",
+                                    f"{len(smart_conservation_config['df_sim'])} rows" if smart_conservation_config['df_sim'] is not None else "No data",
                                     help="Number of data points in simulation dataset"
                                 )
                                 st.metric(
                                     "Interval", 
-                                    f"{md_endurance_config['interval_hours'] * 60:.0f} min" if md_endurance_config['interval_hours'] else "0 min",
+                                    f"{smart_conservation_config['interval_hours'] * 60:.0f} min" if smart_conservation_config['interval_hours'] else "0 min",
                                     help="Data sampling interval"
                                 )
                             
                             with config_col2:
                                 st.metric(
                                     "Battery Capacity", 
-                                    f"{md_endurance_config['battery_capacity']:.1f} kWh",
+                                    f"{smart_conservation_config['battery_capacity']:.1f} kWh",
                                     help="Total battery energy capacity"
                                 )
                                 st.metric(
                                     "Battery Power", 
-                                    f"{md_endurance_config['battery_sizing'].get('power_rating_kw', 0):.1f} kW",
+                                    f"{smart_conservation_config['battery_sizing'].get('power_rating_kw', 0):.1f} kW",
                                     help="Battery power rating"
                                 )
                             
                             with config_col3:
                                 st.metric(
                                     "Monthly Targets", 
-                                    f"{len(md_endurance_config['monthly_targets'])}" if md_endurance_config['monthly_targets'] is not None else "0",
+                                    f"{len(smart_conservation_config['monthly_targets'])}" if smart_conservation_config['monthly_targets'] is not None else "0",
                                     help="Number of monthly MD targets"
                                 )
                                 st.metric(
                                     "Tariff Type", 
-                                    f"{md_endurance_config['tariff_type']}",
+                                    f"{smart_conservation_config['tariff_type']}",
                                     help="Selected tariff configuration"
                                 )
                             
@@ -2909,25 +2909,154 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                             
                             with conservation_col1:
                                 st.info(f"""
-                                **SOC Threshold**: {md_endurance_config['soc_threshold']}%  
-                                **Battery Reserve**: {md_endurance_config['battery_kw_conserved']} kW  
-                                **Conservation Mode**: {"Enabled" if md_endurance_config['conservation_enabled'] else "Disabled"}
+                                **SOC Threshold**: {smart_conservation_config['soc_threshold']}%  
+                                **Battery Reserve**: {smart_conservation_config['battery_kw_conserved']} kW  
+                                **Conservation Mode**: {"Enabled" if smart_conservation_config['conservation_enabled'] else "Disabled"}
                                 """)
                             
                             with conservation_col2:
                                 st.info(f"""
-                                **Prediction Horizon**: {md_endurance_config['prediction_horizon']} hours  
-                                **Aggressiveness**: {md_endurance_config['conservation_aggressiveness']:.1f}  
-                                **Active Days**: {md_endurance_config['conservation_day_type']}
+                                **Prediction Horizon**: {smart_conservation_config['prediction_horizon']} hours  
+                                **Aggressiveness**: {smart_conservation_config['conservation_aggressiveness']:.1f}  
+                                **Active Days**: {smart_conservation_config['conservation_day_type']}
                                 """)
                             
                             # Detailed Configuration (Expandable)
                             with st.expander("📊 Complete Configuration Details", expanded=False):
-                                st.json(md_endurance_config, expanded=False)
+                                st.json(smart_conservation_config, expanded=False)
                             
-                            # Smart conservation calculations would go here
-                            # Example: smart_calc = SmartConservationCalculator(**md_endurance_config)
-                            # Example: smart_params = smart_calc.calculate_smart_parameters()
+                            # =====================================================================
+                            # SMART CONSERVATION CALCULATOR INTEGRATION
+                            # =====================================================================
+                            
+                            st.markdown("---")
+                            st.markdown("##### 🧠 Smart Conservation Analysis")
+                            
+                            try:
+                                # Import the smart conservation module
+                                from smart_conservation import SmartConservationCalculator, validate_smart_conservation_config, get_smart_conservation_info
+                                
+                                # Show module info
+                                module_info = get_smart_conservation_info()
+                                st.success(f"✅ **{module_info['module_name']}** v{module_info['version']} - {module_info['status']}")
+                                
+                                # Validate configuration
+                                is_valid, validation_errors = validate_smart_conservation_config(smart_conservation_config)
+                                
+                                if is_valid:
+                                    # Initialize Smart Conservation Calculator
+                                    smart_calc = SmartConservationCalculator(**smart_conservation_config)
+                                    
+                                    # Run AI-powered analysis
+                                    st.info("🔄 Running AI-powered conservation analysis...")
+                                    smart_params = smart_calc.calculate_smart_parameters()
+                                    
+                                    # Display AI-optimized parameters
+                                    st.markdown("**🎯 AI-Optimized Parameters:**")
+                                    
+                                    opt_col1, opt_col2, opt_col3 = st.columns(3)
+                                    
+                                    with opt_col1:
+                                        st.metric(
+                                            "Optimized SOC Threshold", 
+                                            f"{smart_params['optimized_parameters']['optimal_soc_threshold']:.1f}%",
+                                            delta=f"{smart_params['optimized_parameters']['optimal_soc_threshold'] - soc_threshold:.1f}%",
+                                            help="AI-calculated optimal SOC activation threshold"
+                                        )
+                                    
+                                    with opt_col2:
+                                        st.metric(
+                                            "Dynamic Battery Reserve", 
+                                            f"{smart_params['optimized_parameters']['dynamic_battery_reserve']:.1f} kW",
+                                            delta=f"{smart_params['optimized_parameters']['dynamic_battery_reserve'] - battery_kw_conserved:.1f} kW",
+                                            help="AI-calculated optimal battery power reserve"
+                                        )
+                                    
+                                    with opt_col3:
+                                        st.metric(
+                                            "Overall Confidence", 
+                                            f"{smart_params['confidence_metrics']['overall_confidence']:.1%}",
+                                            help="AI confidence in parameter optimization"
+                                        )
+                                    
+                                    # Show analysis results
+                                    with st.expander("🔬 Detailed AI Analysis Results", expanded=False):
+                                        
+                                        # Demand pattern analysis
+                                        st.markdown("**📊 Demand Pattern Analysis:**")
+                                        demand_patterns = smart_params['analysis_results']['demand_patterns']
+                                        
+                                        pattern_col1, pattern_col2 = st.columns(2)
+                                        with pattern_col1:
+                                            st.info(f"""
+                                            **Peak Hours**: {', '.join(map(str, demand_patterns.get('peak_hours', [])))}  
+                                            **Load Profile**: {demand_patterns.get('load_profile_classification', 'Unknown')}  
+                                            **Demand Volatility**: {demand_patterns.get('demand_volatility', 0):.2f}
+                                            """)
+                                        
+                                        with pattern_col2:
+                                            peak_freq = demand_patterns.get('peak_frequency', {})
+                                            st.info(f"""
+                                            **Daily Peak Probability**: {peak_freq.get('daily_peak_probability', 0):.1%}  
+                                            **Weekly Peak Events**: {peak_freq.get('weekly_peak_events', 0):.1f}  
+                                            **Avg Peak Duration**: {peak_freq.get('peak_duration_avg', 0):.0f} min
+                                            """)
+                                        
+                                        # Demand forecast
+                                        st.markdown("**🔮 Demand Forecast:**")
+                                        forecast = smart_params['analysis_results']['demand_forecast']
+                                        
+                                        forecast_col1, forecast_col2 = st.columns(2)
+                                        with forecast_col1:
+                                            st.info(f"""
+                                            **Forecast Horizon**: {forecast['horizon_hours']} hours  
+                                            **Peak Probability**: {forecast.get('peak_probability', 0):.1%}  
+                                            **Forecast Accuracy**: {forecast.get('forecast_accuracy', 0):.1%}
+                                            """)
+                                        
+                                        with forecast_col2:
+                                            forecasted_demand = forecast.get('forecasted_demand', [])
+                                            if forecasted_demand:
+                                                avg_forecast = sum(forecasted_demand) / len(forecasted_demand)
+                                                max_forecast = max(forecasted_demand)
+                                                st.info(f"""
+                                                **Avg Forecasted Demand**: {avg_forecast:.1f} kW  
+                                                **Max Forecasted Demand**: {max_forecast:.1f} kW  
+                                                **Data Points**: {len(forecasted_demand)}
+                                                """)
+                                    
+                                    # Show AI recommendations
+                                    recommendations = smart_params.get('recommendations', [])
+                                    if recommendations:
+                                        st.markdown("**💡 AI Recommendations:**")
+                                        for i, rec in enumerate(recommendations, 1):
+                                            st.info(f"**{i}.** {rec}")
+                                    
+                                    # Update conservation parameters with AI-optimized values
+                                    # Apply AI-optimized parameters for simulation
+                                    soc_threshold = smart_params['optimized_parameters']['optimal_soc_threshold']
+                                    battery_kw_conserved = smart_params['optimized_parameters']['dynamic_battery_reserve']
+                                    
+                                    st.success(f"""
+                                    ✅ **Smart Conservation Active**: AI has optimized parameters based on demand analysis  
+                                    **Applied**: SOC Threshold = {soc_threshold:.1f}%, Battery Reserve = {battery_kw_conserved:.1f} kW  
+                                    **Confidence**: {smart_params['confidence_metrics']['overall_confidence']:.1%}
+                                    """)
+                                
+                                else:
+                                    st.error("❌ **Smart Conservation Configuration Invalid:**")
+                                    for error in validation_errors:
+                                        st.error(f"  • {error}")
+                                    
+                                    st.warning("Using manual parameters as fallback.")
+                                
+                            except ImportError as e:
+                                st.warning(f"⚠️ **Smart Conservation Module Import Error**: {str(e)}")
+                                st.info("Using placeholder smart conservation interface. Module will be available after implementation.")
+                                
+                            except Exception as e:
+                                st.error(f"❌ **Smart Conservation Error**: {str(e)}")
+                                st.info("Falling back to manual conservation parameters.")
                             
                             # Set conservation mode type
                             conservation_mode_type = "smart"
@@ -2947,7 +3076,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
 from smart_conservation import SmartConservationCalculator
 
 # Initialize with collected configuration
-smart_calc = SmartConservationCalculator(**md_endurance_config)
+smart_calc = SmartConservationCalculator(**smart_conservation_config)
 
 # Run AI-powered analysis
 smart_params = smart_calc.calculate_smart_parameters()
