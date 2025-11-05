@@ -344,6 +344,74 @@ def _generate_monthly_summary_table(all_monthly_events, selected_tariff, holiday
     return df_summary
 
 
+def _collect_md_endurance_config(df_for_v1, power_col, monthly_targets, interval_hours, selected_tariff,
+                                battery_params, battery_sizing, total_battery_capacity, soc_threshold, 
+                                battery_kw_conserved, conservation_enabled, conservation_dates, 
+                                conservation_day_type, holidays, prediction_horizon, conservation_aggressiveness):
+    """
+    Collect all available variables for SmartConservation module initialization.
+    
+    This function centralizes the collection of all parameters needed for the MD Endurance Controller
+    and Smart Conservation algorithms, providing a clean interface for AI/ML module integration.
+    
+    Args:
+        df_for_v1: V1-compatible demand dataframe
+        power_col: Column name containing power demand
+        monthly_targets: Array/series of MD targets
+        interval_hours: Timestep resolution in hours
+        selected_tariff: Tariff config dictionary
+        battery_params: Dictionary with efficiency, DOD, etc.
+        battery_sizing: Dictionary with power_kW, energy_kWh
+        total_battery_capacity: Derived battery capacity
+        soc_threshold: SOC threshold from Simple Conservation tab
+        battery_kw_conserved: Battery power reserved
+        conservation_enabled: Boolean toggle
+        conservation_dates: List of date objects
+        conservation_day_type: "All Days" or "Specific Dates"
+        holidays: Set of holiday dates
+        prediction_horizon: Hours to predict ahead (from Smart Conservation UI)
+        conservation_aggressiveness: 0.1-1.0 scale (from Smart Conservation UI)
+        
+    Returns:
+        dict: Complete configuration dictionary for SmartConservation module
+    """
+    
+    # Collect all available variables for SmartConservation module initialization
+    md_endurance_config = {
+        # Load & target context
+        "df_sim": df_for_v1,                    # Demand dataframe (V1-compatible)
+        "power_col": power_col,                 # Column name containing power demand
+        "monthly_targets": monthly_targets,     # Array/series of MD targets
+        "interval_hours": interval_hours,       # Timestep resolution in hours
+        "selected_tariff": selected_tariff,     # Tariff config dictionary
+        
+        # Battery parameters
+        "battery_params": battery_params,       # Dictionary with efficiency, DOD, etc.
+        "battery_sizing": battery_sizing,       # Dictionary with power_kW, energy_kWh
+        "battery_capacity": total_battery_capacity,  # Derived battery capacity
+        "soc_threshold": soc_threshold,         # SOC threshold from Simple Conservation tab
+        "battery_kw_conserved": battery_kw_conserved,  # Battery power reserved
+        
+        # Conservation settings
+        "conservation_enabled": conservation_enabled,    # Boolean toggle
+        "conservation_dates": conservation_dates,       # List of date objects
+        "conservation_day_type": conservation_day_type, # "All Days" or "Specific Dates"
+        "safety_margin": 0.0,                          # Constant (not used in V2)
+        "min_exceedance_multiplier": 1.0,              # Constant (not used in V2)
+        
+        # Simulation context
+        "holidays": holidays if holidays else set(),   # Set of holiday dates
+        "current_timestamp": df_for_v1.index[0] if len(df_for_v1) > 0 else None,  # First timestamp
+        "tariff_type": selected_tariff.get('Type', '') if selected_tariff else '',  # TOU vs General
+        
+        # Smart conservation UI parameters
+        "prediction_horizon": prediction_horizon,       # Hours to predict ahead
+        "conservation_aggressiveness": conservation_aggressiveness,  # 0.1-1.0 scale
+    }
+    
+    return md_endurance_config
+
+
 def build_daily_simulator_structure(df, threshold_kw, clusters_df, selected_tariff=None):
     """
     Build day-level structure for battery dispatch simulation.
@@ -2729,70 +2797,155 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                                 st.error("❌ Smart Conservation module not found. Please ensure 'smart_conservation.py' is in your project directory.")
                                 smart_conservation_available = False
                             
-                            if smart_conservation_available:
-                                # Smart conservation interface (will be implemented)
-                                st.markdown("##### 🤖 AI-Powered Conservation Interface")
+                            # Always display MD endurance configuration
+                            # Smart conservation interface
+                            st.markdown("##### 🤖 AI-Powered Conservation Interface")
                                 
-                                # Smart conservation parameters
-                                col1, col2 = st.columns(2)
+                            # Smart conservation parameters
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                prediction_horizon = st.slider(
+                                    "Prediction Horizon (hours)",
+                                    min_value=2,
+                                    max_value=24,
+                                    value=6,
+                                    key="smart_conservation_horizon",
+                                    help="How far ahead to predict demand patterns"
+                                )
+                            
+                            with col2:
+                                conservation_aggressiveness = st.slider(
+                                    "Conservation Aggressiveness",
+                                    min_value=0.1,
+                                    max_value=1.0,
+                                    value=0.5,
+                                    step=0.1,
+                                    key="smart_conservation_aggressiveness",
+                                    help="Higher values = more aggressive conservation"
+                                )
                                 
-                                with col1:
-                                    prediction_horizon = st.slider(
-                                        "Prediction Horizon (hours)",
-                                        min_value=2,
-                                        max_value=24,
-                                        value=6,
-                                        key="smart_conservation_horizon",
-                                        help="How far ahead to predict demand patterns"
-                                    )
+                            # =====================================================================
+                            # MD ENDURANCE CONTROLLER - Variable Collector for Smart Conservation
+                            # =====================================================================
+                            
+                            # Collect all available variables for SmartConservation module initialization
+                            md_endurance_config = _collect_md_endurance_config(
+                                df_for_v1=df_for_v1,
+                                power_col=power_col,
+                                monthly_targets=monthly_targets,
+                                interval_hours=interval_hours,
+                                selected_tariff=selected_tariff,
+                                battery_params=battery_params,
+                                battery_sizing=battery_sizing,
+                                total_battery_capacity=total_battery_capacity,
+                                soc_threshold=soc_threshold,
+                                battery_kw_conserved=battery_kw_conserved,
+                                conservation_enabled=conservation_enabled,
+                                conservation_dates=conservation_dates,
+                                conservation_day_type=conservation_day_type,
+                                holidays=holidays if 'holidays' in locals() else set(),
+                                prediction_horizon=prediction_horizon,
+                                conservation_aggressiveness=conservation_aggressiveness
+                            )
                                 
-                                with col2:
-                                    conservation_aggressiveness = st.slider(
-                                        "Conservation Aggressiveness",
-                                        min_value=0.1,
-                                        max_value=1.0,
-                                        value=0.5,
-                                        step=0.1,
-                                        key="smart_conservation_aggressiveness",
-                                        help="Higher values = more aggressive conservation"
-                                    )
-                                
-                                # Smart conservation calculations would go here
-                                # smart_params = smart_calc.calculate_smart_parameters(...)
-                                
-                                # Use smart parameters
-                                soc_threshold = 45  # AI-optimized threshold
-                                battery_kw_conserved = 120.0  # AI-optimized reserve
-                                conservation_mode_type = "smart"
-                                conservation_dates = []  # All days for smart mode
-                                
-                            else:
-                                # Smart conservation not available - show development info
+                            # Display MD Endurance Configuration
+                            st.markdown("##### 🔧 MD Endurance Controller Configuration")
+                            
+                            # Configuration Overview
+                            config_col1, config_col2, config_col3 = st.columns(3)
+                            
+                            with config_col1:
+                                st.metric(
+                                    "Data Points", 
+                                    f"{len(md_endurance_config['df_sim'])} rows" if md_endurance_config['df_sim'] is not None else "No data",
+                                    help="Number of data points in simulation dataset"
+                                )
+                                st.metric(
+                                    "Interval", 
+                                    f"{md_endurance_config['interval_hours'] * 60:.0f} min" if md_endurance_config['interval_hours'] else "0 min",
+                                    help="Data sampling interval"
+                                )
+                            
+                            with config_col2:
+                                st.metric(
+                                    "Battery Capacity", 
+                                    f"{md_endurance_config['battery_capacity']:.1f} kWh",
+                                    help="Total battery energy capacity"
+                                )
+                                st.metric(
+                                    "Battery Power", 
+                                    f"{md_endurance_config['battery_sizing'].get('power_rating_kw', 0):.1f} kW",
+                                    help="Battery power rating"
+                                )
+                            
+                            with config_col3:
+                                st.metric(
+                                    "Monthly Targets", 
+                                    f"{len(md_endurance_config['monthly_targets'])}" if md_endurance_config['monthly_targets'] is not None else "0",
+                                    help="Number of monthly MD targets"
+                                )
+                                st.metric(
+                                    "Tariff Type", 
+                                    f"{md_endurance_config['tariff_type']}",
+                                    help="Selected tariff configuration"
+                                )
+                            
+                            # Conservation Parameters
+                            st.markdown("**Conservation Settings:**")
+                            conservation_col1, conservation_col2 = st.columns(2)
+                            
+                            with conservation_col1:
                                 st.info(f"""
-                                **🔧 Smart Conservation Development Status:**
-                                
-                                **Planned Features:**
-                                - **AI-Powered SOC Management**: Dynamic threshold adjustment based on demand patterns
-                                - **Predictive Analytics**: Forecast upcoming peak events and optimize battery reserves
-                                - **Machine Learning Integration**: Learn from historical data to improve conservation decisions
-                                - **Confidence Scoring**: Provide confidence levels for conservation recommendations
-                                - **Adaptive Parameters**: Self-tuning conservation parameters based on performance
-                                
-                                **Implementation Roadmap:**
-                                1. Create `smart_conservation.py` module with `SmartConservationCalculator` class
-                                2. Implement demand pattern analysis and forecasting algorithms
-                                3. Add machine learning models for conservation optimization
-                                4. Integrate confidence scoring and adaptive learning
-                                5. Add advanced visualization for smart conservation insights
-                                
-                                **Current Status**: Framework ready, awaiting smart algorithm implementation
+                                **SOC Threshold**: {md_endurance_config['soc_threshold']}%  
+                                **Battery Reserve**: {md_endurance_config['battery_kw_conserved']} kW  
+                                **Conservation Mode**: {"Enabled" if md_endurance_config['conservation_enabled'] else "Disabled"}
                                 """)
-                                
-                                # Use simple conservation parameters as fallback
-                                soc_threshold = 50
-                                battery_kw_conserved = 100.0
-                                conservation_mode_type = "simple_fallback"
-                                conservation_dates = []
+                            
+                            with conservation_col2:
+                                st.info(f"""
+                                **Prediction Horizon**: {md_endurance_config['prediction_horizon']} hours  
+                                **Aggressiveness**: {md_endurance_config['conservation_aggressiveness']:.1f}  
+                                **Active Days**: {md_endurance_config['conservation_day_type']}
+                                """)
+                            
+                            # Detailed Configuration (Expandable)
+                            with st.expander("📊 Complete Configuration Details", expanded=False):
+                                st.json(md_endurance_config, expanded=False)
+                            
+                            # Smart conservation calculations would go here
+                            # Example: smart_calc = SmartConservationCalculator(**md_endurance_config)
+                            # Example: smart_params = smart_calc.calculate_smart_parameters()
+                            
+                            # Set conservation mode type
+                            conservation_mode_type = "smart"
+                            
+                            # Development Status Info
+                            st.markdown("##### 🚀 Development Status")
+                            st.info("""
+                            **Status**: Configuration Ready ✅  
+                            **Next Step**: Implement AI algorithms in SmartConservationCalculator class  
+                            **Integration**: All parameters collected and ready for machine learning models
+                            """)
+                            
+                            # Show integration example
+                            with st.expander("� Integration Example", expanded=False):
+                                st.code("""
+# Example integration when AI module is ready:
+from smart_conservation import SmartConservationCalculator
+
+# Initialize with collected configuration
+smart_calc = SmartConservationCalculator(**md_endurance_config)
+
+# Run AI-powered analysis
+smart_params = smart_calc.calculate_smart_parameters()
+
+# Apply optimized conservation parameters
+soc_threshold = smart_params['optimal_soc_threshold']
+battery_kw_conserved = smart_params['dynamic_battery_reserve']
+""", language="python")
+
+
                         
                         # Store conservation settings for session state
                         conservation_specific_dates = conservation_date_strings if 'conservation_date_strings' in locals() else []
