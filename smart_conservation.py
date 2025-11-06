@@ -15,7 +15,6 @@ from typing import Optional, Dict
 from datetime import datetime
 from enum import Enum
 
-
 class MdShavingMode(Enum):
     """Enumeration of MD Shaving operational modes."""
     IDLE = "idle"
@@ -250,8 +249,6 @@ class _MdEventState:
     total_discharged_kwh: float = 0.0
     entered_conservation: bool = False
 
-
-
 class _MdControllerState:
     """
     Internal mutable state of the MD controller across the historical run.
@@ -269,8 +266,6 @@ class _MdControllerState:
         self.soc_reserve_percent: float = 0.0
         self.last_severity: float = 0.0
         self.last_severity_components: Optional[Dict[str, float]] = None
-
-
 
 class MdShavingController:
     """
@@ -302,9 +297,30 @@ class MdShavingController:
                    with time-series energy consumption data
         """
         self.df_sim = df_sim
-        self.event_state = None
-        self.mode_state = None
         self.config_data = None
+        self.state = self._init_state()
+        
+        # Initialize processing variables
+        self.current_row_index = 0
+        self.total_rows = len(df_sim) if df_sim is not None else 0
+        self.processing_complete = False
+        
+        # Initialize performance tracking
+        self.processing_start_time = None
+        self.last_processed_timestamp = None
+
+    def _init_state(self):
+        """
+        Create and return a fresh controller state object.
+        
+        This method initializes all state variables to their default values,
+        providing a clean state for each controller initialization or reset.
+        Used to refresh states during initialization and for state reset operations.
+        
+        Returns:
+            _MdControllerState: Fresh controller state object with default values
+        """
+        return _MdControllerState()
 
     def import_config(self, config_source):
         """
@@ -367,4 +383,187 @@ class MdShavingController:
         if self.config_data is None:
             return default_value
         return self.config_data.get(param_name, default_value)
+
+    def reset_state(self):
+        """
+        Reset controller state to fresh initial values.
+        
+        This method creates a new state object and resets processing variables,
+        useful for restarting analysis or clearing accumulated state between runs.
+        """
+        self.state = self._init_state()
+        self.current_row_index = 0
+        self.processing_complete = False
+        self.processing_start_time = None
+        self.last_processed_timestamp = None
+
+    def is_initialized(self):
+        """
+        Check if controller is properly initialized for processing.
+        
+        Returns:
+            bool: True if controller has all required components for processing
+        """
+        initialization_checks = {
+            'df_sim': self.df_sim is not None,
+            'config_data': self.config_data is not None,
+            'state': self.state is not None,
+            'df_not_empty': self.df_sim is not None and not self.df_sim.empty if hasattr(self.df_sim, 'empty') else True,
+            'power_col_configured': self.get_config_param('power_col') is not None,
+            'interval_configured': self.get_config_param('interval_hours') is not None
+        }
+        
+        return all(initialization_checks.values())
+
+    def get_initialization_status(self):
+        """
+        Get detailed initialization status for debugging.
+        
+        Returns:
+            dict: Dictionary with initialization check results and missing components
+        """
+        checks = {
+            'df_sim_present': self.df_sim is not None,
+            'df_sim_not_empty': self.df_sim is not None and not self.df_sim.empty if hasattr(self.df_sim, 'empty') else False,
+            'config_imported': self.config_data is not None,
+            'state_initialized': self.state is not None,
+            'power_col_configured': self.get_config_param('power_col') is not None,
+            'interval_configured': self.get_config_param('interval_hours') is not None,
+            'total_rows': self.total_rows,
+            'current_mode': self.state.mode.value if self.state else 'No State'
+        }
+        
+        missing_components = [key for key, value in checks.items() if not value and key != 'total_rows' and key != 'current_mode']
+        
+        return {
+            'checks': checks,
+            'is_ready': len(missing_components) == 0,
+            'missing_components': missing_components
+        }
+
+    def run_historical(self, df_sim):
+        """
+        Process historical data sequentially through the MD shaving algorithm.
+        
+        Args:
+            df_sim: DataFrame containing historical simulation data
+            
+        Returns:
+            list: Results from processing all rows
+        """
+        return self._process_row(df_sim)
+
+    def _process_row(self, df_sim):
+        """
+        Process all rows of data through the MD shaving logic.
+        
+        This method handles:
+        - Looping through each row in the dataset
+        - Reading timestamp, power, and SOC for each row
+        - Processing sequential data analysis
+        
+        Args:
+            df_sim: DataFrame containing simulation data
+            
+        Returns:
+            list: Results from processing each row
+        """
+        results = []
+        
+        # For each row in the dataset, read the timestamp, power, SOC
+        for row in df_sim.itertuples():
+            # 1. Read current timestamp
+            current_timestamp = row.Index if hasattr(row, 'Index') else getattr(row, df_sim.index.name, None)
+            
+            # 2. Read the current power (the value in df_sim associated with the timestamp)
+            power_col = self.get_config_param('power_col')
+            current_power = getattr(row, power_col, None) if power_col else None
+            
+            # 3. Read the current SOC
+            current_soc = getattr(row, 'soc_percent', None)
+            
+            # Store row data
+            row_result = {
+                'timestamp': current_timestamp,
+                'power': current_power,
+                'soc': current_soc
+            }
+            results.append(row_result)
+        
+        return results
+
+    def _check_tariff_window_conditions(self, current_timestamp):
+        """
+        Check tariff conditions and determine MD window state with SOC reserves.
+        
+        This method analyzes:
+        1. Which tariff is currently being used
+        2. If TOU tariff, whether we're inside or outside the MD window
+        3. What rules apply for non-TOU tariffs
+        4. Early/late window definition and boolean states
+        5. SOC reserve levels for early/late periods
+        
+        Args:
+            current_timestamp: Current timestamp being processed
+            
+        Returns:
+            dict: Dictionary containing tariff analysis results
+        """
+        # 1. Which tariff are we using?
+        tariff_type = self.get_config_param('tariff_type', 'unknown')
+        selected_tariff = self.get_config_param('selected_tariff', {})
+        
+        # Initialize result dictionary
+        result = {
+            'tariff_type': tariff_type,
+            'selected_tariff': selected_tariff,
+            'is_tou': tariff_type.lower() == 'tou',
+            'inside_md_window': False,
+            'window_rules': 'standard',
+            'is_early_window': False,
+            'is_late_window': False,
+            'soc_reserve_percent': 50.0  # Default reserve
+        }
+        
+        # 2. If TOU, check if we're inside or outside the MD window
+        if result['is_tou']:
+            # Check MD window based on tariff configuration
+            md_start_hour = selected_tariff.get('md_start_hour', 9)  # Default 9 AM
+            md_end_hour = selected_tariff.get('md_end_hour', 17)    # Default 5 PM
+            
+            if current_timestamp and hasattr(current_timestamp, 'hour'):
+                current_hour = current_timestamp.hour
+                result['inside_md_window'] = md_start_hour <= current_hour < md_end_hour
+                result['window_rules'] = 'md_window' if result['inside_md_window'] else 'off_peak'
+        
+        # 3. Rules for non-TOU tariffs
+        else:
+            result['window_rules'] = 'flat_rate'
+        
+        # 4. Define early/late window (50% split of work day)
+        if result['inside_md_window']:
+            md_start_hour = selected_tariff.get('md_start_hour', 9)
+            md_end_hour = selected_tariff.get('md_end_hour', 17)
+            
+            # Calculate 50% point of the work day
+            work_day_duration = md_end_hour - md_start_hour
+            midpoint_hour = md_start_hour + (work_day_duration * 0.5)
+            
+            if current_timestamp and hasattr(current_timestamp, 'hour'):
+                current_hour = current_timestamp.hour
+                result['is_early_window'] = current_hour < midpoint_hour
+                result['is_late_window'] = current_hour >= midpoint_hour
+        
+        # 5. Assign SOC reserve levels based on early/late window
+        if result['is_early_window']:
+            # Early part of window → higher reserve (70%)
+            result['soc_reserve_percent'] = 70.0
+        elif result['is_late_window']:
+            # Late part of window → lower reserve (40%)
+            result['soc_reserve_percent'] = 40.0
+        else:
+            # Outside MD window or non-TOU → standard reserve (50%)
+            result['soc_reserve_percent'] = 50.0
+        
+        return result
 
