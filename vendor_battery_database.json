@@ -224,5 +224,22 @@
     "depth_of_discharge": 90,
     "round_trip_efficiency": 96.0,
     "chemistry": "LFP"
-  }
+  },
+  "SUNNIC-SKBES0232-950": {
+    "company": "SUNNIC",
+    "model": "SKBES0232-950",
+    "c_rate": 0.862,
+    "power_kW": 200,
+    "energy_kWh": 232,
+    "voltage_V": 400,
+    "lifespan_years": 15,
+    "eol_capacity_pct": 70,
+    "cycles_per_day": 1.0,
+    "cooling": "Air-cooling PCS + Liquid-cooling Battery",
+    "weight_kg": 2700,
+    "dimensions_mm": [1450, 2225, 1350],
+    "depth_of_discharge": 90,
+    "round_trip_efficiency": 93,
+    "chemistry":"LFP"
+}
 }
