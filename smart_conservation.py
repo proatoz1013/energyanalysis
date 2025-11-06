@@ -567,3 +567,165 @@ class MdShavingController:
         
         return result
 
+
+class SmartConservationDebugger:
+    """
+    Debugging class for Smart Conservation analysis.
+    
+    This class provides debugging utilities to analyze and visualize
+    tariff window conditions and smart conservation behavior across
+    the entire dataset timeline.
+    """
+    
+    def __init__(self, controller):
+        """
+        Initialize debugger with a MdShavingController instance.
+        
+        Args:
+            controller: MdShavingController instance with imported configuration
+        """
+        self.controller = controller
+    
+    def generate_window_analysis_table(self, df_sim=None):
+        """
+        Generate a comprehensive analysis table of tariff window conditions
+        and smart conservation states for all timestamps in the dataset.
+        
+        This method analyzes each timestamp to determine:
+        - TOU vs non-TOU tariff classification
+        - Early/late window status within MD periods
+        - SOC reserve recommendations
+        - Window rules and tariff conditions
+        
+        Args:
+            df_sim: Optional DataFrame to analyze (uses controller's df_sim if None)
+            
+        Returns:
+            dict: Analysis results in format suitable for md_shaving_solution_v2.py
+                 Contains 'data' list and 'summary' dict for display
+        """
+        # Use controller's dataframe if none provided
+        if df_sim is None:
+            df_sim = self.controller.df_sim
+        
+        if df_sim is None or df_sim.empty:
+            return {
+                'data': [],
+                'summary': {'error': 'No simulation data available'},
+                'metadata': {
+                    'total_timestamps': 0,
+                    'analysis_type': 'window_analysis'
+                }
+            }
+        
+        analysis_data = []
+        summary_stats = {
+            'total_timestamps': len(df_sim),
+            'tou_count': 0,
+            'non_tou_count': 0,
+            'early_window_count': 0,
+            'late_window_count': 0,
+            'inside_md_window_count': 0,
+            'outside_md_window_count': 0,
+            'avg_soc_reserve': 0.0
+        }
+        
+        soc_reserves = []
+        
+        # Analyze each timestamp
+        for timestamp in df_sim.index:
+            # Get tariff window conditions for this timestamp
+            window_conditions = self.controller._check_tariff_window_conditions(timestamp)
+            
+            # Create analysis record
+            record = {
+                'timestamp': timestamp,
+                'date': timestamp.date() if hasattr(timestamp, 'date') else str(timestamp),
+                'time': timestamp.strftime('%H:%M:%S') if hasattr(timestamp, 'strftime') else str(timestamp),
+                'hour': timestamp.hour if hasattr(timestamp, 'hour') else 0,
+                'tariff_type': window_conditions['tariff_type'],
+                'is_tou': window_conditions['is_tou'],
+                'inside_md_window': window_conditions['inside_md_window'],
+                'is_early_window': window_conditions['is_early_window'],
+                'is_late_window': window_conditions['is_late_window'],
+                'window_rules': window_conditions['window_rules'],
+                'soc_reserve_percent': window_conditions['soc_reserve_percent'],
+                'window_status': self._get_window_status_description(window_conditions)
+            }
+            
+            analysis_data.append(record)
+            
+            # Update summary statistics
+            if window_conditions['is_tou']:
+                summary_stats['tou_count'] += 1
+            else:
+                summary_stats['non_tou_count'] += 1
+            
+            if window_conditions['is_early_window']:
+                summary_stats['early_window_count'] += 1
+            elif window_conditions['is_late_window']:
+                summary_stats['late_window_count'] += 1
+            
+            if window_conditions['inside_md_window']:
+                summary_stats['inside_md_window_count'] += 1
+            else:
+                summary_stats['outside_md_window_count'] += 1
+            
+            soc_reserves.append(window_conditions['soc_reserve_percent'])
+        
+        # Calculate summary statistics
+        if soc_reserves:
+            summary_stats['avg_soc_reserve'] = sum(soc_reserves) / len(soc_reserves)
+        
+        summary_stats.update({
+            'tou_percentage': (summary_stats['tou_count'] / summary_stats['total_timestamps'] * 100) if summary_stats['total_timestamps'] > 0 else 0,
+            'early_window_percentage': (summary_stats['early_window_count'] / summary_stats['total_timestamps'] * 100) if summary_stats['total_timestamps'] > 0 else 0,
+            'late_window_percentage': (summary_stats['late_window_count'] / summary_stats['total_timestamps'] * 100) if summary_stats['total_timestamps'] > 0 else 0,
+            'inside_md_percentage': (summary_stats['inside_md_window_count'] / summary_stats['total_timestamps'] * 100) if summary_stats['total_timestamps'] > 0 else 0
+        })
+        
+        return {
+            'data': analysis_data,
+            'summary': summary_stats,
+            'metadata': {
+                'total_timestamps': len(analysis_data),
+                'analysis_type': 'smart_conservation_window_analysis',
+                'date_range': {
+                    'start': analysis_data[0]['timestamp'] if analysis_data else None,
+                    'end': analysis_data[-1]['timestamp'] if analysis_data else None
+                },
+                'columns': [
+                    'timestamp', 'date', 'time', 'hour', 'tariff_type', 'is_tou',
+                    'inside_md_window', 'is_early_window', 'is_late_window', 
+                    'window_rules', 'soc_reserve_percent', 'window_status'
+                ]
+            }
+        }
+    
+    def _get_window_status_description(self, window_conditions):
+        """
+        Generate a human-readable description of the window status.
+        
+        Args:
+            window_conditions: Dictionary from _check_tariff_window_conditions
+            
+        Returns:
+            str: Descriptive status string
+        """
+        if not window_conditions['is_tou']:
+            return "Non-TOU Tariff"
+        
+        if not window_conditions['inside_md_window']:
+            return "TOU Off-Peak"
+        
+        if window_conditions['is_early_window']:
+            return "TOU Early MD Window"
+        elif window_conditions['is_late_window']:
+            return "TOU Late MD Window"
+        else:
+            return "TOU MD Window"
+
+
+#LOGOFF 6 Nov 9:41 AM
+#TO-DO： Add debug methods to display on main app （tabled data etc.）
+#dictionary to store hardcoded static values
