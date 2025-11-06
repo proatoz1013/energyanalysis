@@ -1408,6 +1408,10 @@ def render_md_shaving_v3():
                         target_description
                     )
                     
+                    # Smart Conservation Debug Analysis
+                    st.markdown("---")  # Separator
+                    render_smart_conservation_debug_analysis()
+                    
                 else:
                     st.error("❌ Failed to process the uploaded data")
             else:
@@ -3334,10 +3338,183 @@ def render_battery_impact_visualization():
         st.info("💡 **Upload data in the MD Shaving (v2) section above to see battery impact visualization.**")
 
 
+def render_smart_conservation_debug_analysis():
+    """
+    Render Smart Conservation debugging analysis with window analysis table.
+    
+    This function displays detailed analysis of tariff window conditions
+    and smart conservation states across the dataset timeline.
+    """
+    st.markdown("### 🔍 Smart Conservation Debug Analysis")
+    st.markdown("**Analyze tariff window conditions and smart conservation behavior**")
+    
+    # Check if we have the necessary data
+    if not (hasattr(st.session_state, 'processed_df') and 
+            st.session_state.processed_df is not None and 
+            hasattr(st.session_state, 'selected_tariff') and
+            hasattr(st.session_state, 'power_column')):
+        st.info("""
+        📋 **Smart Conservation Debug Analysis**
+        
+        Upload and configure your data first to enable Smart Conservation debugging.
+        This analysis will show:
+        - TOU vs non-TOU tariff classification for each timestamp
+        - Early/late window status within MD periods  
+        - SOC reserve recommendations
+        - Window rules and tariff conditions
+        """)
+        return
+    
+    try:
+        # Import Smart Conservation classes
+        from smart_conservation import MdShavingController, MdShavingConfig, SmartConservationDebugger
+        
+        # Collect configuration data (similar to main app)
+        config_data = {
+            'df_sim': st.session_state.processed_df,
+            'power_col': st.session_state.power_column,
+            'selected_tariff': getattr(st.session_state, 'selected_tariff', {}),
+            'tariff_type': getattr(st.session_state, 'selected_tariff', {}).get('type', 'General'),
+            'interval_hours': getattr(st.session_state, 'interval_hours', 0.25),
+            'battery_params': {},
+            'battery_sizing': {},
+        }
+        
+        # Initialize Smart Conservation components
+        config = MdShavingConfig(**config_data)
+        controller = MdShavingController(config_data['df_sim'])
+        controller.import_config(config)
+        
+        # Initialize debugger
+        debugger = SmartConservationDebugger(controller)
+        
+        # Generate window analysis
+        with st.spinner("Analyzing tariff window conditions..."):
+            analysis_results = debugger.generate_window_analysis_table()
+        
+        if analysis_results['data']:
+            # Display summary statistics
+            st.markdown("#### 📊 Analysis Summary")
+            summary = analysis_results['summary']
+            
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Total Timestamps", summary['total_timestamps'])
+            col2.metric("TOU Periods", f"{summary['tou_percentage']:.1f}%")
+            col3.metric("Inside MD Window", f"{summary['inside_md_percentage']:.1f}%") 
+            col4.metric("Avg SOC Reserve", f"{summary['avg_soc_reserve']:.1f}%")
+            
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Early Window", f"{summary['early_window_percentage']:.1f}%")
+            col2.metric("Late Window", f"{summary['late_window_percentage']:.1f}%")
+            col3.metric("Date Range", f"{len(set(r['date'] for r in analysis_results['data']))} days")
+            
+            # Display scrollable analysis table
+            st.markdown("#### 📋 Detailed Window Analysis Table")
+            st.markdown("*Scroll to view all timestamps and their tariff window conditions*")
+            
+            # Convert to DataFrame for display
+            import pandas as pd
+            df_analysis = pd.DataFrame(analysis_results['data'])
+            
+            # Format columns for better display
+            df_display = df_analysis[['timestamp', 'date', 'time', 'tariff_type', 
+                                    'is_tou', 'inside_md_window', 'is_early_window', 
+                                    'is_late_window', 'soc_reserve_percent', 'window_status']].copy()
+            
+            # Rename columns for display
+            df_display.columns = ['Timestamp', 'Date', 'Time', 'Tariff Type', 
+                                'Is TOU', 'Inside MD Window', 'Early Window', 
+                                'Late Window', 'SOC Reserve %', 'Window Status']
+            
+            # Add filtering options
+            st.markdown("**🔍 Filter Options:**")
+            filter_col1, filter_col2, filter_col3 = st.columns(3)
+            
+            with filter_col1:
+                show_tou_only = st.checkbox("Show TOU periods only")
+            with filter_col2:
+                show_md_window_only = st.checkbox("Show MD window only")
+            with filter_col3:
+                selected_dates = st.multiselect(
+                    "Filter by date:",
+                    options=sorted(set(df_display['Date'].astype(str))),
+                    default=[]
+                )
+            
+            # Apply filters
+            df_filtered = df_display.copy()
+            if show_tou_only:
+                df_filtered = df_filtered[df_filtered['Is TOU'] == True]
+            if show_md_window_only:
+                df_filtered = df_filtered[df_filtered['Inside MD Window'] == True]
+            if selected_dates:
+                df_filtered = df_filtered[df_filtered['Date'].astype(str).isin(selected_dates)]
+            
+            # Display filtered count
+            st.markdown(f"**Showing {len(df_filtered)} of {len(df_display)} records**")
+            
+            # Display the scrollable table with styling
+            def highlight_window_status(row):
+                """Color code rows based on window status."""
+                if row['Window Status'] == 'TOU Early MD Window':
+                    return ['background-color: #e8f5e8'] * len(row)  # Light green
+                elif row['Window Status'] == 'TOU Late MD Window':
+                    return ['background-color: #fff2e8'] * len(row)  # Light orange
+                elif row['Window Status'] == 'TOU Off-Peak':
+                    return ['background-color: #e8f0ff'] * len(row)  # Light blue
+                else:
+                    return [''] * len(row)
+            
+            if not df_filtered.empty:
+                styled_df = df_filtered.style.apply(highlight_window_status, axis=1)
+                st.dataframe(
+                    styled_df,
+                    use_container_width=True,
+                    height=400  # Scrollable height
+                )
+                
+                # Legend for color coding
+                st.markdown("""
+                **Color Legend:**
+                - 🟢 Light Green: Early MD Window (Higher SOC Reserve - 70%)
+                - 🟠 Light Orange: Late MD Window (Lower SOC Reserve - 40%) 
+                - 🔵 Light Blue: Off-Peak Periods (Standard SOC Reserve - 50%)
+                - ⚪ White: Non-TOU Tariff (Standard SOC Reserve - 50%)
+                """)
+            else:
+                st.warning("No records match the selected filters.")
+            
+            # Technical details
+            with st.expander("ℹ️ Technical Details"):
+                st.markdown(f"""
+                **Analysis Metadata:**
+                - Total Timestamps: {analysis_results['metadata']['total_timestamps']}
+                - Analysis Type: {analysis_results['metadata']['analysis_type']}
+                - Date Range: {analysis_results['metadata']['date_range']['start']} to {analysis_results['metadata']['date_range']['end']}
+                
+                **Window Classification Logic:**
+                - **TOU Detection**: Based on tariff type configuration
+                - **MD Window**: Typically 9 AM - 5 PM on weekdays
+                - **Early/Late Split**: 50% point of work day duration
+                - **SOC Reserves**: Early=70%, Late=40%, Standard=50%
+                
+                **Data Source**: Smart Conservation Module (smart_conservation.py)
+                """)
+        else:
+            st.error("No analysis data generated. Please check your configuration.")
+            
+    except ImportError as e:
+        st.error(f"Smart Conservation module not found: {e}")
+    except Exception as e:
+        st.error(f"Error in Smart Conservation analysis: {e}")
+        if st.checkbox("Show error details"):
+            st.exception(e)
+
+
 # Main function for compatibility
 def show():
     """Compatibility function that calls the main render function."""
-    render_md_shaving_v2()
+    render_md_shaving_v3()
 
 
 # ===================================================================================================
@@ -3517,7 +3694,7 @@ def is_md_window(timestamp, holidays=None):
 
 if __name__ == "__main__":
     # For testing purposes
-    render_md_shaving_v2()
+    render_md_shaving_v3()
 
 
 def cluster_peak_events(events_df, battery_params, md_hours, working_days, interval_hours=None):
