@@ -1408,10 +1408,6 @@ def render_md_shaving_v3():
                         target_description
                     )
                     
-                    # Smart Conservation Debug Analysis
-                    st.markdown("---")  # Separator
-                    render_smart_conservation_debug_analysis()
-                    
                 else:
                     st.error("❌ Failed to process the uploaded data")
             else:
@@ -2936,146 +2932,16 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                             st.markdown("---")
                             st.markdown("##### 🧠 Smart Conservation Analysis")
                             
+                            # Smart Conservation Debug Analysis
                             try:
-                                # Import the smart conservation module
-                                from smart_conservation import SmartConservationCalculator, validate_smart_conservation_config, get_smart_conservation_info
-                                
-                                # Show module info
-                                module_info = get_smart_conservation_info()
-                                st.success(f"✅ **{module_info['module_name']}** v{module_info['version']} - {module_info['status']}")
-                                
-                                # Validate configuration
-                                is_valid, validation_errors = validate_smart_conservation_config(smart_conservation_config)
-                                
-                                if is_valid:
-                                    # Initialize Smart Conservation Calculator
-                                    smart_calc = SmartConservationCalculator(**smart_conservation_config)
-                                    
-                                    # Run AI-powered analysis
-                                    st.info("🔄 Running AI-powered conservation analysis...")
-                                    smart_params = smart_calc.calculate_smart_parameters()
-                                    
-                                    # Display AI-optimized parameters
-                                    st.markdown("**🎯 AI-Optimized Parameters:**")
-                                    
-                                    opt_col1, opt_col2, opt_col3 = st.columns(3)
-                                    
-                                    with opt_col1:
-                                        st.metric(
-                                            "Optimized SOC Threshold", 
-                                            f"{smart_params['optimized_parameters']['optimal_soc_threshold']:.1f}%",
-                                            delta=f"{smart_params['optimized_parameters']['optimal_soc_threshold'] - soc_threshold:.1f}%",
-                                            help="AI-calculated optimal SOC activation threshold"
-                                        )
-                                    
-                                    with opt_col2:
-                                        st.metric(
-                                            "Dynamic Battery Reserve", 
-                                            f"{smart_params['optimized_parameters']['dynamic_battery_reserve']:.1f} kW",
-                                            delta=f"{smart_params['optimized_parameters']['dynamic_battery_reserve'] - battery_kw_conserved:.1f} kW",
-                                            help="AI-calculated optimal battery power reserve"
-                                        )
-                                    
-                                    with opt_col3:
-                                        st.metric(
-                                            "Overall Confidence", 
-                                            f"{smart_params['confidence_metrics']['overall_confidence']:.1%}",
-                                            help="AI confidence in parameter optimization"
-                                        )
-                                    
-                                    # Show analysis results
-                                    with st.expander("🔬 Detailed AI Analysis Results", expanded=False):
-                                        
-                                        # Demand pattern analysis
-                                        st.markdown("**📊 Demand Pattern Analysis:**")
-                                        demand_patterns = smart_params['analysis_results']['demand_patterns']
-                                        
-                                        pattern_col1, pattern_col2 = st.columns(2)
-                                        with pattern_col1:
-                                            st.info(f"""
-                                            **Peak Hours**: {', '.join(map(str, demand_patterns.get('peak_hours', [])))}  
-                                            **Load Profile**: {demand_patterns.get('load_profile_classification', 'Unknown')}  
-                                            **Demand Volatility**: {demand_patterns.get('demand_volatility', 0):.2f}
-                                            """)
-                                        
-                                        with pattern_col2:
-                                            peak_freq = demand_patterns.get('peak_frequency', {})
-                                            st.info(f"""
-                                            **Daily Peak Probability**: {peak_freq.get('daily_peak_probability', 0):.1%}  
-                                            **Weekly Peak Events**: {peak_freq.get('weekly_peak_events', 0):.1f}  
-                                            **Avg Peak Duration**: {peak_freq.get('peak_duration_avg', 0):.0f} min
-                                            """)
-                                        
-                                        # Demand forecast
-                                        st.markdown("**🔮 Demand Forecast:**")
-                                        forecast = smart_params['analysis_results']['demand_forecast']
-                                        
-                                        forecast_col1, forecast_col2 = st.columns(2)
-                                        with forecast_col1:
-                                            st.info(f"""
-                                            **Forecast Horizon**: {forecast['horizon_hours']} hours  
-                                            **Peak Probability**: {forecast.get('peak_probability', 0):.1%}  
-                                            **Forecast Accuracy**: {forecast.get('forecast_accuracy', 0):.1%}
-                                            """)
-                                        
-                                        with forecast_col2:
-                                            forecasted_demand = forecast.get('forecasted_demand', [])
-                                            if forecasted_demand:
-                                                avg_forecast = sum(forecasted_demand) / len(forecasted_demand)
-                                                max_forecast = max(forecasted_demand)
-                                                st.info(f"""
-                                                **Avg Forecasted Demand**: {avg_forecast:.1f} kW  
-                                                **Max Forecasted Demand**: {max_forecast:.1f} kW  
-                                                **Data Points**: {len(forecasted_demand)}
-                                                """)
-                                    
-                                    # Show AI recommendations
-                                    recommendations = smart_params.get('recommendations', [])
-                                    if recommendations:
-                                        st.markdown("**💡 AI Recommendations:**")
-                                        for i, rec in enumerate(recommendations, 1):
-                                            st.info(f"**{i}.** {rec}")
-                                    
-                                    # Update conservation parameters with AI-optimized values
-                                    # Apply AI-optimized parameters for simulation
-                                    soc_threshold = smart_params['optimized_parameters']['optimal_soc_threshold']
-                                    battery_kw_conserved = smart_params['optimized_parameters']['dynamic_battery_reserve']
-                                    
-                                    st.success(f"""
-                                    ✅ **Smart Conservation Active**: AI has optimized parameters based on demand analysis  
-                                    **Applied**: SOC Threshold = {soc_threshold:.1f}%, Battery Reserve = {battery_kw_conserved:.1f} kW  
-                                    **Confidence**: {smart_params['confidence_metrics']['overall_confidence']:.1%}
-                                    """)
-                                
-                                else:
-                                    st.error("❌ **Smart Conservation Configuration Invalid:**")
-                                    for error in validation_errors:
-                                        st.error(f"  • {error}")
-                                    
-                                    st.warning("Using manual parameters as fallback.")
-                                
-                            except ImportError as e:
-                                st.warning(f"⚠️ **Smart Conservation Module Import Error**: {str(e)}")
-                                st.info("Using placeholder smart conservation interface. Module will be available after implementation.")
-                                
+                                render_smart_conservation_debug_analysis()
                             except Exception as e:
-                                st.error(f"❌ **Smart Conservation Error**: {str(e)}")
-                                st.info("Falling back to manual conservation parameters.")
+                                st.error(f"❌ Smart Conservation Debug Analysis Error: {str(e)}")
+                                st.info("💡 **Fallback**: Smart Conservation debugging is temporarily unavailable. Continue with normal battery simulation.")
+                                if st.checkbox("Show Smart Conservation error details"):
+                                    st.exception(e)
                             
-                            # Set conservation mode type
-                            conservation_mode_type = "smart"
                             
-                            # Development Status Info
-                            st.markdown("##### 🚀 Development Status")
-                            st.info("""
-                            **Status**: Configuration Ready ✅  
-                            **Next Step**: Implement AI algorithms in SmartConservationCalculator class  
-                            **Integration**: All parameters collected and ready for machine learning models
-                            """)
-                            
-                            # Show integration example
-                            with st.expander("� Integration Example", expanded=False):
-                                st.code("""
 # Example integration when AI module is ready:
 from smart_conservation import SmartConservationCalculator
 
