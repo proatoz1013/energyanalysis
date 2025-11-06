@@ -11,6 +11,18 @@ Created: November 2025
 Version: 1.0.0
 """
 
+from typing import Optional, Dict
+from datetime import datetime
+from enum import Enum
+
+
+class MdShavingMode(Enum):
+    """Enumeration of MD Shaving operational modes."""
+    IDLE = "idle"
+    MONITORING = "monitoring"
+    ACTIVE = "active"
+    CONSERVATION = "conservation"
+
 class MdShavingConfig:
     """
     AI-Powered Smart Conservation Calculator
@@ -217,6 +229,47 @@ class MdShavingConfig:
         config_dict['conservation_aggressiveness'] = self.conservation_aggressiveness
         
         return config_dict
+    
+class _MdEventState:
+    """
+    Internal state for the current MD event.
+
+    This tracks whether an event is active, when it started, how long
+    it has lasted, and basic per-event statistics needed for severity
+    and reporting.
+    """
+    active: bool = False
+    event_id: int = 0
+    start_time: Optional[datetime] = None
+    duration_minutes: float = 0.0
+    smoothed_excess_kw: float = 0.0
+    above_trigger_count: int = 0
+    below_trigger_count: int = 0
+    max_excess_kw: float = 0.0
+    max_severity: float = 0.0
+    total_discharged_kwh: float = 0.0
+    entered_conservation: bool = False
+
+
+
+class _MdControllerState:
+    """
+    Internal mutable state of the MD controller across the historical run.
+
+    This groups all cross-timestep variables: current mode, event state,
+    last timestamp, last severity, and any debug-friendly components.
+    """
+    
+    def __init__(self):
+        """Initialize controller state with default values."""
+        self.last_timestamp: Optional[datetime] = None
+        self.mode: MdShavingMode = MdShavingMode.IDLE
+        self.event: _MdEventState = _MdEventState()
+        self.last_soc_percent: Optional[float] = None
+        self.soc_reserve_percent: float = 0.0
+        self.last_severity: float = 0.0
+        self.last_severity_components: Optional[Dict[str, float]] = None
+
 
 
 class MdShavingController:
