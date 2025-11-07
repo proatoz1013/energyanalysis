@@ -10,6 +10,7 @@ from md_shaving_solution import show as show_md_shaving_solution
 from md_shaving_solution_v2 import render_md_shaving_v2, render_battery_impact_visualization
 from md_shaving_solution_v3 import render_md_shaving_v3
 from md_pattern_analysis import show_md_pattern_analysis
+from chiller_plant_efficiency import render_chiller_plant_efficiency_tab
 from utils.multi_tab_navigation import render_multi_tab_navigation
 from utils.navigation import inject_navigation_css
 import sys
@@ -150,7 +151,7 @@ render_multi_tab_navigation()
 st.sidebar.markdown("---")
 
 # Tab names to match with navigation
-TAB_NAMES = ["TNB New Tariff Comparison", "Load Profile Analysis", "Advanced Energy Analysis", "Monthly Rate Impact Analysis", "MD Shaving Solution", "🔋 MD Shaving (v2)", "🔋 MD Shaving (v3)", "📊 MD Patterns", "🔋 Advanced MD Shaving", "❄️ Chiller Energy Dashboard"]
+TAB_NAMES = ["TNB New Tariff Comparison", "Load Profile Analysis", "Advanced Energy Analysis", "Monthly Rate Impact Analysis", "MD Shaving Solution", "🔋 MD Shaving (v2)", "🔋 MD Shaving (v3)", "📊 MD Patterns", "🔋 Advanced MD Shaving", "❄️ Chiller Energy Dashboard", "❄️ Chiller Plant Efficiency"]
 
 tabs = st.tabs(TAB_NAMES)
 
@@ -4610,7 +4611,14 @@ Column Mapping Used:
                 except Exception as e:
                     st.error(f"❌ Error reading file: {str(e)}")
                     
-    except Exception as e:
-        st.error(f"❌ Error loading chiller dashboard: {str(e)}")
-        st.info("The chiller dashboard will be available once the components are properly installed.")
+        except Exception as e:
+            st.error(f"❌ Error loading chiller dashboard: {str(e)}")
+            st.info("The chiller dashboard will be available once the components are properly installed.")
+    
+    except Exception as outer_e:
+        st.error(f"❌ Unexpected error in chiller dashboard: {str(outer_e)}")
+
+with tabs[10]:
+    # ❄️ Chiller Plant Efficiency Tab  
+    render_chiller_plant_efficiency_tab()
 
