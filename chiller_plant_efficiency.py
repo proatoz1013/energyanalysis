@@ -496,14 +496,22 @@ def render_chiller_plant_efficiency_tab():
         fig6.update_traces(marker_color='#17becf')
         fig6.update_layout(height=500)
         
-        # Add trend line
+        # Add trend line (optional - requires statsmodels)
         if len(df_filtered) > 1:
-            fig6.add_traces(px.scatter(
-                df_filtered,
-                x='Load_pct', 
-                y='kW_per_RT',
-                trendline='ols'
-            ).data[1])
+            try:
+                # Try to add OLS trendline
+                fig6.add_traces(px.scatter(
+                    df_filtered,
+                    x='Load_pct', 
+                    y='kW_per_RT',
+                    trendline='ols'
+                ).data[1])
+            except ImportError:
+                # statsmodels not available - skip trendline
+                st.info("ℹ️ Trendline not available (requires statsmodels package)")
+            except Exception as e:
+                # Other errors - just skip trendline
+                pass
         
         st.plotly_chart(fig6, use_container_width=True)
         
