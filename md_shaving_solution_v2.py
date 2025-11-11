@@ -787,15 +787,15 @@ def _render_battery_quantity_recommendation(max_power_shaving_required, recommen
                     f"{qty_for_power_rounded} units",
                     help=f"Based on {max_power_shaving_required:.1f} kW ÷ {battery_power_kw} kW"
                 )
-                st.caption(f"Calculation: ⌈{max_power_shaving_required:.1f} ÷ {battery_power_kw}⌉")
+                st.caption(f"Calculation: ⌈{max_power_shaving_required:.1f} ÷ {battery_power_kw}⌉ = {round(max_power_shaving_required / battery_power_kw, 2)}")
             
             with col2:
                 st.metric(
                     "Energy-Based Qty", 
                     f"{qty_for_energy_rounded} units",
-                    help=f"Based on {recommended_energy_capacity:.1f} kWh ÷ {battery_energy_kwh} kWh ÷ 0.9 ÷ 0.93"
+                    help=f"Based on {recommended_energy_capacity:.1f} kWh ÷ {battery_energy_kwh} kWh ÷ 0.9 ÷ 0.93 "
                 )
-                st.caption(f"Calculation: ⌈{recommended_energy_capacity:.1f} ÷ {battery_energy_kwh} ÷ 0.9 ÷ 0.93⌉")
+                st.caption(f"Calculation: ⌈{recommended_energy_capacity:.1f} ÷ {battery_energy_kwh} ÷ 0.9 ÷ 0.93⌉ = {round((recommended_energy_capacity / battery_power_kw) / 0.9 / 0.93, 2)} ")
             
             with col3:
                 st.metric(
@@ -3303,7 +3303,7 @@ def _compute_per_event_bess_dispatch(all_monthly_events, monthly_targets, select
             # Parse timestamps
             start_timestamp = pd.to_datetime(f"{start_date} {start_time}")
             end_timestamp = pd.to_datetime(f"{end_date} {end_time}")
-            duration_min = (end_timestamp - start_timestamp).total_seconds() / 60
+            duration_min = (end_timestamp - start_timestamp + 0.5).total_seconds() / 60
             duration_h = duration_min / 60
             
             # Monthly context

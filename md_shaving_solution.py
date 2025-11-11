@@ -1068,7 +1068,7 @@ def _detect_peak_events_tou_aware(df, power_col, target_demand, total_md_rate, i
                 end_time = event_df.index[-1]
                 peak_load = event_df['power'].max()
                 excess = peak_load - target_demand
-                duration_minutes = (end_time - start_time).total_seconds() / 60
+                duration_minutes = ((end_time - start_time) + timedelta(minutes=30)).total_seconds() / 60
                 
                 # Calculate energy to shave for entire event duration
                 total_energy_to_shave = ((event_df['power'] - target_demand) * interval_hours).sum()
@@ -1132,7 +1132,7 @@ def _detect_peak_events_tou_aware(df, power_col, target_demand, total_md_rate, i
         end_time = event_df.index[-1]
         peak_load = event_df['power'].max()
         excess = peak_load - target_demand
-        duration_minutes = (end_time - start_time).total_seconds() / 60
+        duration_minutes = ((end_time - start_time) + timedelta(minutes=30)).total_seconds() / 60
         
         # Calculate energy to shave for entire event duration
         total_energy_to_shave = ((event_df['power'] - target_demand) * interval_hours).sum()
