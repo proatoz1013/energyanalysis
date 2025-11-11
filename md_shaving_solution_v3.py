@@ -3201,15 +3201,87 @@ def render_smart_conservation_debug_analysis():
         st.markdown("#### 📋 Window Analysis Results")
         
         with st.spinner("Generating Smart Conservation window analysis..."):
-            # Get formatted table output
-            table_output = debugger.display_window_analysis_table(
+            # Get DataFrame and analysis data
+            analysis_data = debugger.display_window_analysis_table(
                 df_sim=df_sim,
                 show_summary=show_summary,
                 max_rows=max_rows
             )
             
-            # Display the formatted table in a code block for proper formatting
-            st.code(table_output, language=None)
+            # Check if we have valid data
+            if 'error' in analysis_data.get('metadata', {}):
+                st.error(analysis_data['metadata']['error'])
+            elif analysis_data['dataframe'].empty:
+                st.warning("No analysis data available - check if simulation data is loaded")
+            else:
+                # Display summary statistics if available and requested
+                if show_summary and analysis_data.get('summary'):
+                    summary = analysis_data['summary']
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        st.metric("Total Timestamps", f"{summary.get('total_timestamps', 0):,}")
+                        st.metric("TOU Periods", f"{summary.get('tou_percentage', 0):.1f}%")
+                        
+                    with col2:
+                        st.metric("Inside MD Window", f"{summary.get('inside_md_percentage', 0):.1f}%")
+                        st.metric("Early Window", f"{summary.get('early_window_percentage', 0):.1f}%")
+                        
+                    with col3:
+                        st.metric("Late Window", f"{summary.get('late_window_percentage', 0):.1f}%")
+                        st.metric("Avg SOC Reserve", f"{summary.get('avg_soc_reserve', 0):.1f}%")
+                
+                # Display the DataFrame
+                st.markdown(f"**Showing {analysis_data['displayed_records']} of {analysis_data['total_records']} records**")
+                st.dataframe(
+                    analysis_data['dataframe'],
+                    use_container_width=True,
+                    hide_index=True
+                )
+                
+                # Add CSV download option
+                if st.button("📥 Download Full Analysis Results", help="Download complete analysis as CSV"):
+                    try:
+                        # Get the full analysis results (not limited by max_rows)
+                        full_analysis_data = debugger.display_window_analysis_table(
+                            df_sim=df_sim,
+                            show_summary=False,  # Don't need summary for download
+                            max_rows=None  # Get all records
+                        )
+                        
+                        if not full_analysis_data['dataframe'].empty:
+                            # Create full DataFrame with all records
+                            analysis_results = debugger.generate_window_analysis_table(df_sim)
+                            df_full = pd.DataFrame([{
+                                'Timestamp': record['timestamp'],
+                                'Date': record['date'], 
+                                'Time': record['time'],
+                                'Tariff Type': record['tariff_type'],
+                                'TOU Period': "Yes" if record['is_tou'] else "No",
+                                'MD Window': "Yes" if record['inside_md_window'] else "No",
+                                'Early Window': "Yes" if record['is_early_window'] else "No",
+                                'Late Window': "Yes" if record['is_late_window'] else "No",
+                                'SOC Reserve (%)': record['soc_reserve_percent'] if record['soc_reserve_percent'] is not None else None,
+                                'Window Status': record['window_status']
+                            } for record in analysis_results['data']])
+                            
+                            # Convert to CSV
+                            csv_data = df_full.to_csv(index=False)
+                            
+                            # Provide download
+                            st.download_button(
+                                label="📊 Download Complete Analysis CSV",
+                                data=csv_data,
+                                file_name=f"smart_conservation_analysis_full_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                                mime="text/csv"
+                            )
+                            
+                            st.success(f"✅ Complete analysis ready for download ({len(df_full)} records)")
+                        else:
+                            st.warning("⚠️ No data available for download")
+                            
+                    except Exception as e:
+                        st.error(f"❌ Error preparing download: {str(e)}")
         
         # Additional analysis options
         with st.expander("🔍 Advanced Analysis Options", expanded=False):
@@ -3227,34 +3299,7 @@ def render_smart_conservation_debug_analysis():
             - **Off-Peak (50% SOC Reserve)**: Balanced approach outside MD windows
             """)
             
-            if st.button("Download Analysis Results", help="Download detailed analysis as CSV"):
-                try:
-                    # Get raw analysis data
-                    analysis_results = debugger.generate_window_analysis_table(df_sim)
-                    
-                    if analysis_results['data']:
-                        import pandas as pd
-                        
-                        # Convert to DataFrame
-                        df_results = pd.DataFrame(analysis_results['data'])
-                        
-                        # Convert to CSV
-                        csv_data = df_results.to_csv(index=False)
-                        
-                        # Provide download
-                        st.download_button(
-                            label="📥 Download CSV",
-                            data=csv_data,
-                            file_name=f"smart_conservation_analysis_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                            mime="text/csv"
-                        )
-                        
-                        st.success("✅ Analysis results ready for download!")
-                    else:
-                        st.warning("⚠️ No data available for download")
-                        
-                except Exception as e:
-                    st.error(f"❌ Error preparing download: {str(e)}")
+
         
     except ImportError as e:
         st.error(f"❌ Smart Conservation module import failed: {str(e)}")
