@@ -2799,19 +2799,6 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                             st.markdown("**AI-Powered Conservation Strategy**")
                             st.markdown("*Intelligent conservation decisions based on predictive analytics and machine learning*")
                             
-                            # Check if smart conservation module is available
-                            try:
-                                # Placeholder import - create smart_conservation.py file in your project root
-                                # from smart_conservation import SmartConservationCalculator
-                                smart_conservation_available = False  # Set to True when module is ready
-                                st.info("� **Smart Conservation Module**: Under development - placeholder active")
-                            except ImportError:
-                                st.error("❌ Smart Conservation module not found. Please ensure 'smart_conservation.py' is in your project directory.")
-                                smart_conservation_available = False
-                            
-                            # Always display MD endurance configuration
-                            # Smart conservation interface
-                            st.markdown("##### 🤖 AI-Powered Conservation Interface")
                                 
                             # Smart conservation parameters
                             col1, col2 = st.columns(2)
@@ -2838,7 +2825,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                                 )
                                 
                             # =====================================================================
-                            # MD ENDURANCE CONTROLLER - Variable Collector for Smart Conservation
+                            # 1. COLLECT ALL VARIABLES FOR SMART CONSERVATION
                             # =====================================================================
                             
                             # Collect all available variables for SmartConservation module initialization
@@ -2861,76 +2848,13 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                                 conservation_aggressiveness=conservation_aggressiveness
                             )
                                 
-                            # Display MD Endurance Configuration
-                            st.markdown("##### 🔧 MD Endurance Controller Configuration")
-                            
-                            # Configuration Overview
-                            config_col1, config_col2, config_col3 = st.columns(3)
-                            
-                            with config_col1:
-                                st.metric(
-                                    "Data Points", 
-                                    f"{len(smart_conservation_config['df_sim'])} rows" if smart_conservation_config['df_sim'] is not None else "No data",
-                                    help="Number of data points in simulation dataset"
-                                )
-                                st.metric(
-                                    "Interval", 
-                                    f"{smart_conservation_config['interval_hours'] * 60:.0f} min" if smart_conservation_config['interval_hours'] else "0 min",
-                                    help="Data sampling interval"
-                                )
-                            
-                            with config_col2:
-                                st.metric(
-                                    "Battery Capacity", 
-                                    f"{smart_conservation_config['battery_capacity']:.1f} kWh",
-                                    help="Total battery energy capacity"
-                                )
-                                st.metric(
-                                    "Battery Power", 
-                                    f"{smart_conservation_config['battery_sizing'].get('power_rating_kw', 0):.1f} kW",
-                                    help="Battery power rating"
-                                )
-                            
-                            with config_col3:
-                                st.metric(
-                                    "Monthly Targets", 
-                                    f"{len(smart_conservation_config['monthly_targets'])}" if smart_conservation_config['monthly_targets'] is not None else "0",
-                                    help="Number of monthly MD targets"
-                                )
-                                st.metric(
-                                    "Tariff Type", 
-                                    f"{smart_conservation_config['tariff_type']}",
-                                    help="Selected tariff configuration"
-                                )
-                            
-                            # Conservation Parameters
-                            st.markdown("**Conservation Settings:**")
-                            conservation_col1, conservation_col2 = st.columns(2)
-                            
-                            with conservation_col1:
-                                st.info(f"""
-                                **SOC Threshold**: {smart_conservation_config['soc_threshold']}%  
-                                **Battery Reserve**: {smart_conservation_config['battery_kw_conserved']} kW  
-                                **Conservation Mode**: {"Enabled" if smart_conservation_config['conservation_enabled'] else "Disabled"}
-                                """)
-                            
-                            with conservation_col2:
-                                st.info(f"""
-                                **Prediction Horizon**: {smart_conservation_config['prediction_horizon']} hours  
-                                **Aggressiveness**: {smart_conservation_config['conservation_aggressiveness']:.1f}  
-                                **Active Days**: {smart_conservation_config['conservation_day_type']}
-                                """)
-                            
-                            # Detailed Configuration (Expandable)
-                            with st.expander("📊 Complete Configuration Details", expanded=False):
-                                st.json(smart_conservation_config, expanded=False)
+
+
+
                             
                             # =====================================================================
-                            # SMART CONSERVATION CALCULATOR INTEGRATION
+                            # 2. CALL SMART CONSERVATION DEBUG ANALYSIS
                             # =====================================================================
-                            
-                            st.markdown("---")
-                            st.markdown("##### 🧠 Smart Conservation Analysis")
                             
                             # Smart Conservation Debug Analysis
                             try:
@@ -2941,21 +2865,6 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                                 if st.checkbox("Show Smart Conservation error details"):
                                     st.exception(e)
                             
-                            
-# Example integration when AI module is ready:
-from smart_conservation import SmartConservationCalculator
-
-# Initialize with collected configuration
-smart_calc = SmartConservationCalculator(**smart_conservation_config)
-
-# Run AI-powered analysis
-smart_params = smart_calc.calculate_smart_parameters()
-
-# Apply optimized conservation parameters
-soc_threshold = smart_params['optimal_soc_threshold']
-battery_kw_conserved = smart_params['dynamic_battery_reserve']
-""", language="python")
-
 
                         
                         # Store conservation settings for session state
