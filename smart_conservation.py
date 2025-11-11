@@ -93,41 +93,55 @@ class MdShavingConfig:
                 errors.append(f"Missing required parameter: {description} ({param})")
         
         # Validate data types and ranges for numeric parameters
+        validation_constants = SmartConstants.get_validation_constants()
+        
         if self.soc_threshold is not None:
             if not isinstance(self.soc_threshold, (int, float)):
                 errors.append("SOC threshold must be a number")
-            elif not (10 <= self.soc_threshold <= 90):
-                errors.append("SOC threshold must be between 10% and 90%")
+            else:
+                soc_range = validation_constants['soc_threshold']
+                if not (soc_range['min'] <= self.soc_threshold <= soc_range['max']):
+                    errors.append(f"SOC threshold must be between {soc_range['min']}% and {soc_range['max']}%")
         
         if self.battery_kw_conserved is not None:
             if not isinstance(self.battery_kw_conserved, (int, float)):
                 errors.append("Battery kW conserved must be a number")
-            elif self.battery_kw_conserved < 0:
-                errors.append("Battery kW conserved cannot be negative")
+            else:
+                min_val = validation_constants['battery_kw_conserved']['min']
+                if self.battery_kw_conserved < min_val:
+                    errors.append(f"Battery kW conserved cannot be less than {min_val}")
         
         if self.battery_capacity is not None:
             if not isinstance(self.battery_capacity, (int, float)):
                 errors.append("Battery capacity must be a number")
-            elif self.battery_capacity <= 0:
-                errors.append("Battery capacity must be positive")
+            else:
+                min_val = validation_constants['battery_capacity']['min']
+                if self.battery_capacity <= min_val:
+                    errors.append(f"Battery capacity must be greater than {min_val}")
         
         if self.interval_hours is not None:
             if not isinstance(self.interval_hours, (int, float)):
                 errors.append("Interval hours must be a number")
-            elif not (0.01 <= self.interval_hours <= 24):
-                errors.append("Interval hours must be between 0.01 and 24")
+            else:
+                interval_range = validation_constants['interval_hours']
+                if not (interval_range['min'] <= self.interval_hours <= interval_range['max']):
+                    errors.append(f"Interval hours must be between {interval_range['min']} and {interval_range['max']}")
         
         if self.prediction_horizon is not None:
             if not isinstance(self.prediction_horizon, (int, float)):
                 errors.append("Prediction horizon must be a number")
-            elif not (1 <= self.prediction_horizon <= 48):
-                errors.append("Prediction horizon must be between 1 and 48 hours")
+            else:
+                horizon_range = validation_constants['prediction_horizon']
+                if not (horizon_range['min'] <= self.prediction_horizon <= horizon_range['max']):
+                    errors.append(f"Prediction horizon must be between {horizon_range['min']} and {horizon_range['max']} hours")
         
         if self.conservation_aggressiveness is not None:
             if not isinstance(self.conservation_aggressiveness, (int, float)):
                 errors.append("Conservation aggressiveness must be a number")
-            elif not (0.1 <= self.conservation_aggressiveness <= 1.0):
-                errors.append("Conservation aggressiveness must be between 0.1 and 1.0")
+            else:
+                aggr_range = validation_constants['conservation_aggressiveness']
+                if not (aggr_range['min'] <= self.conservation_aggressiveness <= aggr_range['max']):
+                    errors.append(f"Conservation aggressiveness must be between {aggr_range['min']} and {aggr_range['max']}")
         
         # Validate boolean parameters
         if self.conservation_enabled is not None:
@@ -267,6 +281,63 @@ class _MdControllerState:
         self.soc_reserve_percent: float = 0.0
         self.last_severity: float = 0.0
         self.last_severity_components: Optional[Dict[str, float]] = None
+
+class SmartConstants:
+    """
+    Centralized configuration class for Smart Conservation constants.
+    
+    This class provides a single location for all hardcoded values used throughout
+    the Smart Conservation system, enabling easy maintenance and configuration.
+    """
+    
+    @classmethod
+    def get_validation_constants(cls):
+        """
+        Get validation range constants for configuration parameters.
+        
+        Returns:
+            dict: Validation constants with min/max ranges
+        """
+        return {
+            'soc_threshold': {'min': 10, 'max': 90},
+            'battery_kw_conserved': {'min': 0, 'max': None},
+            'battery_capacity': {'min': 0, 'max': None},
+            'interval_hours': {'min': 0.01, 'max': 24},
+            'prediction_horizon': {'min': 1, 'max': 48},
+            'conservation_aggressiveness': {'min': 0.1, 'max': 1.0}
+        }
+    
+    @classmethod
+    def get_tariff_window_constants(cls):
+        """
+        Get tariff window and SOC reserve constants.
+        
+        Note: MD start/end hours are NOT included as defaults since they 
+        depend on the specific tariff configuration.
+        
+        Returns:
+            dict: Tariff window configuration constants
+        """
+        return {
+            'default_soc_reserve': 50.0,           # Standard reserve percentage
+            'early_window_soc_reserve': 70.0,      # Conservative early period
+            'late_window_soc_reserve': 40.0,       # Aggressive late period
+            'work_day_midpoint_factor': 0.5        # 50% split for early/late window
+        }
+    
+    @classmethod
+    def get_display_constants(cls):
+        """
+        Get display and UI constants.
+        
+        Returns:
+            dict: Display configuration constants
+        """
+        return {
+            'default_max_rows': 10,         # Default table display rows
+            'summary_precision': 1,         # Decimal places for summary stats
+            'percentage_precision': 1       # Decimal places for percentages
+        }
 
 class MdShavingController:
     """
@@ -514,6 +585,9 @@ class MdShavingController:
         tariff_type = self.get_config_param('tariff_type', 'unknown')
         selected_tariff = self.get_config_param('selected_tariff', {})
         
+        # Get tariff window constants
+        tariff_constants = SmartConstants.get_tariff_window_constants()
+        
         # Initialize result dictionary
         result = {
             'tariff_type': tariff_type,
@@ -523,48 +597,54 @@ class MdShavingController:
             'window_rules': 'standard',
             'is_early_window': False,
             'is_late_window': False,
-            'soc_reserve_percent': 50.0  # Default reserve
+            'soc_reserve_percent': tariff_constants['default_soc_reserve']
         }
         
         # 2. If TOU, check if we're inside or outside the MD window
         if result['is_tou']:
-            # Check MD window based on tariff configuration
-            md_start_hour = selected_tariff.get('md_start_hour', 9)  # Default 9 AM
-            md_end_hour = selected_tariff.get('md_end_hour', 17)    # Default 5 PM
+            # Get MD window from tariff configuration (no defaults)
+            md_start_hour = selected_tariff.get('md_start_hour')
+            md_end_hour = selected_tariff.get('md_end_hour')
             
-            if current_timestamp and hasattr(current_timestamp, 'hour'):
+            # Only process MD window if both start and end hours are defined in tariff
+            if md_start_hour is not None and md_end_hour is not None and current_timestamp and hasattr(current_timestamp, 'hour'):
                 current_hour = current_timestamp.hour
                 result['inside_md_window'] = md_start_hour <= current_hour < md_end_hour
                 result['window_rules'] = 'md_window' if result['inside_md_window'] else 'off_peak'
+            else:
+                # If MD window not defined in TOU tariff, treat as off-peak
+                result['inside_md_window'] = False
+                result['window_rules'] = 'off_peak'
         
         # 3. Rules for non-TOU tariffs
         else:
             result['window_rules'] = 'flat_rate'
         
-        # 4. Define early/late window (50% split of work day)
+        # 4. Define early/late window (using midpoint factor from constants)
         if result['inside_md_window']:
-            md_start_hour = selected_tariff.get('md_start_hour', 9)
-            md_end_hour = selected_tariff.get('md_end_hour', 17)
+            md_start_hour = selected_tariff.get('md_start_hour')
+            md_end_hour = selected_tariff.get('md_end_hour')
             
-            # Calculate 50% point of the work day
-            work_day_duration = md_end_hour - md_start_hour
-            midpoint_hour = md_start_hour + (work_day_duration * 0.5)
-            
-            if current_timestamp and hasattr(current_timestamp, 'hour'):
-                current_hour = current_timestamp.hour
-                result['is_early_window'] = current_hour < midpoint_hour
-                result['is_late_window'] = current_hour >= midpoint_hour
+            if md_start_hour is not None and md_end_hour is not None:
+                # Calculate midpoint using factor from constants
+                work_day_duration = md_end_hour - md_start_hour
+                midpoint_hour = md_start_hour + (work_day_duration * tariff_constants['work_day_midpoint_factor'])
+                
+                if current_timestamp and hasattr(current_timestamp, 'hour'):
+                    current_hour = current_timestamp.hour
+                    result['is_early_window'] = current_hour < midpoint_hour
+                    result['is_late_window'] = current_hour >= midpoint_hour
         
         # 5. Assign SOC reserve levels based on early/late window
         if result['is_early_window']:
-            # Early part of window → higher reserve (70%)
-            result['soc_reserve_percent'] = 70.0
+            # Early part of window → higher reserve (conservative)
+            result['soc_reserve_percent'] = tariff_constants['early_window_soc_reserve']
         elif result['is_late_window']:
-            # Late part of window → lower reserve (40%)
-            result['soc_reserve_percent'] = 40.0
+            # Late part of window → lower reserve (aggressive)
+            result['soc_reserve_percent'] = tariff_constants['late_window_soc_reserve']
         else:
-            # Outside MD window or non-TOU → standard reserve (50%)
-            result['soc_reserve_percent'] = 50.0
+            # Outside MD window or non-TOU → standard reserve
+            result['soc_reserve_percent'] = tariff_constants['default_soc_reserve']
         
         return result
 
@@ -726,7 +806,7 @@ class SmartConservationDebugger:
         else:
             return "TOU MD Window"
 
-    def display_window_analysis_table(self, df_sim=None, show_summary=True, max_rows=10):
+    def display_window_analysis_table(self, df_sim=None, show_summary=True, max_rows=None):
         """
         Display window analysis results as a pandas DataFrame with summary statistics.
         
@@ -736,11 +816,17 @@ class SmartConservationDebugger:
         Args:
             df_sim: Optional DataFrame to analyze (uses controller's df_sim if None)
             show_summary: Whether to display summary statistics (default: True)
-            max_rows: Maximum number of data rows to display (default: 10)
+            max_rows: Maximum number of data rows to display (uses default from constants if None)
             
         Returns:
             dict: Dictionary containing 'dataframe', 'summary', and 'metadata' keys
         """
+        # Get display constants
+        display_constants = SmartConstants.get_display_constants()
+        
+        # Use default max_rows if not specified
+        if max_rows is None:
+            max_rows = display_constants['default_max_rows']
         # Get analysis results
         analysis_results = self.generate_window_analysis_table(df_sim)
         
@@ -763,7 +849,7 @@ class SmartConservationDebugger:
                 'MD Window': "Yes" if record['inside_md_window'] else "No",
                 'Early Window': "Yes" if record['is_early_window'] else "No",
                 'Late Window': "Yes" if record['is_late_window'] else "No",
-                'SOC Reserve (%)': f"{record['soc_reserve_percent']:.1f}" if record['soc_reserve_percent'] is not None else "N/A",
+                'SOC Reserve (%)': f"{record['soc_reserve_percent']:.{display_constants['percentage_precision']}f}" if record['soc_reserve_percent'] is not None else "N/A",
                 'Window Status': record['window_status']
             })
         
@@ -789,5 +875,5 @@ class SmartConservationDebugger:
 
 
 #LOGOFF 6 Nov 9:41 AM
-#TO-DO： Add debug methods to display on main app （tabled data etc.）
+
 #dictionary to store hardcoded static values
