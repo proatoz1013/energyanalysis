@@ -338,6 +338,55 @@ class SmartConstants:
             'summary_precision': 1,         # Decimal places for summary stats
             'percentage_precision': 1       # Decimal places for percentages
         }
+    
+    @classmethod
+    def get_tariff_classification_rules(cls):
+        """
+        Get tariff classification rules and identifiers.
+        
+        Returns:
+            dict: Tariff classification constants and identifiers
+        """
+        return {
+            'tou_identifiers': ['tou', 'time-of-use', 'time_of_use'],
+            'general_identifiers': ['general', 'flat', 'standard', 'fixed'],
+            'default_classification': 'general'
+        }
+    
+    @classmethod 
+    def is_tou_tariff(cls, tariff_type):
+        """
+        Determine if a tariff type represents a Time-of-Use tariff.
+        
+        Args:
+            tariff_type (str): The tariff type string to classify
+            
+        Returns:
+            bool: True if tariff is TOU, False otherwise
+        """
+        if not tariff_type or not isinstance(tariff_type, str):
+            return False
+        
+        rules = cls.get_tariff_classification_rules()
+        tariff_lower = tariff_type.lower().strip()
+        
+        return tariff_lower in rules['tou_identifiers']
+    
+    @classmethod
+    def classify_tariff_type(cls, tariff_type):
+        """
+        Classify tariff type into standard categories.
+        
+        Args:
+            tariff_type (str): The tariff type string to classify
+            
+        Returns:
+            str: Standardized tariff classification ('tou' or 'general')
+        """
+        if cls.is_tou_tariff(tariff_type):
+            return 'tou'
+        else:
+            return 'general'
 
 class MdShavingController:
     """
@@ -592,7 +641,7 @@ class MdShavingController:
         result = {
             'tariff_type': tariff_type,
             'selected_tariff': selected_tariff,
-            'is_tou': tariff_type.lower() == 'tou',
+            'is_tou': SmartConstants.is_tou_tariff(tariff_type),
             'inside_md_window': False,
             'window_rules': 'standard',
             'is_early_window': False,
