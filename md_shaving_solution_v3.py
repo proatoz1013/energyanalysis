@@ -2745,6 +2745,11 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                         help="When enabled and SOC drops below threshold, system locks in a reduced shaving target based on minimum exceedance observed so far"
                     )
                     
+                    # Initialize conservation_dates immediately after checkbox to ensure it's always defined
+                    conservation_dates = []  # Empty list = applies to ALL days for simple conservation
+                    conservation_day_type = "All Days"  # Simple conservation applies to all days
+                    conservation_date_strings = []
+                    
                     # === CONSERVATION MODE TABS (Show when conservation is enabled) ===
                     if conservation_enabled:
                         st.markdown("##### 🎛️ Conservation Mode Configuration")
@@ -2840,7 +2845,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                                 soc_threshold=soc_threshold,
                                 battery_kw_conserved=battery_kw_conserved,
                                 conservation_enabled=conservation_enabled,
-                                conservation_dates=conservation_dates,
+                                conservation_dates=conservation_dates,  # Now properly initialized as []
                                 conservation_day_type=conservation_day_type,
                                 holidays=holidays if 'holidays' in locals() else set(),
                                 prediction_horizon=prediction_horizon,
@@ -2873,7 +2878,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
 
                         
                         # Store conservation settings for session state
-                        conservation_specific_dates = conservation_date_strings if 'conservation_date_strings' in locals() else []
+                        conservation_specific_dates = conservation_date_strings
                         
                     else:
                         # Conservation disabled - set default values
@@ -2881,10 +2886,7 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                         battery_kw_conserved = 100.0
                         safety_margin = 0.0
                         min_exceedance_multiplier = 1.0
-                        conservation_day_type = "All Days"
                         conservation_specific_day = "All Days"
-                        conservation_dates = []
-                        conservation_date_strings = []
                         conservation_mode_type = "disabled"
                     
                     if conservation_enabled:
