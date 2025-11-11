@@ -725,6 +725,87 @@ class SmartConservationDebugger:
         else:
             return "TOU MD Window"
 
+    def display_window_analysis_table(self, df_sim=None, show_summary=True, max_rows=100):
+        """
+        Display window analysis results as a formatted table with summary statistics.
+        
+        This function calls generate_window_analysis_table() and formats the results
+        into a readable table display with optional summary statistics and row limiting.
+        
+        Args:
+            df_sim: Optional DataFrame to analyze (uses controller's df_sim if None)
+            show_summary: Whether to display summary statistics (default: True)
+            max_rows: Maximum number of data rows to display (default: 100)
+            
+        Returns:
+            str: Formatted table string ready for display
+        """
+        # Get analysis results
+        analysis_results = self.generate_window_analysis_table(df_sim)
+        
+        if not analysis_results['data']:
+            return "❌ No analysis data available - check if simulation data is loaded"
+        
+        # Build formatted output
+        output_lines = []
+        
+        # Header
+        output_lines.append("=" * 80)
+        output_lines.append("📊 SMART CONSERVATION WINDOW ANALYSIS TABLE")
+        output_lines.append("=" * 80)
+        
+        # Summary Statistics (if requested)
+        if show_summary and 'summary' in analysis_results:
+            summary = analysis_results['summary']
+            output_lines.append("\n📈 SUMMARY STATISTICS:")
+            output_lines.append("-" * 40)
+            output_lines.append(f"Total Timestamps: {summary.get('total_timestamps', 0):,}")
+            output_lines.append(f"TOU Periods: {summary.get('tou_percentage', 0):.1f}% ({summary.get('tou_count', 0):,} records)")
+            output_lines.append(f"Inside MD Window: {summary.get('inside_md_percentage', 0):.1f}% ({summary.get('inside_md_window_count', 0):,} records)")
+            output_lines.append(f"Early Window: {summary.get('early_window_percentage', 0):.1f}% ({summary.get('early_window_count', 0):,} records)")
+            output_lines.append(f"Late Window: {summary.get('late_window_percentage', 0):.1f}% ({summary.get('late_window_count', 0):,} records)")
+            output_lines.append(f"Average SOC Reserve: {summary.get('avg_soc_reserve', 0):.1f}%")
+            
+            # Date range info
+            if 'metadata' in analysis_results and 'date_range' in analysis_results['metadata']:
+                date_range = analysis_results['metadata']['date_range']
+                if date_range['start'] and date_range['end']:
+                    output_lines.append(f"Date Range: {date_range['start']} to {date_range['end']}")
+        
+        # Data Table Header
+        output_lines.append(f"\n📋 DETAILED ANALYSIS TABLE (Showing first {min(max_rows, len(analysis_results['data']))} of {len(analysis_results['data'])} records):")
+        output_lines.append("-" * 120)
+        
+        # Table column headers
+        header = f"{'Timestamp':<19} {'Date':<12} {'Time':<10} {'Tariff':<8} {'TOU':<5} {'MD Win':<6} {'Early':<6} {'Late':<6} {'SOC Res':<7} {'Window Status':<20}"
+        output_lines.append(header)
+        output_lines.append("-" * 120)
+        
+        # Data rows (limited by max_rows)
+        for i, record in enumerate(analysis_results['data'][:max_rows]):
+            timestamp_str = str(record['timestamp'])[:19] if record['timestamp'] else "N/A"
+            date_str = str(record['date'])[:12] if record['date'] else "N/A"
+            time_str = str(record['time'])[:10] if record['time'] else "N/A"
+            tariff_str = str(record['tariff_type'])[:8] if record['tariff_type'] else "N/A"
+            tou_str = "Yes" if record['is_tou'] else "No"
+            md_win_str = "Yes" if record['inside_md_window'] else "No"
+            early_str = "Yes" if record['is_early_window'] else "No"
+            late_str = "Yes" if record['is_late_window'] else "No"
+            soc_res_str = f"{record['soc_reserve_percent']:.1f}%" if record['soc_reserve_percent'] is not None else "N/A"
+            status_str = str(record['window_status'])[:20] if record['window_status'] else "N/A"
+            
+            row = f"{timestamp_str:<19} {date_str:<12} {time_str:<10} {tariff_str:<8} {tou_str:<5} {md_win_str:<6} {early_str:<6} {late_str:<6} {soc_res_str:<7} {status_str:<20}"
+            output_lines.append(row)
+        
+        # Footer with truncation notice
+        if len(analysis_results['data']) > max_rows:
+            output_lines.append("-" * 120)
+            output_lines.append(f"... and {len(analysis_results['data']) - max_rows} more records (use max_rows parameter to show more)")
+        
+        output_lines.append("=" * 80)
+        
+        return "\n".join(output_lines)
+
 
 #LOGOFF 6 Nov 9:41 AM
 #TO-DO： Add debug methods to display on main app （tabled data etc.）

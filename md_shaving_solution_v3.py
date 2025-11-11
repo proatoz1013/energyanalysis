@@ -412,6 +412,61 @@ def _collect_smart_conservation_config(df_for_v1, power_col, monthly_targets, in
     return smart_conservation_config
 
 
+def get_current_smart_conservation_config():
+    """
+    Retrieve the current smart conservation configuration from session state.
+    
+    This function provides access to the most recently collected smart conservation
+    configuration, allowing other methods to use the configuration without needing
+    to pass it as a parameter.
+    
+    Returns:
+        dict or None: Smart conservation configuration dictionary if available,
+                     None if no configuration has been collected
+    """
+    try:
+        # Check if we have the config stored in session state
+        if hasattr(st.session_state, 'smart_conservation_config'):
+            return st.session_state.smart_conservation_config
+        
+        # If not in session state, try to construct from available session data
+        if (hasattr(st.session_state, 'processed_df') and 
+            hasattr(st.session_state, 'power_column') and
+            hasattr(st.session_state, 'selected_tariff')):
+            
+            # Build basic config from session state
+            basic_config = {
+                "df_sim": st.session_state.processed_df,
+                "power_col": st.session_state.power_column,
+                "selected_tariff": st.session_state.selected_tariff,
+                "interval_hours": getattr(st.session_state, 'data_interval_hours', 0.25),
+                "monthly_targets": getattr(st.session_state, 'monthly_targets', None),
+                "battery_params": getattr(st.session_state, 'battery_params', {}),
+                "battery_sizing": getattr(st.session_state, 'battery_sizing', {}),
+                "battery_capacity": getattr(st.session_state, 'total_battery_capacity', 0),
+                "soc_threshold": 50,  # Default value
+                "battery_kw_conserved": 100.0,  # Default value
+                "conservation_enabled": False,  # Default value
+                "conservation_dates": [],
+                "conservation_day_type": "All Days",
+                "holidays": getattr(st.session_state, 'holidays', set()),
+                "tariff_type": st.session_state.selected_tariff.get('Type', '') if st.session_state.selected_tariff else '',
+                "prediction_horizon": 6,  # Default value
+                "conservation_aggressiveness": 0.5,  # Default value
+                "safety_margin": 0.0,
+                "min_exceedance_multiplier": 1.0,
+                "current_timestamp": st.session_state.processed_df.index[0] if len(st.session_state.processed_df) > 0 else None
+            }
+            
+            return basic_config
+        
+        return None
+        
+    except Exception as e:
+        st.error(f"Error retrieving smart conservation config: {str(e)}")
+        return None
+
+
 def build_daily_simulator_structure(df, threshold_kw, clusters_df, selected_tariff=None):
     """
     Build day-level structure for battery dispatch simulation.
@@ -2716,70 +2771,14 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                             
                             with col2:
                                 battery_kw_conserved = st.number_input(
-                                    "Battery kW to be Conserved",
-                                    min_value=0.0,
-                                    max_value=500.0,
+                                    "Battery Power to Conserve (kW)",
+                                    min_value=10.0,
+                                    max_value=float(total_battery_power) if 'total_battery_power' in locals() else 1000.0,
                                     value=100.0,
                                     step=10.0,
-                                    key="simple_conservation_battery_kw_conserved",
-                                    help="Amount of battery power (kW) to hold back during conservation mode"
+                                    key="simple_conservation_kw_conserved",
+                                    help="Amount of battery power to reserve when conservation is active"
                                 )
-                            
-                            # Set values for simple conservation approach
-                            safety_margin = 0.0  # Not used in simple conservation mode
-                            min_exceedance_multiplier = 1.0  # Not used in simple conservation mode
-                            conservation_mode_type = "simple"
-                            
-                            # Add day selection with simple input method
-                            st.markdown("**Active Day(s) Selection**")
-                            
-                            # Multi-select dropdown approach with hierarchical options
-                            available_dates = []
-                            if not df.empty:
-                                # Get all unique dates from the loaded data
-                                unique_dates = sorted(set(df.index.date))
-                                available_dates = [date.strftime('%Y-%m-%d') for date in unique_dates]
-                            
-                            # Create dropdown options with hierarchical structure
-                            dropdown_options = ["All Days"]
-                            if available_dates:
-                                dropdown_options.extend(available_dates)
-                            
-                            # Multi-select dropdown for date selection
-                            selected_conservation_options = st.multiselect(
-                                "📅 Select dates for Simple Conservation Mode:",
-                                options=dropdown_options,
-                                default=["All Days"],
-                                help="Select 'All Days' to apply to all dates, or choose specific dates. You can select multiple options.",
-                                key="simple_conservation_dates"
-                            )
-                            
-                            # Process the selected options
-                            conservation_dates = []
-                            conservation_date_strings = []
-                            
-                            if not selected_conservation_options:
-                                # If nothing selected, default to "All Days"
-                                selected_conservation_options = ["All Days"]
-                            
-                            if "All Days" in selected_conservation_options:
-                                # If "All Days" is selected, ignore specific dates
-                                conservation_dates = []  # Empty means all days
-                                conservation_date_strings = []
-                                conservation_day_type = "All Days"
-                            else:
-                                # Process specific selected dates
-                                for date_str in selected_conservation_options:
-                                    if date_str != "All Days":  # Skip "All Days" if somehow still present
-                                        try:
-                                            # Validate date format
-                                            parsed_date = pd.to_datetime(date_str, format='%Y-%m-%d')
-                                            conservation_dates.append(parsed_date.date())
-                                            conservation_date_strings.append(date_str)
-                                        except ValueError:
-                                            st.error(f"❌ Invalid date format: '{date_str}'. Please report this issue.")
-                                conservation_day_type = f"{len(conservation_dates)} Specific Dates"
-                            
                             # Display simple conservation summary
                             if conservation_dates:
                                 active_days_text = f"{len(conservation_dates)} specific dates ({conservation_date_strings[0]}" + (f" ... {conservation_date_strings[-1]}" if len(conservation_dates) > 1 else "") + ")"
@@ -2847,6 +2846,12 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                                 prediction_horizon=prediction_horizon,
                                 conservation_aggressiveness=conservation_aggressiveness
                             )
+                            
+                            # Store configuration in session state for access by other methods
+                            try:
+                                st.session_state.smart_conservation_config = smart_conservation_config
+                            except Exception:
+                                pass  # Silently handle session state issues
                                 
 
 
@@ -3123,11 +3128,10 @@ def render_smart_conservation_debug_analysis():
     st.markdown("### 🔍 Smart Conservation Debug Analysis")
     st.markdown("**Analyze tariff window conditions and smart conservation behavior**")
     
-    # Check if we have the necessary data
-    if not (hasattr(st.session_state, 'processed_df') and 
-            st.session_state.processed_df is not None and 
-            hasattr(st.session_state, 'selected_tariff') and
-            hasattr(st.session_state, 'power_column')):
+    # Get smart conservation configuration
+    config = get_current_smart_conservation_config()
+    
+    if config is None:
         st.info("""
         📋 **Smart Conservation Debug Analysis**
         
@@ -3140,152 +3144,127 @@ def render_smart_conservation_debug_analysis():
         """)
         return
     
+    # Display configuration summary
+    with st.expander("📊 Configuration Summary", expanded=False):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Data Points", f"{len(config['df_sim'])}" if config['df_sim'] is not None else "0")
+            st.metric("Power Column", config.get('power_col', 'N/A'))
+        with col2:
+            st.metric("Tariff Type", config.get('tariff_type', 'Unknown'))
+            st.metric("Interval (min)", f"{config.get('interval_hours', 0) * 60:.0f}")
+        with col3:
+            st.metric("SOC Threshold", f"{config.get('soc_threshold', 50)}%")
+            st.metric("Battery Reserve", f"{config.get('battery_kw_conserved', 0)} kW")
+    
     try:
         # Import Smart Conservation classes
-        from smart_conservation import MdShavingController, MdShavingConfig, SmartConservationDebugger
+        from smart_conservation import SmartConservationDebugger, MdShavingController
         
-        # Collect configuration data (similar to main app)
-        config_data = {
-            'df_sim': st.session_state.processed_df,
-            'power_col': st.session_state.power_column,
-            'selected_tariff': getattr(st.session_state, 'selected_tariff', {}),
-            'tariff_type': getattr(st.session_state, 'selected_tariff', {}).get('type', 'General'),
-            'interval_hours': getattr(st.session_state, 'interval_hours', 0.25),
-            'battery_params': {},
-            'battery_sizing': {},
-        }
+        # Create controller with simulation data
+        df_sim = config.get('df_sim')
+        if df_sim is None or df_sim.empty:
+            st.error("❌ No simulation data available for Smart Conservation analysis")
+            return
+            
+        # Initialize controller and import config
+        controller = MdShavingController(df_sim)
+        success = controller.import_config(config)
         
-        # Initialize Smart Conservation components
-        config = MdShavingConfig(**config_data)
-        controller = MdShavingController(config_data['df_sim'])
-        controller.import_config(config)
-        
-        # Initialize debugger
+        if not success:
+            st.error("❌ Failed to import configuration data into Smart Conservation controller")
+            return
+            
+        # Create debugger with configured controller
         debugger = SmartConservationDebugger(controller)
         
-        # Generate window analysis
-        with st.spinner("Analyzing tariff window conditions..."):
-            analysis_results = debugger.generate_window_analysis_table()
+        # Configuration options for display
+        st.markdown("#### 🎛️ Display Options")
+        col1, col2 = st.columns(2)
         
-        if analysis_results['data']:
-            # Display summary statistics
-            st.markdown("#### 📊 Analysis Summary")
-            summary = analysis_results['summary']
+        with col1:
+            show_summary = st.checkbox("Show Summary Statistics", value=True, help="Display aggregated statistics")
             
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Total Timestamps", summary['total_timestamps'])
-            col2.metric("TOU Periods", f"{summary['tou_percentage']:.1f}%")
-            col3.metric("Inside MD Window", f"{summary['inside_md_percentage']:.1f}%") 
-            col4.metric("Avg SOC Reserve", f"{summary['avg_soc_reserve']:.1f}%")
+        with col2:
+            max_rows = st.number_input(
+                "Max Rows to Display", 
+                min_value=10, 
+                max_value=1000, 
+                value=100, 
+                step=10,
+                help="Limit number of rows in detailed table"
+            )
+        
+        # Generate and display window analysis table
+        st.markdown("#### 📋 Window Analysis Results")
+        
+        with st.spinner("Generating Smart Conservation window analysis..."):
+            # Get formatted table output
+            table_output = debugger.display_window_analysis_table(
+                df_sim=df_sim,
+                show_summary=show_summary,
+                max_rows=max_rows
+            )
             
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Early Window", f"{summary['early_window_percentage']:.1f}%")
-            col2.metric("Late Window", f"{summary['late_window_percentage']:.1f}%")
-            col3.metric("Date Range", f"{len(set(r['date'] for r in analysis_results['data']))} days")
+            # Display the formatted table in a code block for proper formatting
+            st.code(table_output, language=None)
+        
+        # Additional analysis options
+        with st.expander("🔍 Advanced Analysis Options", expanded=False):
+            st.markdown("""
+            **Available Analysis Features:**
+            - **TOU Classification**: Identifies Time-of-Use vs General tariff periods
+            - **MD Window Detection**: Determines when Maximum Demand is recorded (2PM-10PM for TOU)
+            - **Early/Late Window Split**: Divides MD periods into conservation strategy zones
+            - **SOC Reserve Calculation**: Recommends battery State of Charge reserves per time period
+            - **Window Status Description**: Human-readable status for each timestamp
             
-            # Display scrollable analysis table
-            st.markdown("#### 📋 Detailed Window Analysis Table")
-            st.markdown("*Scroll to view all timestamps and their tariff window conditions*")
+            **Conservation Strategy Insights:**
+            - **Early Window (70% SOC Reserve)**: Conservative approach for early MD period
+            - **Late Window (40% SOC Reserve)**: Aggressive discharge strategy for late MD period  
+            - **Off-Peak (50% SOC Reserve)**: Balanced approach outside MD windows
+            """)
             
-            # Convert to DataFrame for display
-            import pandas as pd
-            df_analysis = pd.DataFrame(analysis_results['data'])
-            
-            # Format columns for better display
-            df_display = df_analysis[['timestamp', 'date', 'time', 'tariff_type', 
-                                    'is_tou', 'inside_md_window', 'is_early_window', 
-                                    'is_late_window', 'soc_reserve_percent', 'window_status']].copy()
-            
-            # Rename columns for display
-            df_display.columns = ['Timestamp', 'Date', 'Time', 'Tariff Type', 
-                                'Is TOU', 'Inside MD Window', 'Early Window', 
-                                'Late Window', 'SOC Reserve %', 'Window Status']
-            
-            # Add filtering options
-            st.markdown("**🔍 Filter Options:**")
-            filter_col1, filter_col2, filter_col3 = st.columns(3)
-            
-            with filter_col1:
-                show_tou_only = st.checkbox("Show TOU periods only")
-            with filter_col2:
-                show_md_window_only = st.checkbox("Show MD window only")
-            with filter_col3:
-                selected_dates = st.multiselect(
-                    "Filter by date:",
-                    options=sorted(set(df_display['Date'].astype(str))),
-                    default=[]
-                )
-            
-            # Apply filters
-            df_filtered = df_display.copy()
-            if show_tou_only:
-                df_filtered = df_filtered[df_filtered['Is TOU'] == True]
-            if show_md_window_only:
-                df_filtered = df_filtered[df_filtered['Inside MD Window'] == True]
-            if selected_dates:
-                df_filtered = df_filtered[df_filtered['Date'].astype(str).isin(selected_dates)]
-            
-            # Display filtered count
-            st.markdown(f"**Showing {len(df_filtered)} of {len(df_display)} records**")
-            
-            # Display the scrollable table with styling
-            def highlight_window_status(row):
-                """Color code rows based on window status."""
-                if row['Window Status'] == 'TOU Early MD Window':
-                    return ['background-color: #e8f5e8'] * len(row)  # Light green
-                elif row['Window Status'] == 'TOU Late MD Window':
-                    return ['background-color: #fff2e8'] * len(row)  # Light orange
-                elif row['Window Status'] == 'TOU Off-Peak':
-                    return ['background-color: #e8f0ff'] * len(row)  # Light blue
-                else:
-                    return [''] * len(row)
-            
-            if not df_filtered.empty:
-                styled_df = df_filtered.style.apply(highlight_window_status, axis=1)
-                st.dataframe(
-                    styled_df,
-                    use_container_width=True,
-                    height=400  # Scrollable height
-                )
-                
-                # Legend for color coding
-                st.markdown("""
-                **Color Legend:**
-                - 🟢 Light Green: Early MD Window (Higher SOC Reserve - 70%)
-                - 🟠 Light Orange: Late MD Window (Lower SOC Reserve - 40%) 
-                - 🔵 Light Blue: Off-Peak Periods (Standard SOC Reserve - 50%)
-                - ⚪ White: Non-TOU Tariff (Standard SOC Reserve - 50%)
-                """)
-            else:
-                st.warning("No records match the selected filters.")
-            
-            # Technical details
-            with st.expander("ℹ️ Technical Details"):
-                st.markdown(f"""
-                **Analysis Metadata:**
-                - Total Timestamps: {analysis_results['metadata']['total_timestamps']}
-                - Analysis Type: {analysis_results['metadata']['analysis_type']}
-                - Date Range: {analysis_results['metadata']['date_range']['start']} to {analysis_results['metadata']['date_range']['end']}
-                
-                **Window Classification Logic:**
-                - **TOU Detection**: Based on tariff type configuration
-                - **MD Window**: Typically 9 AM - 5 PM on weekdays
-                - **Early/Late Split**: 50% point of work day duration
-                - **SOC Reserves**: Early=70%, Late=40%, Standard=50%
-                
-                **Data Source**: Smart Conservation Module (smart_conservation.py)
-                """)
-        else:
-            st.error("No analysis data generated. Please check your configuration.")
-            
+            if st.button("Download Analysis Results", help="Download detailed analysis as CSV"):
+                try:
+                    # Get raw analysis data
+                    analysis_results = debugger.generate_window_analysis_table(df_sim)
+                    
+                    if analysis_results['data']:
+                        import pandas as pd
+                        
+                        # Convert to DataFrame
+                        df_results = pd.DataFrame(analysis_results['data'])
+                        
+                        # Convert to CSV
+                        csv_data = df_results.to_csv(index=False)
+                        
+                        # Provide download
+                        st.download_button(
+                            label="📥 Download CSV",
+                            data=csv_data,
+                            file_name=f"smart_conservation_analysis_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                            mime="text/csv"
+                        )
+                        
+                        st.success("✅ Analysis results ready for download!")
+                    else:
+                        st.warning("⚠️ No data available for download")
+                        
+                except Exception as e:
+                    st.error(f"❌ Error preparing download: {str(e)}")
+        
     except ImportError as e:
-        st.error(f"Smart Conservation module not found: {e}")
+        st.error(f"❌ Smart Conservation module import failed: {str(e)}")
+        st.info("💡 **Fallback**: Please ensure 'smart_conservation.py' is available in the project directory.")
+        
     except Exception as e:
-        st.error(f"Error in Smart Conservation analysis: {e}")
-        if st.checkbox("Show error details"):
+        st.error(f"❌ Smart Conservation analysis error: {str(e)}")
+        st.info("💡 **Fallback**: Smart Conservation debugging is temporarily unavailable. Continue with normal battery simulation.")
+        
+        if st.checkbox("Show Smart Conservation error details"):
             st.exception(e)
-
-
+    
 # Main function for compatibility
 def show():
     """Compatibility function that calls the main render function."""
