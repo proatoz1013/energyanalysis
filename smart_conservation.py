@@ -855,12 +855,87 @@ class SmartConservationDebugger:
         else:
             return "TOU MD Window"
 
+    def display_analysis_table(self, analysis_function=None, display_config=None, df_sim=None, **kwargs):
+        """
+        Main method that coordinates table creation and display using the refactored architecture.
+        
+        This is the main orchestrator method that:
+        1. Calls prepare_analysis_function_for_display() to get standardized data
+        2. Calls create_dynamic_analysis_table() to format for display  
+        3. Returns complete display-ready result
+        
+        Args:
+            analysis_function: Function to call for data analysis (defaults to generate_window_analysis_table)
+            display_config: Optional display configuration dictionary
+            df_sim: Optional DataFrame to analyze (uses controller's df_sim if None)
+            **kwargs: Additional arguments to pass to the analysis function
+            
+        Returns:
+            dict: Dictionary containing 'dataframe', 'summary', and 'metadata' keys
+        """
+        # Default configuration
+        config = {
+            'max_rows': 10,
+            'show_summary': True,
+            'debug_output': True,
+            'clear_state': True
+        }
+        if display_config:
+            config.update(display_config)
+        
+        # Display configuration debug information if requested
+        if config['debug_output']:
+            print("🔧 Smart Conservation Debug Analysis - Configuration Check")
+            self.get_target_series_and_power_col_display()
+            print("─" * 60)
+        
+        # Clear state from any previous analysis runs if requested
+        if config['clear_state']:
+            # Clear any existing MdEventTrigger state to ensure fresh results
+            if hasattr(kwargs, 'get') and kwargs.get('md_event_trigger'):
+                kwargs['md_event_trigger'].reset_timestamp_ids()
+        
+        # Step 1: Get standardized data using function adapter
+        standardized_data = self.prepare_analysis_function_for_display(
+            analysis_function, 
+            df_sim=df_sim,
+            **kwargs
+        )
+        
+        # Check if we have data
+        if not standardized_data['data']:
+            return {
+                'dataframe': pd.DataFrame(),
+                'summary': standardized_data['summary'],
+                'metadata': standardized_data['metadata'],
+                'analysis_function': standardized_data['function_name'],
+                'display_config': config
+            }
+        
+        # Step 2: Create dynamic table using standardized data
+        table_result = self.create_dynamic_analysis_table(
+            data_records=standardized_data['data'],
+            summary_stats=standardized_data['summary'], 
+            metadata=standardized_data['metadata'],
+            max_rows=config['max_rows']
+        )
+        
+        # Step 3: Add display metadata and configuration info
+        table_result.update({
+            'analysis_function': standardized_data['function_name'],
+            'data_key_used': standardized_data.get('data_key_used'),
+            'display_config': config,
+            'max_rows_setting': config['max_rows']
+        })
+        
+        return table_result
+
     def display_window_analysis_table(self, data_source_func=None, df_sim=None, show_summary=True, max_rows=None, clear_state=True, **kwargs):
         """
-        Display analysis results as a pandas DataFrame with flexible data source support.
+        Legacy method that maintains backward compatibility with existing code.
         
-        This function can display data from any source function and adapts to the data structure.
-        It provides flexible column and row handling with optional summary statistics.
+        This method now acts as a wrapper around the new display_analysis_table method,
+        ensuring all existing code continues to work while providing the new architecture.
         
         Args:
             data_source_func (callable, optional): Function to call for data (defaults to generate_window_analysis_table)
@@ -873,69 +948,60 @@ class SmartConservationDebugger:
         Returns:
             dict: Dictionary containing 'dataframe', 'summary', and 'metadata' keys
         """
-        # Display configuration debug information to terminal
-        print("🔧 Smart Conservation Debug Analysis - Configuration Check")
-        self.get_target_series_and_power_col_display()
-        print("─" * 60)
+        # Convert legacy parameters to new display_config format
+        display_config = {
+            'max_rows': max_rows or 10,
+            'show_summary': show_summary,
+            'debug_output': True,
+            'clear_state': clear_state
+        }
         
-        # Clear state from any previous analysis runs if requested
-        if clear_state:
-            # Clear any existing MdEventTrigger state to ensure fresh results
-            if hasattr(kwargs, 'get') and kwargs.get('md_event_trigger'):
-                kwargs['md_event_trigger'].reset_timestamp_ids()
+        # Call the new orchestrator method
+        return self.display_analysis_table(
+            analysis_function=data_source_func,
+            display_config=display_config,
+            df_sim=df_sim,
+            **kwargs
+        )
+
+    def create_dynamic_analysis_table(self, data_records, summary_stats=None, metadata=None, max_rows=None):
+        """
+        Create a dynamic table from any structured data records.
         
+        This is the core table creation method that works with any structured data.
+        It handles data formatting, type conversion, and creates display-ready DataFrames.
+        
+        Args:
+            data_records: List of dictionaries with analysis data
+            summary_stats: Optional summary statistics dictionary
+            metadata: Optional metadata dictionary 
+            max_rows: Maximum number of rows to display (default: 10)
+            
+        Returns:
+            dict: Formatted table data ready for display with dataframe, summary, and metadata
+        """
         # Get display constants
         display_constants = SmartConstants.get_display_constants()
         
-        # Use default max_rows if not specified (fixed at 10 for consistent display)
+        # Use default max_rows if not specified
         if max_rows is None:
-            max_rows = 10
+            max_rows = display_constants['default_max_rows']
         
-        # Determine data source function
-        if data_source_func is None:
-            # Default to process_timestamp_with_state analysis
-            data_source_func = self.generate_window_analysis_table
-            analysis_results = data_source_func(df_sim, **kwargs)
-            data_key = 'data'  # Use 'data' key for timestamp processing results
-        else:
-            # Call the provided function with kwargs
-            try:
-                analysis_results = data_source_func(df_sim, **kwargs)
-                # Try to detect the data key automatically
-                if 'data' in analysis_results:
-                    data_key = 'data'
-                elif 'active_events' in analysis_results:
-                    data_key = 'active_events'
-                else:
-                    # Fallback: try to find first list/array in results
-                    data_key = None
-                    for key, value in analysis_results.items():
-                        if isinstance(value, (list, tuple)) and len(value) > 0:
-                            data_key = key
-                            break
-            except Exception as e:
-                return {
-                    'dataframe': pd.DataFrame(),
-                    'summary': {'error': f'Data source function failed: {str(e)}'},
-                    'metadata': {'error': f"Failed to call data source function: {str(e)}"}
-                }
-        
-        # Check if we have data
-        data_list = analysis_results.get(data_key, []) if data_key else []
-        if not data_list:
+        # Handle empty data
+        if not data_records:
             return {
                 'dataframe': pd.DataFrame(),
-                'summary': analysis_results.get('summary', {'message': 'No data available from source function'}),
-                'metadata': analysis_results.get('metadata', {'error': f"No data available - check data source function output"})
+                'summary': summary_stats or {'message': 'No data available'},
+                'metadata': metadata or {'error': 'No data records provided'},
+                'total_records': 0,
+                'displayed_records': 0,
+                'columns_detected': []
             }
         
         # Convert data to DataFrame with flexible column detection
         df_data = []
         
-        # Auto-detect columns from first record
-        first_record = data_list[0] if data_list else {}
-        
-        for record in data_list:
+        for record in data_records:
             row_data = {}
             
             # Handle different data structures flexibly
@@ -991,20 +1057,87 @@ class SmartConservationDebugger:
         else:
             df_display = df_analysis.copy()
         
-        # Prepare return data with flexible metadata
+        # Prepare return data
         return_data = {
             'dataframe': df_display,
-            'summary': analysis_results.get('summary', {}),
-            'metadata': analysis_results.get('metadata', {}),
-            'total_records': len(data_list),
+            'summary': summary_stats or {},
+            'metadata': metadata or {},
+            'total_records': len(data_records),
             'displayed_records': len(df_display),
-            'columns_detected': list(df_display.columns) if not df_display.empty else [],
-            'max_rows_setting': max_rows,
-            'data_source': getattr(data_source_func, '__name__', 'custom_function') if data_source_func else 'generate_window_analysis_table'
+            'columns_detected': list(df_display.columns) if not df_display.empty else []
         }
         
         return return_data
 
+    def prepare_analysis_function_for_display(self, analysis_function, **function_kwargs):
+        """
+        Take functions from other classes and prepare their output for table display.
+        
+        This adapter method standardizes the output from various analysis functions
+        to ensure consistent data structure for table creation.
+        
+        Args:
+            analysis_function: Function from other classes (like format_excess_demand_analysis)
+            **function_kwargs: Arguments to pass to the analysis function
+            
+        Returns:
+            dict: Standardized data structure with 'data', 'summary', 'metadata' keys
+        """
+        try:
+            # Call the analysis function
+            if analysis_function is None:
+                # Default to window analysis
+                analysis_function = self.generate_window_analysis_table
+            
+            result = analysis_function(**function_kwargs)
+            
+            # Handle different return formats and standardize
+            if isinstance(result, dict):
+                # Try to detect the data key automatically
+                data_key = None
+                if 'data' in result:
+                    data_key = 'data'
+                elif 'active_events' in result:
+                    data_key = 'active_events'
+                else:
+                    # Fallback: try to find first list/array in results
+                    for key, value in result.items():
+                        if isinstance(value, (list, tuple)) and len(value) > 0:
+                            data_key = key
+                            break
+                
+                # Extract data using detected key
+                data_records = result.get(data_key, []) if data_key else []
+                
+                # Standardize the output format
+                standardized = {
+                    'data': data_records,
+                    'summary': result.get('summary', {}),
+                    'metadata': result.get('metadata', {}),
+                    'function_name': getattr(analysis_function, '__name__', 'unknown'),
+                    'data_key_used': data_key
+                }
+                
+            else:
+                # Handle non-dictionary returns (fallback)
+                standardized = {
+                    'data': [{'result': str(result)}],
+                    'summary': {'message': 'Function returned non-dictionary result'},
+                    'metadata': {'result_type': str(type(result))},
+                    'function_name': getattr(analysis_function, '__name__', 'unknown'),
+                    'data_key_used': None
+                }
+            
+            return standardized
+            
+        except Exception as e:
+            return {
+                'data': [],
+                'summary': {'error': f'Function failed: {str(e)}'},
+                'metadata': {'error': 'Function execution failed'},
+                'function_name': getattr(analysis_function, '__name__', 'unknown') if analysis_function else 'None',
+                'data_key_used': None
+            }
 
         """
         Get size and dimensional information for target_series and power_col for Streamlit display.
