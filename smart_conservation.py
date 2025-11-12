@@ -39,7 +39,7 @@ class MdShavingConfig:
         # Load & target context
         self.df_sim = config.get('df_sim')
         self.power_col = config.get('power_col')
-        self.monthly_targets = config.get('monthly_targets')
+        self.target_series = config.get('target_series')
         self.interval_hours = config.get('interval_hours')
         self.selected_tariff = config.get('selected_tariff')
         
@@ -215,7 +215,7 @@ class MdShavingConfig:
         # Core simulation data
         config_dict['df_sim'] = self.df_sim
         config_dict['power_col'] = self.power_col
-        config_dict['monthly_targets'] = self.monthly_targets
+        config_dict['target_series'] = self.target_series
         config_dict['interval_hours'] = self.interval_hours
         
         # Battery configuration
@@ -875,7 +875,7 @@ class SmartConservationDebugger:
         """
         # Display configuration debug information to terminal
         print("🔧 Smart Conservation Debug Analysis - Configuration Check")
-        self.get_monthly_targets_and_power_col_display()
+        self.get_target_series_and_power_col_display()
         print("─" * 60)
         
         # Clear state from any previous analysis runs if requested
@@ -1005,84 +1005,312 @@ class SmartConservationDebugger:
         
         return return_data
 
-    def get_monthly_targets_and_power_col_display(self):
+
         """
-        Get size and dimensional information for monthly_targets and power_col for Streamlit display.
+        Get size and dimensional information for target_series and power_col for Streamlit display.
         
-        This method retrieves the monthly targets and power column configuration
+        This method retrieves the target series and power column configuration
         from the controller's config data and prints length information for debugging.
         
         Returns:
             dict: Dictionary containing size/dimension data for Streamlit display
         """
-        # Initialize monthly_targets and df_sim from config
-        monthly_targets = self.controller.get_config_param('monthly_targets', None)
+        # Initialize target_series and df_sim from config
+        target_series = self.controller.get_config_param('target_series', None)
         df_sim = self.controller.get_config_param('df_sim', None) or self.controller.df_sim
         
-        # Debug print statements - rows and columns information
-        try:
-            if monthly_targets is not None:
-                if hasattr(monthly_targets, 'shape'):
-                    # DataFrame or Series with shape attribute
-                    rows, cols = monthly_targets.shape if len(monthly_targets.shape) == 2 else (monthly_targets.shape[0], 1)
-                    print(f"🔍 DEBUG - monthly_targets: {rows} rows, {cols} columns")
-                elif hasattr(monthly_targets, '__len__'):
-                    # List, dict, or other collection
-                    if isinstance(monthly_targets, dict):
-                        print(f"🔍 DEBUG - monthly_targets: {len(monthly_targets)} items (dict)")
-                    else:
-                        print(f"🔍 DEBUG - monthly_targets: {len(monthly_targets)} items (1 column)")
-                else:
-                    print("🔍 DEBUG - monthly_targets: single item (1 row, 1 column)")
-            else:
-                print("🔍 DEBUG - monthly_targets: None")
-        except Exception as e:
-            print(f"🔍 DEBUG - monthly_targets dimension check failed: {str(e)}")
-        
-        try:
-            if df_sim is not None:
-                if hasattr(df_sim, 'shape'):
-                    # DataFrame or Series with shape attribute
-                    rows, cols = df_sim.shape if len(df_sim.shape) == 2 else (df_sim.shape[0], 1)
-                    print(f"🔍 DEBUG - df_sim: {rows} rows, {cols} columns")
-                elif hasattr(df_sim, '__len__'):
-                    # List, dict, or other collection
-                    if isinstance(df_sim, dict):
-                        print(f"🔍 DEBUG - df_sim: {len(df_sim)} items (dict)")
-                    else:
-                        print(f"🔍 DEBUG - df_sim: {len(df_sim)} items (1 column)")
-                else:
-                    print("🔍 DEBUG - df_sim: single item (1 row, 1 column)")
-            else:
-                print("🔍 DEBUG - df_sim: None")
-        except Exception as e:
-            print(f"🔍 DEBUG - df_sim dimension check failed: {str(e)}")
-        
+
         # Return empty dict since this is debug-only function
         return {
             'debug_info': 'Length information printed to console',
-            'monthly_targets_available': monthly_targets is not None,
+            'target_series_available': target_series is not None,
             'df_sim_available': df_sim is not None
         }
 
-class MdSmoothing:
+    def format_excess_demand_analysis(self, timestamps=None, current_demand=None, excess_demand=None):
+        """
+        Format timestamp, current demand, and excess demand data for table display.
+        
+        This method takes demand and excess data and arranges them in a structured
+        format suitable for table display in Streamlit or other UI components.
+        
+        Args:
+            timestamps: Series or array-like of timestamps (optional, uses df_sim index if None)
+            current_demand: Series or array-like of current demand values (optional, uses power_col from df_sim if None)
+            excess_demand: Series or array-like of excess demand values (optional, calculates from MdExcess if None)
+            
+        Returns:
+            dict: Dictionary containing formatted analysis data with keys:
+                - 'data': List of dictionaries with timestamp, demand, and excess data
+                - 'summary': Summary statistics for the excess analysis
+                - 'metadata': Metadata about the analysis including column info and data types
+        """
+        # Get default data from controller if not provided
+        df_sim = self.controller.df_sim
+        power_col = self.controller.get_config_param('power_col')
+        
+        # Use provided timestamps or default to df_sim index
+        if timestamps is None:
+            if df_sim is not None and not df_sim.empty:
+                timestamps = df_sim.index
+            else:
+                return {
+                    'data': [],
+                    'summary': {'error': 'No timestamp data available'},
+                    'metadata': {'error': 'Missing timestamp data', 'analysis_type': 'excess_demand_analysis'}
+                }
+        
+        # Use provided current_demand or get from df_sim
+        if current_demand is None:
+            if df_sim is not None and power_col and power_col in df_sim.columns:
+                current_demand = df_sim[power_col]
+            else:
+                return {
+                    'data': [],
+                    'summary': {'error': f'Power column {power_col} not available in df_sim'},
+                    'metadata': {'error': 'Missing current demand data', 'analysis_type': 'excess_demand_analysis'}
+                }
+        
+        # Use provided excess_demand or calculate from MdExcess
+        if excess_demand is None:
+            try:
+                # Create MdExcess instance to calculate excess demand
+                config_data = self.controller.config_data or {}
+                md_excess = MdExcess(config_data)
+                excess_demand = md_excess.calculate_excess_demand()
+            except Exception as e:
+                return {
+                    'data': [],
+                    'summary': {'error': f'Failed to calculate excess demand: {str(e)}'},
+                    'metadata': {'error': 'Excess demand calculation failed', 'analysis_type': 'excess_demand_analysis'}
+                }
+        
+        # Align all series to same index
+        try:
+            # Convert to pandas Series if needed and align indices
+            if not isinstance(timestamps, pd.Index):
+                timestamps = pd.Index(timestamps)
+            if not isinstance(current_demand, pd.Series):
+                current_demand = pd.Series(current_demand, index=timestamps)
+            if not isinstance(excess_demand, pd.Series):
+                excess_demand = pd.Series(excess_demand, index=timestamps)
+            
+            # Align all data to the same index
+            common_index = timestamps.intersection(current_demand.index).intersection(excess_demand.index)
+            
+            if len(common_index) == 0:
+                return {
+                    'data': [],
+                    'summary': {'error': 'No common timestamps between demand and excess data'},
+                    'metadata': {'error': 'Index alignment failed', 'analysis_type': 'excess_demand_analysis'}
+                }
+            
+            # Filter data to common index
+            aligned_timestamps = common_index
+            aligned_current = current_demand.loc[common_index]
+            aligned_excess = excess_demand.loc[common_index]
+            
+        except Exception as e:
+            return {
+                'data': [],
+                'summary': {'error': f'Data alignment failed: {str(e)}'},
+                'metadata': {'error': 'Data processing error', 'analysis_type': 'excess_demand_analysis'}
+            }
+        
+        # Format data for table display
+        analysis_data = []
+        summary_stats = {
+            'total_timestamps': len(aligned_timestamps),
+            'excess_events': 0,
+            'max_demand_kw': 0.0,
+            'max_excess_kw': 0.0,
+            'avg_demand_kw': 0.0,
+            'avg_excess_when_active': 0.0,
+            'total_excess_kwh': 0.0
+        }
+        
+        excess_values = []
+        demand_values = []
+        
+        # Process each timestamp
+        for i, timestamp in enumerate(aligned_timestamps):
+            current_val = aligned_current.iloc[i]
+            excess_val = aligned_excess.iloc[i]
+            
+            # Create formatted record
+            record = {
+                'timestamp': timestamp,
+                'date': timestamp.date() if hasattr(timestamp, 'date') else str(timestamp),
+                'time': timestamp.strftime('%H:%M:%S') if hasattr(timestamp, 'strftime') else str(timestamp),
+                'hour': timestamp.hour if hasattr(timestamp, 'hour') else 0,
+                'current_demand_kw': round(float(current_val), 2) if pd.notna(current_val) else 0.0,
+                'excess_demand_kw': round(float(excess_val), 2) if pd.notna(excess_val) else 0.0,
+                'has_excess': bool(excess_val > 0) if pd.notna(excess_val) else False,
+                'demand_status': 'Over Target' if (pd.notna(excess_val) and excess_val > 0) else 'Within Target'
+            }
+            
+            analysis_data.append(record)
+            
+            # Update statistics
+            if pd.notna(current_val):
+                demand_values.append(current_val)
+            if pd.notna(excess_val) and excess_val > 0:
+                excess_values.append(excess_val)
+                summary_stats['excess_events'] += 1
+        
+        # Calculate summary statistics
+        if demand_values:
+            summary_stats['max_demand_kw'] = max(demand_values)
+            summary_stats['avg_demand_kw'] = sum(demand_values) / len(demand_values)
+        
+        if excess_values:
+            summary_stats['max_excess_kw'] = max(excess_values)
+            summary_stats['avg_excess_when_active'] = sum(excess_values) / len(excess_values)
+            
+            # Calculate total excess energy (assuming interval_hours from config)
+            interval_hours = self.controller.get_config_param('interval_hours', 0.25)  # Default 15 minutes
+            summary_stats['total_excess_kwh'] = sum(excess_values) * interval_hours
+        
+        # Add percentage calculations
+        summary_stats.update({
+            'excess_percentage': (summary_stats['excess_events'] / summary_stats['total_timestamps'] * 100) if summary_stats['total_timestamps'] > 0 else 0,
+            'within_target_percentage': ((summary_stats['total_timestamps'] - summary_stats['excess_events']) / summary_stats['total_timestamps'] * 100) if summary_stats['total_timestamps'] > 0 else 100
+        })
+        
+        # Create metadata
+        metadata = {
+            'analysis_type': 'excess_demand_analysis',
+            'total_records': len(analysis_data),
+            'date_range': {
+                'start': analysis_data[0]['timestamp'] if analysis_data else None,
+                'end': analysis_data[-1]['timestamp'] if analysis_data else None
+            },
+            'columns': [
+                'timestamp', 'date', 'time', 'hour', 'current_demand_kw', 
+                'excess_demand_kw', 'has_excess', 'demand_status'
+            ],
+            'data_types': {
+                'timestamp': 'datetime',
+                'date': 'date',
+                'time': 'time_string',
+                'hour': 'integer',
+                'current_demand_kw': 'float',
+                'excess_demand_kw': 'float',
+                'has_excess': 'boolean',
+                'demand_status': 'string'
+            },
+            'units': {
+                'current_demand_kw': 'kW',
+                'excess_demand_kw': 'kW',
+                'total_excess_kwh': 'kWh'
+            }
+        }
+        
+        return {
+            'data': analysis_data,
+            'summary': summary_stats,
+            'metadata': metadata
+        }
+
+class MdExcess:
     def __init__(self, config_source):
         """
-        Initialize MdSmoothing with configuration data.
+        Initialize MdExcess with configuration data.
         
         Args:
             config_source: Either MdShavingConfig instance or config dictionary
         """
-        if hasattr(config_source, 'monthly_targets'):
+        if hasattr(config_source, 'target_series'):
             # Access from MdShavingConfig instance
-            self.monthly_targets = config_source.monthly_targets
+            self.target_series = config_source.target_series
             self.power_col = config_source.power_col
+            self.df_sim = config_source.df_sim
+            self.interval_hours = config_source.interval_hours
+            self.selected_tariff = config_source.selected_tariff
+            self.tariff_type = config_source.tariff_type
         elif isinstance(config_source, dict):
             # Access from config dictionary
-            self.monthly_targets = config_source.get('monthly_targets')
+            self.target_series = config_source.get('target_series')
             self.power_col = config_source.get('power_col')
+            self.df_sim = config_source.get('df_sim')
+            self.interval_hours = config_source.get('interval_hours')
+            self.selected_tariff = config_source.get('selected_tariff')
+            self.tariff_type = config_source.get('tariff_type')
         else:
             raise TypeError("config_source must be MdShavingConfig instance or dictionary")
+    
+    def calculate_excess_demand(self):
+        """
+        Calculate MD excess demand by taking the difference between actual demand and target series.
         
-        print("Monthly targets:", len(self.monthly_targets))
-        print("power_col:", len(self.power_col)) 
+        This method follows the V3 logic for calculating excess demand:
+        - Uses df_sim[power_col] as actual demand
+        - Uses target_series as dynamic monthly targets
+        - Calculates excess as (actual - target).clip(lower=0)
+        
+        Returns:
+            pd.Series: Excess demand for each timestamp, with negative values clipped to 0
+        """
+        # Validate required data is available
+        if self.df_sim is None or self.df_sim.empty:
+            raise ValueError("df_sim is not available or empty")
+        
+        if self.power_col is None or self.power_col not in self.df_sim.columns:
+            raise ValueError(f"Power column '{self.power_col}' not found in df_sim")
+        
+        if self.target_series is None:
+            raise ValueError("target_series is not available")
+        
+        # Get actual demand from df_sim
+        actual_demand = self.df_sim[self.power_col]
+        
+        # Ensure target_series matches df_sim index
+        if not actual_demand.index.equals(self.target_series.index):
+            # Align target_series to match df_sim index
+            target_aligned = self.target_series.reindex(actual_demand.index, method='ffill')
+        else:
+            target_aligned = self.target_series
+        
+        # Calculate excess demand (following V3 logic)
+        # excess = max(0, current_demand - monthly_target)
+        excess_demand = (actual_demand - target_aligned).clip(lower=0)
+        
+        return excess_demand
+    
+
+        """
+        Calculate summary statistics for MD excess demand.
+        
+        Returns:
+            dict: Dictionary containing excess demand statistics
+        """
+        try:
+            excess_demand = self.calculate_excess_demand()
+            
+            # Calculate statistics
+            statistics = {
+                'total_excess_events': (excess_demand > 0).sum(),
+                'max_excess_kw': excess_demand.max(),
+                'total_excess_kwh': excess_demand.sum() * self.interval_hours if self.interval_hours else excess_demand.sum() * 0.25,
+                'avg_excess_when_active': excess_demand[excess_demand > 0].mean() if (excess_demand > 0).any() else 0.0,
+                'excess_percentage': (excess_demand > 0).sum() / len(excess_demand) * 100,
+                'timestamps_with_excess': excess_demand[excess_demand > 0].index.tolist()
+            }
+            
+            return statistics
+            
+        except Exception as e:
+            return {
+                'error': f"Failed to calculate excess statistics: {str(e)}",
+                'total_excess_events': 0,
+                'max_excess_kw': 0.0,
+                'total_excess_kwh': 0.0,
+                'avg_excess_when_active': 0.0,
+                'excess_percentage': 0.0,
+                'timestamps_with_excess': []
+            }
+    
+
+
+#TO-DO: Verify the size of monthly targets and refer to how excess is calculated in v3
+#TO-DO: streamline debugging feature (discuss best practice with ChatGPT)
