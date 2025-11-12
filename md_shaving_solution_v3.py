@@ -3299,6 +3299,43 @@ def render_smart_conservation_debug_analysis():
             - **Off-Peak (50% SOC Reserve)**: Balanced approach outside MD windows
             """)
             
+        # Display monthly_targets and power_col dimensions
+        st.markdown("#### 📊 Configuration Data Dimensions")
+        try:
+            dimension_data = debugger.get_monthly_targets_and_power_col_display()
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("**Power Column Information:**")
+                pc_info = dimension_data['power_col']
+                st.write(f"Type: {pc_info['type']}")
+                st.write(f"Length: {pc_info['length']}")
+                if pc_info['string_length'] > 0:
+                    st.write(f"String Length: {pc_info['string_length']} characters")
+                st.write(f"Configured: {'✅ Yes' if pc_info['is_configured'] else '❌ No'}")
+            
+            with col2:
+                st.markdown("**Monthly Targets Information:**")
+                mt_info = dimension_data['monthly_targets']
+                st.write(f"Type: {mt_info['type']}")
+                st.write(f"Shape: {mt_info['shape']}")
+                st.write(f"Rows: {mt_info['rows']}")
+                st.write(f"Columns: {mt_info['columns']}")
+                st.write(f"Total Size: {mt_info['length']}")
+                st.write(f"Configured: {'✅ Yes' if mt_info['is_configured'] else '❌ No'}")
+            
+            # Summary status
+            summary = dimension_data['summary']
+            if summary['both_configured']:
+                st.success("✅ Both power_col and monthly_targets are properly configured")
+            elif summary['power_col_configured'] or summary['monthly_targets_configured']:
+                st.warning("⚠️ Partial configuration detected - some components may be missing")
+            else:
+                st.error("❌ Neither power_col nor monthly_targets are configured")
+                
+        except Exception as e:
+            st.error(f"❌ Failed to display configuration dimensions: {str(e)}")
 
         
     except ImportError as e:

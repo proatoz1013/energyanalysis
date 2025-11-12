@@ -215,6 +215,7 @@ class MdShavingConfig:
         # Core simulation data
         config_dict['df_sim'] = self.df_sim
         config_dict['power_col'] = self.power_col
+        config_dict['monthly_targets'] = self.monthly_targets
         config_dict['interval_hours'] = self.interval_hours
         
         # Battery configuration
@@ -854,52 +855,132 @@ class SmartConservationDebugger:
         else:
             return "TOU MD Window"
 
-    def display_window_analysis_table(self, df_sim=None, show_summary=True, max_rows=None):
+    def display_window_analysis_table(self, data_source_func=None, df_sim=None, show_summary=True, max_rows=None, clear_state=True, **kwargs):
         """
-        Display window analysis results as a pandas DataFrame with summary statistics.
+        Display analysis results as a pandas DataFrame with flexible data source support.
         
-        This function calls generate_window_analysis_table() and formats the results
-        into a pandas DataFrame for clean display with optional summary statistics and row limiting.
+        This function can display data from any source function and adapts to the data structure.
+        It provides flexible column and row handling with optional summary statistics.
         
         Args:
+            data_source_func (callable, optional): Function to call for data (defaults to generate_window_analysis_table)
             df_sim: Optional DataFrame to analyze (uses controller's df_sim if None)
             show_summary: Whether to display summary statistics (default: True)
-            max_rows: Maximum number of data rows to display (uses default from constants if None)
+            max_rows: Maximum number of data rows to display (default: 10)
+            clear_state: Whether to clear MdEventTrigger state before processing (default: True)
+            **kwargs: Additional arguments to pass to the data source function
             
         Returns:
             dict: Dictionary containing 'dataframe', 'summary', and 'metadata' keys
         """
+        # Display configuration debug information to terminal
+        print("🔧 Smart Conservation Debug Analysis - Configuration Check")
+        self.get_monthly_targets_and_power_col_display()
+        print("─" * 60)
+        
+        # Clear state from any previous analysis runs if requested
+        if clear_state:
+            # Clear any existing MdEventTrigger state to ensure fresh results
+            if hasattr(kwargs, 'get') and kwargs.get('md_event_trigger'):
+                kwargs['md_event_trigger'].reset_timestamp_ids()
+        
         # Get display constants
         display_constants = SmartConstants.get_display_constants()
         
-        # Use default max_rows if not specified
+        # Use default max_rows if not specified (fixed at 10 for consistent display)
         if max_rows is None:
-            max_rows = display_constants['default_max_rows']
-        # Get analysis results
-        analysis_results = self.generate_window_analysis_table(df_sim)
+            max_rows = 10
         
-        if not analysis_results['data']:
+        # Determine data source function
+        if data_source_func is None:
+            # Default to process_timestamp_with_state analysis
+            data_source_func = self.generate_window_analysis_table
+            analysis_results = data_source_func(df_sim, **kwargs)
+            data_key = 'data'  # Use 'data' key for timestamp processing results
+        else:
+            # Call the provided function with kwargs
+            try:
+                analysis_results = data_source_func(df_sim, **kwargs)
+                # Try to detect the data key automatically
+                if 'data' in analysis_results:
+                    data_key = 'data'
+                elif 'active_events' in analysis_results:
+                    data_key = 'active_events'
+                else:
+                    # Fallback: try to find first list/array in results
+                    data_key = None
+                    for key, value in analysis_results.items():
+                        if isinstance(value, (list, tuple)) and len(value) > 0:
+                            data_key = key
+                            break
+            except Exception as e:
+                return {
+                    'dataframe': pd.DataFrame(),
+                    'summary': {'error': f'Data source function failed: {str(e)}'},
+                    'metadata': {'error': f"Failed to call data source function: {str(e)}"}
+                }
+        
+        # Check if we have data
+        data_list = analysis_results.get(data_key, []) if data_key else []
+        if not data_list:
             return {
                 'dataframe': pd.DataFrame(),
-                'summary': {},
-                'metadata': {'error': "No analysis data available - check if simulation data is loaded"}
+                'summary': analysis_results.get('summary', {'message': 'No data available from source function'}),
+                'metadata': analysis_results.get('metadata', {'error': f"No data available - check data source function output"})
             }
         
-        # Convert data to DataFrame
+        # Convert data to DataFrame with flexible column detection
         df_data = []
-        for record in analysis_results['data']:
-            df_data.append({
-                'Timestamp': record['timestamp'],
-                'Date': record['date'],
-                'Time': record['time'],
-                'Tariff Type': record['tariff_type'],
-                'TOU Period': "Yes" if record['is_tou'] else "No",
-                'MD Window': "Yes" if record['inside_md_window'] else "No",
-                'Early Window': "Yes" if record['is_early_window'] else "No",
-                'Late Window': "Yes" if record['is_late_window'] else "No",
-                'SOC Reserve (%)': f"{record['soc_reserve_percent']:.{display_constants['percentage_precision']}f}" if record['soc_reserve_percent'] is not None else "N/A",
-                'Window Status': record['window_status']
-            })
+        
+        # Auto-detect columns from first record
+        first_record = data_list[0] if data_list else {}
+        
+        for record in data_list:
+            row_data = {}
+            
+            # Handle different data structures flexibly
+            if isinstance(record, dict):
+                # For dictionary records, process each key-value pair
+                for key, value in record.items():
+                    # Format the key for display (capitalize and replace underscores)
+                    display_key = key.replace('_', ' ').title()
+                    
+                    # Format the value based on its type
+                    if key == 'timestamp' and hasattr(value, 'isoformat'):
+                        row_data[display_key] = value
+                    elif key == 'date' and hasattr(value, 'strftime'):
+                        row_data[display_key] = value.strftime('%Y-%m-%d') if hasattr(value, 'strftime') else str(value)
+                    elif key == 'time' and isinstance(value, str):
+                        row_data[display_key] = value
+                    elif key.endswith('_percent') or 'percentage' in key.lower():
+                        # Format percentage values
+                        if value is not None:
+                            try:
+                                row_data[display_key] = f"{float(value):.{display_constants['percentage_precision']}f}%"
+                            except (ValueError, TypeError):
+                                row_data[display_key] = str(value)
+                        else:
+                            row_data[display_key] = "N/A"
+                    elif isinstance(value, (int, float)) and value is not None:
+                        # Format numeric values
+                        try:
+                            if isinstance(value, float):
+                                row_data[display_key] = f"{value:.{display_constants['summary_precision']}f}"
+                            else:
+                                row_data[display_key] = str(value)
+                        except (ValueError, TypeError):
+                            row_data[display_key] = str(value)
+                    elif isinstance(value, bool):
+                        # Format boolean values
+                        row_data[display_key] = "Yes" if value else "No"
+                    else:
+                        # Default string conversion
+                        row_data[display_key] = str(value) if value is not None else "N/A"
+            else:
+                # For non-dictionary records, convert to string
+                row_data['Value'] = str(record)
+            
+            df_data.append(row_data)
         
         # Create DataFrame
         df_analysis = pd.DataFrame(df_data)
@@ -910,388 +991,98 @@ class SmartConservationDebugger:
         else:
             df_display = df_analysis.copy()
         
-        # Prepare return data
+        # Prepare return data with flexible metadata
         return_data = {
             'dataframe': df_display,
             'summary': analysis_results.get('summary', {}),
             'metadata': analysis_results.get('metadata', {}),
-            'total_records': len(analysis_results['data']),
-            'displayed_records': len(df_display)
+            'total_records': len(data_list),
+            'displayed_records': len(df_display),
+            'columns_detected': list(df_display.columns) if not df_display.empty else [],
+            'max_rows_setting': max_rows,
+            'data_source': getattr(data_source_func, '__name__', 'custom_function') if data_source_func else 'generate_window_analysis_table'
         }
         
         return return_data
 
-class MdSmoothing:
-    """
-    Class for smoothing MD excess values over time.
-    
-    This class provides methods to apply optional smoothing to
-    maximum demand (MD) excess values, helping to reduce noise
-    and fluctuations in the data for more stable analysis.
-    """
-    
-    def __init__(self, monthly_targets=None):
+    def get_monthly_targets_and_power_col_display(self):
         """
-        Initialize the MdSmoothing class.
+        Get size and dimensional information for monthly_targets and power_col for Streamlit display.
         
-        Args:
-            monthly_targets (dict): Dictionary containing monthly MD targets
-        """
-        self.monthly_targets = monthly_targets or {}
-    
-    def calculate_md_excess(self, current_power, current_timestamp, monthly_targets=None):
-        """
-        Calculate the raw MD excess between current power and monthly target.
+        This method retrieves the monthly targets and power column configuration
+        from the controller's config data and prints length information for debugging.
         
-        This method takes the difference between the current MD (df_sim value) and 
-        the monthly target. If df_sim is lower or equal to the target, returns zero.
-        If above target, returns the raw excess.
-        
-        Args:
-            current_power (float): Current power value from df_sim at current timestamp
-            current_timestamp (datetime): Current timestamp to determine the month
-            monthly_targets (dict, optional): Monthly targets override
-            
         Returns:
-            float: MD excess value (0 if at/below target, positive if above target)
+            dict: Dictionary containing size/dimension data for Streamlit display
         """
-        # Use provided monthly_targets or instance targets
-        targets = monthly_targets or self.monthly_targets
+        # Initialize monthly_targets and df_sim from config
+        monthly_targets = self.controller.get_config_param('monthly_targets', None)
+        df_sim = self.controller.get_config_param('df_sim', None) or self.controller.df_sim
         
-        # Handle invalid inputs
-        if current_power is None or current_timestamp is None:
-            return 0.0
-        
-        if not targets or not isinstance(targets, dict):
-            return 0.0
-        
+        # Debug print statements - rows and columns information
         try:
-            # Extract year-month key from timestamp
-            if hasattr(current_timestamp, 'strftime'):
-                year_month_key = current_timestamp.strftime('%Y-%m')
+            if monthly_targets is not None:
+                if hasattr(monthly_targets, 'shape'):
+                    # DataFrame or Series with shape attribute
+                    rows, cols = monthly_targets.shape if len(monthly_targets.shape) == 2 else (monthly_targets.shape[0], 1)
+                    print(f"🔍 DEBUG - monthly_targets: {rows} rows, {cols} columns")
+                elif hasattr(monthly_targets, '__len__'):
+                    # List, dict, or other collection
+                    if isinstance(monthly_targets, dict):
+                        print(f"🔍 DEBUG - monthly_targets: {len(monthly_targets)} items (dict)")
+                    else:
+                        print(f"🔍 DEBUG - monthly_targets: {len(monthly_targets)} items (1 column)")
+                else:
+                    print("🔍 DEBUG - monthly_targets: single item (1 row, 1 column)")
             else:
-                # Handle string timestamps or other formats
-                year_month_key = str(current_timestamp)[:7]  # Assume YYYY-MM format
-            
-            # Get the monthly target for this timestamp
-            monthly_target = targets.get(year_month_key)
-            
-            if monthly_target is None:
-                # No target defined for this month, return 0
-                return 0.0
-            
-            # Convert to float for calculation
-            current_power_val = float(current_power)
-            target_val = float(monthly_target)
-            
-            # Calculate excess: if current power <= target, excess = 0
-            # If current power > target, excess = current_power - target
-            if current_power_val <= target_val:
-                return 0.0
+                print("🔍 DEBUG - monthly_targets: None")
+        except Exception as e:
+            print(f"🔍 DEBUG - monthly_targets dimension check failed: {str(e)}")
+        
+        try:
+            if df_sim is not None:
+                if hasattr(df_sim, 'shape'):
+                    # DataFrame or Series with shape attribute
+                    rows, cols = df_sim.shape if len(df_sim.shape) == 2 else (df_sim.shape[0], 1)
+                    print(f"🔍 DEBUG - df_sim: {rows} rows, {cols} columns")
+                elif hasattr(df_sim, '__len__'):
+                    # List, dict, or other collection
+                    if isinstance(df_sim, dict):
+                        print(f"🔍 DEBUG - df_sim: {len(df_sim)} items (dict)")
+                    else:
+                        print(f"🔍 DEBUG - df_sim: {len(df_sim)} items (1 column)")
+                else:
+                    print("🔍 DEBUG - df_sim: single item (1 row, 1 column)")
             else:
-                excess = current_power_val - target_val
-                return max(0.0, excess)  # Ensure non-negative
-                
-        except (ValueError, TypeError, AttributeError) as e:
-            # Handle conversion errors or invalid data gracefully
-            return 0.0
-    
-    def update_monthly_targets(self, new_targets):
-        """
-        Update the monthly targets dictionary.
+                print("🔍 DEBUG - df_sim: None")
+        except Exception as e:
+            print(f"🔍 DEBUG - df_sim dimension check failed: {str(e)}")
         
-        Args:
-            new_targets (dict): New monthly targets dictionary
-        """
-        if isinstance(new_targets, dict):
-            self.monthly_targets = new_targets
-        else:
-            self.monthly_targets = {}
-    
-    def get_monthly_target(self, timestamp):
-
-        """
-        Get the monthly target for a specific timestamp.
-        
-        Args:
-            timestamp (datetime): Timestamp to get target for
-            
-        Returns:
-            float or None: Monthly target value or None if not found
-        """
-        if not self.monthly_targets or timestamp is None:
-            return None
-        
-        try:
-            if hasattr(timestamp, 'strftime'):
-                year_month_key = timestamp.strftime('%Y-%m')
-            else:
-                year_month_key = str(timestamp)[:7]
-            
-            return self.monthly_targets.get(year_month_key)
-        except (AttributeError, TypeError):
-            return None
-
-class MdEventTrigger:
-    """
-    Class for triggering MD events based on excess values.
-    
-    This class monitors MD excess values from MdSmoothing and determines
-    when MD events should be triggered based on configurable thresholds
-    and conditions.
-    """
-    
-    def __init__(self):
-        """
-        Initialize the MdEventTrigger.
-        """
-        self.is_event_active = False  # Current event state
-        self.timestamp_counter = 0    # Counter for assigning unique IDs
-        self.timestamp_id_map = {}    # Map of timestamp to ID
-        self.id_state_map = {}        # Map of timestamp ID to event state
-    
-    def evaluate_trigger_state(self, md_excess):
-        """
-        Evaluate whether an MD event should be triggered based on excess value.
-        
-        This method takes the MD excess from MdSmoothing class and determines
-        the trigger state. When excess is not zero, the event is active (True).
-        When excess is zero, the event is inactive (False).
-        
-        Args:
-            md_excess (float): The MD excess value from MdSmoothing.calculate_md_excess()
-            
-        Returns:
-            bool: True if MD event should be active (excess > 0), False otherwise
-        """
-        # Handle invalid input
-        if md_excess is None:
-            self.is_event_active = False
-            return self.is_event_active
-        
-        try:
-            # Convert to float for comparison
-            excess_val = float(md_excess)
-            
-            # Event is active when there is any excess (> 0)
-            self.is_event_active = excess_val > 0.0
-            
-            return self.is_event_active
-            
-        except (ValueError, TypeError):
-            # Handle conversion errors
-            self.is_event_active = False
-            return self.is_event_active
-    
-    def get_current_state(self):
-        """
-        Get the current trigger state.
-        
-        Returns:
-            bool: Current event active state
-        """
-        return self.is_event_active
-    
-    def reset_state(self):
-        """
-        Reset the trigger state to inactive.
-        """
-        self.is_event_active = False
-    
-    def assign_timestamp_id(self, timestamp):
-        """
-        Assign a unique ID to each timestamp.
-        
-        This method ensures each unique timestamp gets a sequential ID.
-        If the timestamp has been seen before, returns the existing ID.
-        If it's a new timestamp, assigns a new incremental ID.
-        
-        Args:
-            timestamp: The timestamp to assign an ID to (datetime or string)
-            
-        Returns:
-            int: Unique ID for the timestamp
-        """
-        # Handle None or invalid timestamp
-        if timestamp is None:
-            return 0
-        
-        # Convert timestamp to string key for consistent mapping
-        try:
-            if hasattr(timestamp, 'isoformat'):
-                # Handle datetime objects
-                timestamp_key = timestamp.isoformat()
-            else:
-                # Handle string timestamps or other formats
-                timestamp_key = str(timestamp)
-        except (AttributeError, TypeError):
-            # Fallback for problematic timestamps
-            timestamp_key = str(timestamp)
-        
-        # Check if we've already assigned an ID to this timestamp
-        if timestamp_key in self.timestamp_id_map:
-            return self.timestamp_id_map[timestamp_key]
-        
-        # Assign new ID (increment counter)
-        self.timestamp_counter += 1
-        new_id = self.timestamp_counter
-        
-        # Store the mapping
-        self.timestamp_id_map[timestamp_key] = new_id
-        
-        return new_id
-    
-    def get_timestamp_id(self, timestamp):
-        """
-        Get the ID for a specific timestamp without creating a new one.
-        
-        Args:
-            timestamp: The timestamp to look up
-            
-        Returns:
-            int or None: ID if timestamp exists, None if not found
-        """
-        if timestamp is None:
-            return None
-        
-        try:
-            if hasattr(timestamp, 'isoformat'):
-                timestamp_key = timestamp.isoformat()
-            else:
-                timestamp_key = str(timestamp)
-        except (AttributeError, TypeError):
-            timestamp_key = str(timestamp)
-        
-        return self.timestamp_id_map.get(timestamp_key)
-    
-    def get_all_timestamp_mappings(self):
-        """
-        Get all timestamp to ID mappings.
-        
-        Returns:
-            dict: Dictionary of timestamp keys to IDs
-        """
-        return self.timestamp_id_map.copy()
-    
-    def reset_timestamp_ids(self):
-        """
-        Reset all timestamp ID assignments and counter.
-        """
-        self.timestamp_counter = 0
-        self.timestamp_id_map.clear()
-        self.id_state_map.clear()
-    
-    def assign_state_to_timestamp_id(self, timestamp_id, event_state):
-        """
-        Assign an event state to a specific timestamp ID.
-        
-        This method maps timestamp IDs to their corresponding event states,
-        allowing tracking of which timestamps have active MD events.
-        
-        Args:
-            timestamp_id (int): The timestamp ID to assign state to
-            event_state (bool): The event state (True for active, False for inactive)
-            
-        Returns:
-            bool: The assigned event state
-        """
-        # Validate inputs
-        if timestamp_id is None:
-            return False
-        
-        try:
-            # Ensure timestamp_id is integer
-            id_val = int(timestamp_id)
-            
-            # Ensure event_state is boolean
-            if isinstance(event_state, bool):
-                state_val = event_state
-            else:
-                # Convert to boolean (non-zero/non-empty = True)
-                state_val = bool(event_state)
-            
-            # Store the mapping
-            self.id_state_map[id_val] = state_val
-            
-            return state_val
-            
-        except (ValueError, TypeError):
-            # Handle conversion errors
-            return False
-    
-    def get_state_for_timestamp_id(self, timestamp_id):
-        """
-        Get the event state for a specific timestamp ID.
-        
-        Args:
-            timestamp_id (int): The timestamp ID to look up
-            
-        Returns:
-            bool or None: Event state if ID exists, None if not found
-        """
-        if timestamp_id is None:
-            return None
-        
-        try:
-            id_val = int(timestamp_id)
-            return self.id_state_map.get(id_val)
-        except (ValueError, TypeError):
-            return None
-    
-    def process_timestamp_with_state(self, timestamp, md_excess):
-        """
-        Process a timestamp by assigning ID and state in one operation.
-        
-        This is a convenience method that combines timestamp ID assignment,
-        state evaluation, and state-to-ID mapping in a single call.
-        
-        Args:
-            timestamp: The timestamp to process
-            md_excess (float): The MD excess value for state evaluation
-            
-        Returns:
-            dict: Dictionary containing timestamp_id, event_state, and timestamp
-        """
-        # Step 1: Assign unique ID to timestamp
-        timestamp_id = self.assign_timestamp_id(timestamp)
-        
-        # Step 2: Evaluate trigger state based on MD excess
-        event_state = self.evaluate_trigger_state(md_excess)
-        
-        # Step 3: Map the state to the timestamp ID
-        self.assign_state_to_timestamp_id(timestamp_id, event_state)
-        
-        # Return comprehensive result
+        # Return empty dict since this is debug-only function
         return {
-            'timestamp_id': timestamp_id,
-            'event_state': event_state,
-            'timestamp': timestamp,
-            'md_excess': md_excess
+            'debug_info': 'Length information printed to console',
+            'monthly_targets_available': monthly_targets is not None,
+            'df_sim_available': df_sim is not None
         }
-    
-    def get_all_id_state_mappings(self):
+
+class MdSmoothing:
+    def __init__(self, config_source):
         """
-        Get all timestamp ID to state mappings.
+        Initialize MdSmoothing with configuration data.
         
-        Returns:
-            dict: Dictionary of timestamp IDs to event states
+        Args:
+            config_source: Either MdShavingConfig instance or config dictionary
         """
-        return self.id_state_map.copy()
-    
-    def get_active_timestamp_ids(self):
-        """
-        Get all timestamp IDs that have active event states.
+        if hasattr(config_source, 'monthly_targets'):
+            # Access from MdShavingConfig instance
+            self.monthly_targets = config_source.monthly_targets
+            self.power_col = config_source.power_col
+        elif isinstance(config_source, dict):
+            # Access from config dictionary
+            self.monthly_targets = config_source.get('monthly_targets')
+            self.power_col = config_source.get('power_col')
+        else:
+            raise TypeError("config_source must be MdShavingConfig instance or dictionary")
         
-        Returns:
-            list: List of timestamp IDs where event_state is True
-        """
-        return [timestamp_id for timestamp_id, state in self.id_state_map.items() if state]
-    
-    def get_inactive_timestamp_ids(self):
-        """
-        Get all timestamp IDs that have inactive event states.
-        
-        Returns:
-            list: List of timestamp IDs where event_state is False
-        """
-        return [timestamp_id for timestamp_id, state in self.id_state_map.items() if not state]
+        print("Monthly targets:", len(self.monthly_targets))
+        print("power_col:", len(self.power_col)) 
