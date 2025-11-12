@@ -795,7 +795,7 @@ def _render_battery_quantity_recommendation(max_power_shaving_required, recommen
                     f"{qty_for_energy_rounded} units",
                     help=f"Based on {recommended_energy_capacity:.1f} kWh ÷ {battery_energy_kwh} kWh ÷ 0.9 ÷ 0.93 "
                 )
-                st.caption(f"Calculation: ⌈{recommended_energy_capacity:.1f} ÷ {battery_energy_kwh} ÷ 0.9 ÷ 0.93⌉ = {round((recommended_energy_capacity / battery_power_kw) / 0.9 / 0.93, 2)} ")
+                st.caption(f"Calculation: ⌈{recommended_energy_capacity:.1f} ÷ {battery_energy_kwh} ÷ 0.9 ÷ 0.93⌉ = {round(qty_for_energy,2)}")
             
             with col3:
                 st.metric(
