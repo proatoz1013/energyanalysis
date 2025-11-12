@@ -697,7 +697,6 @@ class MdShavingController:
         
         return result
 
-
 class SmartConservationDebugger:
     """
     Debugging class for Smart Conservation analysis.
@@ -922,7 +921,377 @@ class SmartConservationDebugger:
         
         return return_data
 
+class MdSmoothing:
+    """
+    Class for smoothing MD excess values over time.
+    
+    This class provides methods to apply optional smoothing to
+    maximum demand (MD) excess values, helping to reduce noise
+    and fluctuations in the data for more stable analysis.
+    """
+    
+    def __init__(self, monthly_targets=None):
+        """
+        Initialize the MdSmoothing class.
+        
+        Args:
+            monthly_targets (dict): Dictionary containing monthly MD targets
+        """
+        self.monthly_targets = monthly_targets or {}
+    
+    def calculate_md_excess(self, current_power, current_timestamp, monthly_targets=None):
+        """
+        Calculate the raw MD excess between current power and monthly target.
+        
+        This method takes the difference between the current MD (df_sim value) and 
+        the monthly target. If df_sim is lower or equal to the target, returns zero.
+        If above target, returns the raw excess.
+        
+        Args:
+            current_power (float): Current power value from df_sim at current timestamp
+            current_timestamp (datetime): Current timestamp to determine the month
+            monthly_targets (dict, optional): Monthly targets override
+            
+        Returns:
+            float: MD excess value (0 if at/below target, positive if above target)
+        """
+        # Use provided monthly_targets or instance targets
+        targets = monthly_targets or self.monthly_targets
+        
+        # Handle invalid inputs
+        if current_power is None or current_timestamp is None:
+            return 0.0
+        
+        if not targets or not isinstance(targets, dict):
+            return 0.0
+        
+        try:
+            # Extract year-month key from timestamp
+            if hasattr(current_timestamp, 'strftime'):
+                year_month_key = current_timestamp.strftime('%Y-%m')
+            else:
+                # Handle string timestamps or other formats
+                year_month_key = str(current_timestamp)[:7]  # Assume YYYY-MM format
+            
+            # Get the monthly target for this timestamp
+            monthly_target = targets.get(year_month_key)
+            
+            if monthly_target is None:
+                # No target defined for this month, return 0
+                return 0.0
+            
+            # Convert to float for calculation
+            current_power_val = float(current_power)
+            target_val = float(monthly_target)
+            
+            # Calculate excess: if current power <= target, excess = 0
+            # If current power > target, excess = current_power - target
+            if current_power_val <= target_val:
+                return 0.0
+            else:
+                excess = current_power_val - target_val
+                return max(0.0, excess)  # Ensure non-negative
+                
+        except (ValueError, TypeError, AttributeError) as e:
+            # Handle conversion errors or invalid data gracefully
+            return 0.0
+    
+    def update_monthly_targets(self, new_targets):
+        """
+        Update the monthly targets dictionary.
+        
+        Args:
+            new_targets (dict): New monthly targets dictionary
+        """
+        if isinstance(new_targets, dict):
+            self.monthly_targets = new_targets
+        else:
+            self.monthly_targets = {}
+    
+    def get_monthly_target(self, timestamp):
 
-#LOGOFF 6 Nov 9:41 AM
+        """
+        Get the monthly target for a specific timestamp.
+        
+        Args:
+            timestamp (datetime): Timestamp to get target for
+            
+        Returns:
+            float or None: Monthly target value or None if not found
+        """
+        if not self.monthly_targets or timestamp is None:
+            return None
+        
+        try:
+            if hasattr(timestamp, 'strftime'):
+                year_month_key = timestamp.strftime('%Y-%m')
+            else:
+                year_month_key = str(timestamp)[:7]
+            
+            return self.monthly_targets.get(year_month_key)
+        except (AttributeError, TypeError):
+            return None
 
-#dictionary to store hardcoded static values
+class MdEventTrigger:
+    """
+    Class for triggering MD events based on excess values.
+    
+    This class monitors MD excess values from MdSmoothing and determines
+    when MD events should be triggered based on configurable thresholds
+    and conditions.
+    """
+    
+    def __init__(self):
+        """
+        Initialize the MdEventTrigger.
+        """
+        self.is_event_active = False  # Current event state
+        self.timestamp_counter = 0    # Counter for assigning unique IDs
+        self.timestamp_id_map = {}    # Map of timestamp to ID
+        self.id_state_map = {}        # Map of timestamp ID to event state
+    
+    def evaluate_trigger_state(self, md_excess):
+        """
+        Evaluate whether an MD event should be triggered based on excess value.
+        
+        This method takes the MD excess from MdSmoothing class and determines
+        the trigger state. When excess is not zero, the event is active (True).
+        When excess is zero, the event is inactive (False).
+        
+        Args:
+            md_excess (float): The MD excess value from MdSmoothing.calculate_md_excess()
+            
+        Returns:
+            bool: True if MD event should be active (excess > 0), False otherwise
+        """
+        # Handle invalid input
+        if md_excess is None:
+            self.is_event_active = False
+            return self.is_event_active
+        
+        try:
+            # Convert to float for comparison
+            excess_val = float(md_excess)
+            
+            # Event is active when there is any excess (> 0)
+            self.is_event_active = excess_val > 0.0
+            
+            return self.is_event_active
+            
+        except (ValueError, TypeError):
+            # Handle conversion errors
+            self.is_event_active = False
+            return self.is_event_active
+    
+    def get_current_state(self):
+        """
+        Get the current trigger state.
+        
+        Returns:
+            bool: Current event active state
+        """
+        return self.is_event_active
+    
+    def reset_state(self):
+        """
+        Reset the trigger state to inactive.
+        """
+        self.is_event_active = False
+    
+    def assign_timestamp_id(self, timestamp):
+        """
+        Assign a unique ID to each timestamp.
+        
+        This method ensures each unique timestamp gets a sequential ID.
+        If the timestamp has been seen before, returns the existing ID.
+        If it's a new timestamp, assigns a new incremental ID.
+        
+        Args:
+            timestamp: The timestamp to assign an ID to (datetime or string)
+            
+        Returns:
+            int: Unique ID for the timestamp
+        """
+        # Handle None or invalid timestamp
+        if timestamp is None:
+            return 0
+        
+        # Convert timestamp to string key for consistent mapping
+        try:
+            if hasattr(timestamp, 'isoformat'):
+                # Handle datetime objects
+                timestamp_key = timestamp.isoformat()
+            else:
+                # Handle string timestamps or other formats
+                timestamp_key = str(timestamp)
+        except (AttributeError, TypeError):
+            # Fallback for problematic timestamps
+            timestamp_key = str(timestamp)
+        
+        # Check if we've already assigned an ID to this timestamp
+        if timestamp_key in self.timestamp_id_map:
+            return self.timestamp_id_map[timestamp_key]
+        
+        # Assign new ID (increment counter)
+        self.timestamp_counter += 1
+        new_id = self.timestamp_counter
+        
+        # Store the mapping
+        self.timestamp_id_map[timestamp_key] = new_id
+        
+        return new_id
+    
+    def get_timestamp_id(self, timestamp):
+        """
+        Get the ID for a specific timestamp without creating a new one.
+        
+        Args:
+            timestamp: The timestamp to look up
+            
+        Returns:
+            int or None: ID if timestamp exists, None if not found
+        """
+        if timestamp is None:
+            return None
+        
+        try:
+            if hasattr(timestamp, 'isoformat'):
+                timestamp_key = timestamp.isoformat()
+            else:
+                timestamp_key = str(timestamp)
+        except (AttributeError, TypeError):
+            timestamp_key = str(timestamp)
+        
+        return self.timestamp_id_map.get(timestamp_key)
+    
+    def get_all_timestamp_mappings(self):
+        """
+        Get all timestamp to ID mappings.
+        
+        Returns:
+            dict: Dictionary of timestamp keys to IDs
+        """
+        return self.timestamp_id_map.copy()
+    
+    def reset_timestamp_ids(self):
+        """
+        Reset all timestamp ID assignments and counter.
+        """
+        self.timestamp_counter = 0
+        self.timestamp_id_map.clear()
+        self.id_state_map.clear()
+    
+    def assign_state_to_timestamp_id(self, timestamp_id, event_state):
+        """
+        Assign an event state to a specific timestamp ID.
+        
+        This method maps timestamp IDs to their corresponding event states,
+        allowing tracking of which timestamps have active MD events.
+        
+        Args:
+            timestamp_id (int): The timestamp ID to assign state to
+            event_state (bool): The event state (True for active, False for inactive)
+            
+        Returns:
+            bool: The assigned event state
+        """
+        # Validate inputs
+        if timestamp_id is None:
+            return False
+        
+        try:
+            # Ensure timestamp_id is integer
+            id_val = int(timestamp_id)
+            
+            # Ensure event_state is boolean
+            if isinstance(event_state, bool):
+                state_val = event_state
+            else:
+                # Convert to boolean (non-zero/non-empty = True)
+                state_val = bool(event_state)
+            
+            # Store the mapping
+            self.id_state_map[id_val] = state_val
+            
+            return state_val
+            
+        except (ValueError, TypeError):
+            # Handle conversion errors
+            return False
+    
+    def get_state_for_timestamp_id(self, timestamp_id):
+        """
+        Get the event state for a specific timestamp ID.
+        
+        Args:
+            timestamp_id (int): The timestamp ID to look up
+            
+        Returns:
+            bool or None: Event state if ID exists, None if not found
+        """
+        if timestamp_id is None:
+            return None
+        
+        try:
+            id_val = int(timestamp_id)
+            return self.id_state_map.get(id_val)
+        except (ValueError, TypeError):
+            return None
+    
+    def process_timestamp_with_state(self, timestamp, md_excess):
+        """
+        Process a timestamp by assigning ID and state in one operation.
+        
+        This is a convenience method that combines timestamp ID assignment,
+        state evaluation, and state-to-ID mapping in a single call.
+        
+        Args:
+            timestamp: The timestamp to process
+            md_excess (float): The MD excess value for state evaluation
+            
+        Returns:
+            dict: Dictionary containing timestamp_id, event_state, and timestamp
+        """
+        # Step 1: Assign unique ID to timestamp
+        timestamp_id = self.assign_timestamp_id(timestamp)
+        
+        # Step 2: Evaluate trigger state based on MD excess
+        event_state = self.evaluate_trigger_state(md_excess)
+        
+        # Step 3: Map the state to the timestamp ID
+        self.assign_state_to_timestamp_id(timestamp_id, event_state)
+        
+        # Return comprehensive result
+        return {
+            'timestamp_id': timestamp_id,
+            'event_state': event_state,
+            'timestamp': timestamp,
+            'md_excess': md_excess
+        }
+    
+    def get_all_id_state_mappings(self):
+        """
+        Get all timestamp ID to state mappings.
+        
+        Returns:
+            dict: Dictionary of timestamp IDs to event states
+        """
+        return self.id_state_map.copy()
+    
+    def get_active_timestamp_ids(self):
+        """
+        Get all timestamp IDs that have active event states.
+        
+        Returns:
+            list: List of timestamp IDs where event_state is True
+        """
+        return [timestamp_id for timestamp_id, state in self.id_state_map.items() if state]
+    
+    def get_inactive_timestamp_ids(self):
+        """
+        Get all timestamp IDs that have inactive event states.
+        
+        Returns:
+            list: List of timestamp IDs where event_state is False
+        """
+        return [timestamp_id for timestamp_id, state in self.id_state_map.items() if not state]
