@@ -1345,6 +1345,104 @@ class SmartConservationDebugger:
             'metadata': metadata
         }
 
+    def get_analysis_function(self, analysis_type):
+        """
+        Registry of available analysis functions for dynamic dispatch.
+        
+        This method serves as the central registry that maps analysis type strings
+        to their corresponding analysis functions. It enables the consolidator
+        function to dynamically select the appropriate analysis method without
+        hardcoding function calls.
+        
+        Args:
+            analysis_type (str): The type of analysis to perform
+                Available types:
+                - 'excess_demand': MD excess demand analysis using MdExcess
+                - 'window_analysis': Tariff window and conservation state analysis  
+                - 'battery_performance': Battery performance analysis (future)
+                - 'tariff_analysis': Tariff optimization analysis (future)
+                
+        Returns:
+            callable: The analysis function corresponding to the requested type
+                     Returns generate_window_analysis_table as default fallback
+        """
+        # Central registry of all available analysis functions
+        registry = {
+            'excess_demand': self.format_excess_demand_analysis,
+            'window_analysis': self.generate_window_analysis_table,
+            # Future analysis functions can be added here without changing V3:
+            # 'battery_performance': self.analyze_battery_performance_for_display,
+            # 'tariff_optimization': self.analyze_tariff_optimization_for_display,
+            # 'conservation_efficiency': self.analyze_conservation_efficiency_for_display,
+            # 'cost_savings': self.analyze_cost_savings_for_display,
+        }
+        
+        # Return requested function or fallback to window analysis
+        return registry.get(analysis_type, self.generate_window_analysis_table)
+
+    def display_any_analysis(self, analysis_type="window_analysis", display_config=None, **kwargs):
+        """
+        Main consolidator function that handles any type of analysis display.
+        
+        This is the single entry point that V3 calls for all analysis display needs.
+        It dynamically selects the appropriate analysis function based on type,
+        then uses the existing orchestrator infrastructure to format and display results.
+        
+        This function ensures that V3 never needs to change - all new analysis types
+        are handled by simply adding new functions to the registry and calling this
+        method with the appropriate analysis_type parameter.
+        
+        Args:
+            analysis_type (str): Type of analysis to perform (default: "window_analysis")
+                - 'excess_demand': Display MD excess demand analysis
+                - 'window_analysis': Display tariff window analysis
+                - Additional types can be added without changing this interface
+            display_config (dict, optional): Display configuration parameters
+                - 'max_rows': Maximum rows to display (default: 10)
+                - 'debug_output': Show debug information (default: True)  
+                - 'show_summary': Include summary statistics (default: True)
+            **kwargs: Additional arguments passed to the analysis function
+                
+        Returns:
+            dict: Complete analysis result with dataframe, summary, and metadata
+                Same format as display_analysis_table() for consistency
+                
+        Examples:
+            # Excess demand analysis
+            result = debugger.display_any_analysis("excess_demand")
+            
+            # Window analysis with custom config
+            result = debugger.display_any_analysis(
+                "window_analysis", 
+                display_config={'max_rows': 20, 'debug_output': False}
+            )
+            
+            # In V3 conservation tab (this never changes):
+            st.dataframe(debugger.display_any_analysis("excess_demand")['dataframe'])
+        """
+        # Step 1: Get the appropriate analysis function from registry
+        analysis_function = self.get_analysis_function(analysis_type)
+        
+        # Step 2: Use existing orchestrator infrastructure to handle everything
+        # This leverages the complete existing architecture:
+        # - prepare_analysis_function_for_display() for function adaptation
+        # - create_dynamic_analysis_table() for dynamic formatting  
+        # - Full error handling and data validation
+        result = self.display_analysis_table(
+            analysis_function=analysis_function,
+            display_config=display_config,
+            **kwargs
+        )
+        
+        # Step 3: Add consolidator metadata for tracking
+        result.update({
+            'requested_analysis_type': analysis_type,
+            'registry_function_used': getattr(analysis_function, '__name__', 'unknown'),
+            'consolidator_version': '1.0'
+        })
+        
+        return result
+
 class MdExcess:
     def __init__(self, config_source):
         """
