@@ -886,7 +886,10 @@ class SmartConservationDebugger:
         # Display configuration debug information if requested
         if config['debug_output']:
             print("🔧 Smart Conservation Debug Analysis - Configuration Check")
-            self.get_target_series_and_power_col_display()
+            target_series = self.controller.get_config_param('target_series', None)
+            power_col = self.controller.get_config_param('power_col', None)
+            print(f"   Target series available: {target_series is not None}")
+            print(f"   Power column: {power_col}")
             print("─" * 60)
         
         # Clear state from any previous analysis runs if requested
