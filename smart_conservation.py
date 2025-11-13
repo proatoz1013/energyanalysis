@@ -1357,7 +1357,8 @@ class SmartConservationDebugger:
         Args:
             analysis_type (str): The type of analysis to perform
                 Available types:
-                - 'excess_demand': MD excess demand analysis using MdExcess
+                - 'excess_demand': MD excess demand analysis using analyze_md_excess_demand
+                - 'md_excess_demand': MD excess demand analysis using analyze_md_excess_demand
                 - 'window_analysis': Tariff window and conservation state analysis  
                 - 'battery_performance': Battery performance analysis (future)
                 - 'tariff_analysis': Tariff optimization analysis (future)
@@ -1368,7 +1369,7 @@ class SmartConservationDebugger:
         """
         # Central registry of all available analysis functions
         registry = {
-            'excess_demand': self.format_excess_demand_analysis,
+            'excess_demand': self.analyze_md_excess_demand,
             'md_excess_demand': self.analyze_md_excess_demand,
             'window_analysis': self.generate_window_analysis_table,
             # Future analysis functions can be added here without changing V3:
@@ -1409,7 +1410,7 @@ class SmartConservationDebugger:
                 Same format as display_analysis_table() for consistency
                 
         Examples:
-            # Excess demand analysis
+            # Excess demand analysis - now uses analyze_md_excess_demand
             result = debugger.display_any_analysis("excess_demand")
             
             # Window analysis with custom config
