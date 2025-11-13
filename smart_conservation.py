@@ -262,6 +262,8 @@ class _MdEventState:
     below_trigger_count: int = 0
     event_id: int = 0
     max_excess_kw: float = 0.0
+    severity_score: float = 0.0
+    event_active: bool = False
     max_severity: float = 0.0
     total_discharged_kwh: float = 0.0
     entered_conservation: bool = False
@@ -2439,5 +2441,127 @@ class TriggerEvents:
             'trigger_threshold_kw': self.trigger_threshold_kw
         }
 
-#TO-DO: Verify the size of monthly targets and refer to how excess is calculated in v3
-#TO-DO: streamline debugging feature (discuss best practice with ChatGPT)
+class MdWindowType:
+    """
+    Utility class for MD window status checking.
+    
+    This class provides simplified methods to check if timestamps fall within
+    MD windows using the existing comprehensive _check_tariff_window_conditions method.
+    """
+    
+    def __init__(self, controller):
+        """
+        Initialize MdWindowType with a controller instance.
+        
+        Args:
+            controller (MdShavingController): Controller instance with _check_tariff_window_conditions method
+        """
+        self.controller = controller
+    
+    def check_md_window_status(self, df_sim=None):
+        """
+        Check MD window status for all timestamps in df_sim using existing _check_tariff_window_conditions.
+        
+        This method provides a simple wrapper around the comprehensive _check_tariff_window_conditions
+        method, returning just the MD window state (True/False) for each timestamp in df_sim.
+        
+        Args:
+            df_sim (pd.DataFrame, optional): DataFrame with timestamps to check
+                                           Uses controller's df_sim if None
+                                           
+        Returns:
+            pd.Series: Boolean series indicating MD window status for each timestamp
+                      True = inside MD window, False = outside MD window
+                      
+        Example:
+            md_window = MdWindowType(controller)
+            window_status = md_window.check_md_window_status()
+            print(f"Timestamps in MD window: {window_status.sum()}")
+        """
+        # Use provided df_sim or get from controller
+        if df_sim is None:
+            df_sim = self.controller.df_sim
+        
+        if df_sim is None or df_sim.empty:
+            return pd.Series(dtype=bool, name='inside_md_window')
+        
+        # Check MD window status for each timestamp
+        md_window_status = []
+        for timestamp in df_sim.index:
+            try:
+                # Call existing comprehensive method
+                window_conditions = self.controller._check_tariff_window_conditions(timestamp)
+                
+                # Extract just the MD window boolean
+                inside_md_window = window_conditions.get('inside_md_window', False)
+                md_window_status.append(inside_md_window)
+                
+            except Exception:
+                # Default to False if checking fails
+                md_window_status.append(False)
+        
+        # Return as pandas Series with same index as df_sim
+        return pd.Series(md_window_status, index=df_sim.index, name='inside_md_window')
+    
+    def set_event_status(self, current_timestamp, event_state, controller_state):
+        """
+        Set event status based on MD window conditions, overriding previous event active logic.
+        
+        This method calls check_md_window_status to determine if the current timestamp
+        is inside an MD window. If not inside MD window, it sets event_state.active = False
+        to override previous event logic that doesn't consider tariff or MD window conditions.
+        
+        Args:
+            current_timestamp (datetime): Current timestamp to check
+            event_state (_MdEventState): Event state object to modify
+            controller_state (_MdControllerState): Controller state for event management
+            
+        Returns:
+            dict: Summary of event status actions performed
+        """
+        try:
+            # Check if current timestamp is inside MD window
+            window_conditions = self.controller._check_tariff_window_conditions(current_timestamp)
+            inside_md_window = window_conditions.get('inside_md_window', False)
+            
+            if not inside_md_window:
+                # Not inside MD window - override event active logic
+                event_state.active = False
+                event_state.severity_score = 0.0
+                controller_state.mode = MdShavingMode.IDLE
+                
+                return {
+                    'action': 'event_deactivated',
+                    'reason': 'outside_md_window',
+                    'timestamp': current_timestamp,
+                    'inside_md_window': False,
+                    'event_active': event_state.active,
+                    'severity_score': event_state.severity_score,
+                    'controller_mode': controller_state.mode.value,
+                    'window_conditions': window_conditions
+                }
+                
+            else:
+                # Inside MD window - reset severity and set controller mode
+                
+ 
+                return {
+                    'action': 'no_override',
+                    'reason': 'inside_md_window', 
+                    'timestamp': current_timestamp,
+                    'inside_md_window': True,
+                    'event_active': event_state.active,
+                    'window_conditions': window_conditions
+                }
+                
+        except Exception as e:
+            # Default to deactivating event if window check fails
+            event_state.active = False
+            
+            return {
+                'action': 'event_deactivated',
+                'reason': 'window_check_failed',
+                'timestamp': current_timestamp,
+                'error': str(e),
+                'event_active': event_state.active
+            }
