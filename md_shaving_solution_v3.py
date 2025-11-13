@@ -344,7 +344,7 @@ def _generate_monthly_summary_table(all_monthly_events, selected_tariff, holiday
     return df_summary
 
 
-def _collect_smart_conservation_config(df_for_v1, power_col, monthly_targets, interval_hours, selected_tariff,
+def _collect_smart_conservation_config(df_for_v1, power_col, target_series, interval_hours, selected_tariff,
                                 battery_params, battery_sizing, total_battery_capacity, soc_threshold, 
                                 battery_kw_conserved, conservation_enabled, conservation_dates, 
                                 conservation_day_type, holidays, prediction_horizon, conservation_aggressiveness):
@@ -357,7 +357,7 @@ def _collect_smart_conservation_config(df_for_v1, power_col, monthly_targets, in
     Args:
         df_for_v1: V1-compatible demand dataframe
         power_col: Column name containing power demand
-        monthly_targets: Array/series of MD targets
+        target_series: Array/series of MD targets
         interval_hours: Timestep resolution in hours
         selected_tariff: Tariff config dictionary
         battery_params: Dictionary with efficiency, DOD, etc.
@@ -381,7 +381,7 @@ def _collect_smart_conservation_config(df_for_v1, power_col, monthly_targets, in
         # Load & target context
         "df_sim": df_for_v1,                    # Demand dataframe (V1-compatible)
         "power_col": power_col,                 # Column name containing power demand
-        "monthly_targets": monthly_targets,     # Array/series of MD targets
+        "target_series": target_series,     # Array/series of MD targets
         "interval_hours": interval_hours,       # Timestep resolution in hours
         "selected_tariff": selected_tariff,     # Tariff config dictionary
         
@@ -440,7 +440,7 @@ def get_current_smart_conservation_config():
                 "power_col": st.session_state.power_column,
                 "selected_tariff": st.session_state.selected_tariff,
                 "interval_hours": getattr(st.session_state, 'data_interval_hours', 0.25),
-                "monthly_targets": getattr(st.session_state, 'monthly_targets', None),
+                "target_series": getattr(st.session_state, 'target_series', None),
                 "battery_params": getattr(st.session_state, 'battery_params', {}),
                 "battery_sizing": getattr(st.session_state, 'battery_sizing', {}),
                 "battery_capacity": getattr(st.session_state, 'total_battery_capacity', 0),
@@ -2831,12 +2831,20 @@ def _render_v2_peak_events_timeline(df, power_col, selected_tariff, holidays, ta
                             # =====================================================================
                             # 1. COLLECT ALL VARIABLES FOR SMART CONSERVATION
                             # =====================================================================
+                            # Create target_series from monthly_targets for smart conservation
+                            if 'monthly_targets' in locals() and monthly_targets is not None and not monthly_targets.empty:
+                                target_series = _create_v2_dynamic_target_series(df_for_v1.index, monthly_targets)
+                            else:
+                                # Fallback: create a default target series
+                                default_target = df_for_v1[power_col].quantile(0.8) if power_col in df_for_v1.columns else 1000.0
+                                target_series = pd.Series(index=df_for_v1.index, data=default_target)
+
                             
                             # Collect all available variables for SmartConservation module initialization
                             smart_conservation_config = _collect_smart_conservation_config(
                                 df_for_v1=df_for_v1,
                                 power_col=power_col,
-                                monthly_targets=monthly_targets,
+                                target_series=target_series,
                                 interval_hours=interval_hours,
                                 selected_tariff=selected_tariff,
                                 battery_params=battery_params,
@@ -3161,7 +3169,7 @@ def render_smart_conservation_debug_analysis():
     
     try:
         # Import Smart Conservation classes
-        from smart_conservation import SmartConservationDebugger, MdShavingController
+        from smart_conservation import SmartConservationDebugger, MdShavingController, MdExcess
         
         # Create controller with simulation data
         df_sim = config.get('df_sim')
@@ -3202,10 +3210,12 @@ def render_smart_conservation_debug_analysis():
         
         with st.spinner("Generating Smart Conservation window analysis..."):
             # Get DataFrame and analysis data
-            analysis_data = debugger.display_window_analysis_table(
-                df_sim=df_sim,
-                show_summary=show_summary,
-                max_rows=max_rows
+            analysis_data = debugger.analyze_md_excess_demand(
+                display_config={
+                    'max_rows': max_rows,
+                    'show_summary': show_summary,
+                    'debug_output': True
+                }
             )
             
             # Check if we have valid data
@@ -3299,44 +3309,6 @@ def render_smart_conservation_debug_analysis():
             - **Off-Peak (50% SOC Reserve)**: Balanced approach outside MD windows
             """)
             
-        # Display monthly_targets and power_col dimensions
-        st.markdown("#### 📊 Configuration Data Dimensions")
-        try:
-            dimension_data = debugger.get_monthly_targets_and_power_col_display()
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("**Power Column Information:**")
-                pc_info = dimension_data['power_col']
-                st.write(f"Type: {pc_info['type']}")
-                st.write(f"Length: {pc_info['length']}")
-                if pc_info['string_length'] > 0:
-                    st.write(f"String Length: {pc_info['string_length']} characters")
-                st.write(f"Configured: {'✅ Yes' if pc_info['is_configured'] else '❌ No'}")
-            
-            with col2:
-                st.markdown("**Monthly Targets Information:**")
-                mt_info = dimension_data['monthly_targets']
-                st.write(f"Type: {mt_info['type']}")
-                st.write(f"Shape: {mt_info['shape']}")
-                st.write(f"Rows: {mt_info['rows']}")
-                st.write(f"Columns: {mt_info['columns']}")
-                st.write(f"Total Size: {mt_info['length']}")
-                st.write(f"Configured: {'✅ Yes' if mt_info['is_configured'] else '❌ No'}")
-            
-            # Summary status
-            summary = dimension_data['summary']
-            if summary['both_configured']:
-                st.success("✅ Both power_col and monthly_targets are properly configured")
-            elif summary['power_col_configured'] or summary['monthly_targets_configured']:
-                st.warning("⚠️ Partial configuration detected - some components may be missing")
-            else:
-                st.error("❌ Neither power_col nor monthly_targets are configured")
-                
-        except Exception as e:
-            st.error(f"❌ Failed to display configuration dimensions: {str(e)}")
-
         
     except ImportError as e:
         st.error(f"❌ Smart Conservation module import failed: {str(e)}")
