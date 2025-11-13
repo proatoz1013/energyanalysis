@@ -1826,7 +1826,7 @@ class SmartConservationDebugger:
                 }
             
             # Process historical events using TriggerEvents
-            trigger_events = TriggerEvents()
+            trigger_events = MdOrchestrator()
             enhanced_df = trigger_events.process_historical_events(config_data)
             
             # Convert enhanced dataframe to display format
@@ -2153,81 +2153,6 @@ class TriggerEvents:
         """
         self.trigger_threshold_kw = trigger_threshold_kw
     
-    def process_historical_events(self, config_data):
-        """
-        Process entire df_sim dataset to classify each timestamp as event/non-event.
-        
-        This method processes the complete historical dataset using the simplified logic:
-        - Trigger = target_series (monthly target) 
-        - Event = any timestamp where MD excess > 0
-        - Assigns sequential event IDs to continuous event periods
-        
-        Args:
-            config_data (dict): Configuration containing df_sim, power_col, target_series
-            
-        Returns:
-            pd.DataFrame: Enhanced dataset with event classification columns:
-                - 'excess_demand_kw': calculated excess (current_power - target)
-                - 'is_event': boolean event classification (excess > 0)
-                - 'event_id': sequential event ID (0 for non-events)
-                - 'event_start': boolean marking start of new events
-                - 'event_duration': minutes since event started
-        """
-        import pandas as pd
-        
-        # Extract required data from config
-        df_sim = config_data['df_sim'].copy()
-        
-        # Use existing MdExcess method to calculate excess demand
-        md_excess = MdExcess(config_data)
-        excess_demand = md_excess.calculate_excess_demand()
-        
-        # Add excess demand to the dataframe
-        df_sim['excess_demand_kw'] = excess_demand
-        
-        # Classify events: excess > 0 means event
-        df_sim['is_event'] = df_sim['excess_demand_kw'] > 0
-        
-        # Initialize event tracking columns
-        df_sim['event_id'] = 0
-        df_sim['event_start'] = False
-        df_sim['event_duration'] = 0.0
-        
-        # Use existing methods for event processing
-        event_state = _MdEventState()
-        controller_state = _MdControllerState()
-        
-        # Process each timestamp using existing event management methods
-        for i in range(len(df_sim)):
-            current_row = df_sim.iloc[i]
-            current_timestamp = current_row.name
-            is_event = current_row['is_event']
-            
-            if is_event and not event_state.active:
-                # Start new event using existing method
-                event_result = self.start_event(event_state, controller_state, current_timestamp)
-                df_sim.iloc[i, df_sim.columns.get_loc('event_start')] = True
-                df_sim.iloc[i, df_sim.columns.get_loc('event_duration')] = 0.0
-                
-            elif is_event and event_state.active:
-                # Continue existing event - calculate duration
-                if event_state.start_time:
-                    time_diff = current_timestamp - event_state.start_time
-                    event_state.duration_minutes = time_diff.total_seconds() / 60.0
-                    df_sim.iloc[i, df_sim.columns.get_loc('event_duration')] = event_state.duration_minutes
-                df_sim.iloc[i, df_sim.columns.get_loc('event_start')] = False
-                
-            else:
-                # Not an event - reset state
-                event_state.active = False
-                df_sim.iloc[i, df_sim.columns.get_loc('event_start')] = False
-                df_sim.iloc[i, df_sim.columns.get_loc('event_duration')] = 0.0
-            
-            # Assign event ID (0 for non-events)
-            df_sim.iloc[i, df_sim.columns.get_loc('event_id')] = event_state.event_id if is_event else 0
-        
-        return df_sim
-    
     def update_trigger_counters(self, smoothed_excess_kw, event_state):
         """
         Update trigger counters based on smoothed excess demand level.
@@ -2503,7 +2428,7 @@ class MdWindowType:
         # Return as pandas Series with same index as df_sim
         return pd.Series(md_window_status, index=df_sim.index, name='inside_md_window')
     
-    def set_event_status(self, current_timestamp, event_state, controller_state):
+    def severity_score(self, current_timestamp, event_state, controller_state):
         """
         Set event status based on MD window conditions, overriding previous event active logic.
         
@@ -2511,6 +2436,7 @@ class MdWindowType:
         is inside an MD window. If not inside MD window, it sets event_state.active = False
         to override previous event logic that doesn't consider tariff or MD window conditions.
         
+        If active_event is active, it calculates severity score based on formula:
         Args:
             current_timestamp (datetime): Current timestamp to check
             event_state (_MdEventState): Event state object to modify
@@ -2543,7 +2469,33 @@ class MdWindowType:
                 
             else:
                 # Inside MD window - reset severity and set controller mode
+                # calculate severity score using active_event method
+                # w1*excess_diff + w2*event_duration_score + w3*tightness_value
+                # for now, w1, w2 are 1 and w3 is 2
+                # assign weights as variables for easy tuning later
+                # return severity score and other relevant data
                 
+
+                active_event_data = self.active_event()
+                battery_excess_diff = active_event_data.get('battery_excess_difference_kw', 0.0)
+                tightness_value = active_event_data.get('tightness_value', 0.5)
+
+                # Calculate severity score: w1*excess_diff + w2*event_duration_score + w3*tightness_value
+                # Assign weights as variables for easy tuning later
+                w1 = 1.0  # Weight for excess difference
+                w2 = 1.0  # Weight for event duration
+                w3 = 2.0  # Weight for tightness value
+                
+                # Get event duration and normalize to score (0-1 range)
+                event_duration_minutes = active_event_data.get('event_duration_minutes', 0)
+                event_duration_score = min(event_duration_minutes / 60.0, 1.0)  # Normalize to hour, cap at 1.0
+                
+                # Calculate severity score
+                severity_score = w1 * battery_excess_diff + w2 * event_duration_score + w3 * tightness_value
+                
+                # Update event state with calculated severity
+                event_state.severity_score = severity_score
+                controller_state.mode = MdShavingMode.IDLE
  
                 return {
                     'action': 'no_override',
@@ -2551,6 +2503,12 @@ class MdWindowType:
                     'timestamp': current_timestamp,
                     'inside_md_window': True,
                     'event_active': event_state.active,
+                    'severity_score': event_state.severity_score,
+                    'controller_mode': controller_state.mode.value,
+                    'battery_excess_difference_kw': battery_excess_diff,
+                    'event_duration_minutes': event_duration_minutes,
+                    'tightness_value': tightness_value,
+                    'active_event_data': active_event_data,
                     'window_conditions': window_conditions
                 }
                 
@@ -2584,6 +2542,10 @@ class MdWindowType:
         battery_kw_conserved = self.controller.get_config_param('battery_kw_conserved', 0.0)
         
         # Calculate current excess demand using existing MdExcess method
+                #compare current excess to battery capacity and cap to a reasonable upperbound
+                #compare event duration against a chosen worrying duration threshold L_ref
+                #cap event duration score to a reasonable upperbound (~1.0 so very long doesn't dominate)
+                #SOC tightness between 0-1.0, where 0 is comfortable and 1 is at or below reserve
         try:
             config_data = self.controller.config_data
             if config_data:
@@ -2596,7 +2558,17 @@ class MdWindowType:
             current_excess = 0.0
         
         # Calculate difference between battery capacity and current excess
-        battery_excess_difference = battery_kw_conserved - current_excess
+        raw_battery_excess_difference = battery_kw_conserved - current_excess
+        
+        # Normalize battery excess difference to 0-1 range for severity score
+        # Positive difference (battery can handle excess) -> lower severity (closer to 0)
+        # Negative difference (excess exceeds battery) -> higher severity (closer to 1)
+        if raw_battery_excess_difference >= 0:
+            # Battery can handle the excess - lower severity
+            battery_excess_difference = max(0.0, 1.0 - (raw_battery_excess_difference / max(battery_kw_conserved, 1.0)))
+        else:
+            # Excess exceeds battery capacity - higher severity, capped at 1.0
+            battery_excess_difference = min(1.0, 0.5 + abs(raw_battery_excess_difference) / max(battery_kw_conserved, 1.0))
         
         # Retrieve active event duration from controller state
         event_state = getattr(self.controller.state, 'event', None)
@@ -2622,9 +2594,112 @@ class MdWindowType:
         return {
             'battery_max_discharge_kw': battery_kw_conserved,
             'current_excess_demand_kw': current_excess,
+            'raw_battery_excess_difference_kw': raw_battery_excess_difference,
             'battery_excess_difference_kw': battery_excess_difference,
             'event_duration_minutes': event_duration_minutes,
             'battery_soc_percent': current_soc,
             'soc_tightness': soc_tightness,
             'tightness_value': tightness_value
         } 
+
+class MdOrchestrator:
+
+    """
+    Orchestrator for MD excess demand event analysis.
+
+    This class compiles event status data and computes summary statistics. 
+
+    SmartConservationDebugger calls from here to display data on v3.
+
+    """
+    def process_historical_events(self, config_data):
+        """
+        Process entire df_sim dataset to classify each timestamp as event/non-event.
+        
+        This method processes the complete historical dataset using the simplified logic:
+        - Trigger = target_series (monthly target) 
+        - Event = any timestamp where MD excess > 0
+        - Assigns sequential event IDs to continuous event periods
+        
+        Args:
+            config_data (dict): Configuration containing df_sim, power_col, target_series
+            
+        Returns:
+            pd.DataFrame: Enhanced dataset with event classification columns:
+                - 'excess_demand_kw': calculated excess (current_power - target)
+                - 'is_event': boolean event classification (excess > 0)
+                - 'event_id': sequential event ID (0 for non-events)
+                - 'event_start': boolean marking start of new events
+                - 'event_duration': minutes since event started
+        """
+        import pandas as pd
+        
+        # Extract required data from config
+        df_sim = config_data['df_sim'].copy()
+        
+        # Use existing MdExcess method to calculate excess demand
+        md_excess = MdExcess(config_data)
+        excess_demand = md_excess.calculate_excess_demand()
+        
+        # Add excess demand to the dataframe
+        df_sim['excess_demand_kw'] = excess_demand
+        
+        # Classify events: excess > 0 means event
+        df_sim['is_event'] = df_sim['excess_demand_kw'] > 0
+        
+        # Initialize event tracking columns
+        df_sim['event_id'] = 0
+        df_sim['event_start'] = False
+        df_sim['event_duration'] = 0.0
+        
+        # Use existing methods for event processing
+        event_state = _MdEventState()
+        controller_state = _MdControllerState()
+        
+        # Process each timestamp using existing event management methods
+        for i in range(len(df_sim)):
+            current_row = df_sim.iloc[i]
+            current_timestamp = current_row.name
+            is_event = current_row['is_event']
+            
+            if is_event and not event_state.active:
+                # Start new event using existing method
+                event_result = self.start_event(event_state, controller_state, current_timestamp)
+                df_sim.iloc[i, df_sim.columns.get_loc('event_start')] = True
+                df_sim.iloc[i, df_sim.columns.get_loc('event_duration')] = 0.0
+                
+            elif is_event and event_state.active:
+                # Continue existing event - calculate duration
+                if event_state.start_time:
+                    time_diff = current_timestamp - event_state.start_time
+                    event_state.duration_minutes = time_diff.total_seconds() / 60.0
+                    df_sim.iloc[i, df_sim.columns.get_loc('event_duration')] = event_state.duration_minutes
+                df_sim.iloc[i, df_sim.columns.get_loc('event_start')] = False
+                
+            else:
+                # Not an event - reset state
+                event_state.active = False
+                df_sim.iloc[i, df_sim.columns.get_loc('event_start')] = False
+                df_sim.iloc[i, df_sim.columns.get_loc('event_duration')] = 0.0
+            
+            # Assign event ID (0 for non-events)
+            df_sim.iloc[i, df_sim.columns.get_loc('event_id')] = event_state.event_id if is_event else 0
+        
+        return df_sim
+       
+    def compute_severity_score(self):
+        """
+        Compute severity score for MD excess demand events.
+
+        Passes df_sim through MdWindowType to get severity scores.
+
+        Calls severity_score method for each timestamp.
+
+        Returns:
+            df_sim with severity scores added.
+        """
+        # Placeholder implementation
+        return {
+            'max_severity_score': 0.0,
+            'avg_severity_score': 0.0
+        }
