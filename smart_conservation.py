@@ -2555,13 +2555,76 @@ class MdWindowType:
                 }
                 
         except Exception as e:
+
             # Default to deactivating event if window check fails
             event_state.active = False
             
             return {
+
                 'action': 'event_deactivated',
                 'reason': 'window_check_failed',
                 'timestamp': current_timestamp,
                 'error': str(e),
                 'event_active': event_state.active
             }
+        
+    def active_event(self):
+        """
+        Retrieve battery maximum discharge capacity and calculate difference with current excess. 
+        Return as a variable for use in conservation logic. 
+
+        Retrieve active event duration and store as an integer. 
+
+        Retrieve battery SOC and assign a tightness value.
+
+        Return a dictionary with these values.
+        """
+        # Get battery capacity from controller configuration
+        battery_capacity = self.controller.get_config_param('battery_capacity', 0.0)
+        battery_kw_conserved = self.controller.get_config_param('battery_kw_conserved', 0.0)
+        
+        # Calculate current excess demand using existing MdExcess method
+        try:
+            config_data = self.controller.config_data
+            if config_data:
+                md_excess = MdExcess(config_data)
+                excess_demand = md_excess.calculate_excess_demand()
+                current_excess = excess_demand.iloc[-1] if not excess_demand.empty else 0.0
+            else:
+                current_excess = 0.0
+        except Exception:
+            current_excess = 0.0
+        
+        # Calculate difference between battery capacity and current excess
+        battery_excess_difference = battery_kw_conserved - current_excess
+        
+        # Retrieve active event duration from controller state
+        event_state = getattr(self.controller.state, 'event', None)
+        if event_state and hasattr(event_state, 'duration_minutes'):
+            event_duration_minutes = int(event_state.duration_minutes)
+        else:
+            event_duration_minutes = 0
+        
+        # Retrieve battery SOC and assign tightness value
+        # SOC tightness: High SOC = loose (0.8-1.0), Medium SOC = moderate (0.4-0.6), Low SOC = tight (0.0-0.3)
+        current_soc = self.controller.get_config_param('battery_soc_percent', 50.0)  # Default 50%
+        
+        if current_soc >= 80.0:
+            soc_tightness = 'loose'
+            tightness_value = 0.9
+        elif current_soc >= 40.0:
+            soc_tightness = 'moderate'
+            tightness_value = 0.5
+        else:
+            soc_tightness = 'tight'
+            tightness_value = 0.2
+        
+        return {
+            'battery_max_discharge_kw': battery_kw_conserved,
+            'current_excess_demand_kw': current_excess,
+            'battery_excess_difference_kw': battery_excess_difference,
+            'event_duration_minutes': event_duration_minutes,
+            'battery_soc_percent': current_soc,
+            'soc_tightness': soc_tightness,
+            'tightness_value': tightness_value
+        } 
