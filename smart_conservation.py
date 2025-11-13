@@ -1464,7 +1464,7 @@ class SmartConservationDebugger:
         Args:
             display_config (dict, optional): Display configuration parameters
                 - 'max_rows': Maximum rows to display (default: 10)
-                - 'debug_output': Show debug information (default: False)
+                - 'debug_output': Show debug information (default: True)
                 - 'show_summary': Include summary statistics (default: True)
                 
         Returns:
@@ -1487,16 +1487,23 @@ class SmartConservationDebugger:
         # Set default display configuration
         config = {
             'max_rows': 10,
-            'debug_output': False,  # Less verbose for this specific analysis
+            'debug_output': True,  # ✅ ENABLE DEBUG for troubleshooting
             'show_summary': True
         }
         if display_config:
             config.update(display_config)
         
         try:
-            # Step 1: Get configuration data from controller
+            # 🔍 DEBUG CHECKPOINT 1: Configuration data
             config_data = self.controller.config_data
+            if config['debug_output']:
+                print(f"🔍 DEBUG 1: config_data available: {config_data is not None}")
+                if config_data:
+                    print(f"   config_data keys: {list(config_data.keys())}")
+            
             if not config_data:
+                if config['debug_output']:
+                    print("❌ FAILURE: No configuration data available in controller")
                 return {
                     'dataframe': pd.DataFrame(),
                     'summary': {'error': 'No configuration data available in controller'},
@@ -1505,23 +1512,45 @@ class SmartConservationDebugger:
                     'display_config': config
                 }
             
-            # Step 2: Create MdExcess instance and calculate excess demand
+            # 🔍 DEBUG CHECKPOINT 2: MdExcess instantiation
+            if config['debug_output']:
+                print(f"🔍 DEBUG 2: Creating MdExcess instance...")
+            
             md_excess = MdExcess(config_data)
+            
+            if config['debug_output']:
+                print(f"   MdExcess created successfully: {md_excess is not None}")
+            
+            # 🔍 DEBUG CHECKPOINT 3: Calculate excess demand
+            if config['debug_output']:
+                print(f"🔍 DEBUG 3: Calling calculate_excess_demand()...")
+            
             excess_demand = md_excess.calculate_excess_demand()
             
             if config['debug_output']:
-                print(f"🔍 MD Excess Analysis - Calculated excess for {len(excess_demand)} timestamps")
-                print(f"   Max excess: {excess_demand.max():.2f} kW")
-                print(f"   Events with excess: {(excess_demand > 0).sum()}")
+                print(f"   Excess demand calculated: {excess_demand is not None}")
+                if excess_demand is not None:
+                    print(f"   Excess demand length: {len(excess_demand)}")
+                    print(f"   Max excess: {excess_demand.max():.2f} kW")
+                    print(f"   Events with excess: {(excess_demand > 0).sum()}")
             
-            # Step 3: Use existing format_excess_demand_analysis to format the data
-            # This method will automatically get current_demand from df_sim and use our calculated excess_demand
+            # 🔍 DEBUG CHECKPOINT 4: Format the data
+            if config['debug_output']:
+                print(f"🔍 DEBUG 4: Calling format_excess_demand_analysis()...")
+            
             formatted_result = self.format_excess_demand_analysis(
                 excess_demand=excess_demand
             )
             
+            if config['debug_output']:
+                print(f"   Formatting result: {formatted_result is not None}")
+                if formatted_result:
+                    print(f"   Formatted data length: {len(formatted_result.get('data', []))}")
+            
             # Check if formatting was successful
             if not formatted_result['data']:
+                if config['debug_output']:
+                    print("❌ FAILURE: Formatting failed - no data")
                 return {
                     'dataframe': pd.DataFrame(),
                     'summary': formatted_result.get('summary', {'error': 'Formatting failed'}),
@@ -1530,13 +1559,21 @@ class SmartConservationDebugger:
                     'display_config': config
                 }
             
-            # Step 4: Use existing display infrastructure to create the table
+            # 🔍 DEBUG CHECKPOINT 5: Create dynamic table
+            if config['debug_output']:
+                print(f"🔍 DEBUG 5: Calling create_dynamic_analysis_table()...")
+            
             table_result = self.create_dynamic_analysis_table(
                 data_records=formatted_result['data'],
                 summary_stats=formatted_result['summary'],
                 metadata=formatted_result['metadata'],
                 max_rows=config['max_rows']
             )
+            
+            if config['debug_output']:
+                print(f"   Table creation result: {table_result is not None}")
+                if table_result:
+                    print(f"   Table rows: {table_result.get('displayed_records', 0)}")
             
             # Step 5: Add method-specific metadata
             table_result.update({
@@ -1554,14 +1591,16 @@ class SmartConservationDebugger:
             })
             
             if config['debug_output']:
-                print(f"✅ Analysis complete - {table_result['displayed_records']} rows displayed")
+                print(f"✅ SUCCESS: Analysis complete - {table_result['displayed_records']} rows displayed")
             
             return table_result
             
         except Exception as e:
             error_message = f'MD excess analysis failed: {str(e)}'
-            if config['debug_output']:
-                print(f"❌ Error in analyze_md_excess_demand: {error_message}")
+            if config.get('debug_output', False):
+                print(f"❌ EXCEPTION in analyze_md_excess_demand: {error_message}")
+                import traceback
+                print(f"   Traceback: {traceback.format_exc()}")
             
             return {
                 'dataframe': pd.DataFrame(),
@@ -1569,7 +1608,8 @@ class SmartConservationDebugger:
                 'metadata': {
                     'error': 'Method execution failed',
                     'analysis_type': 'md_excess_demand',
-                    'exception_type': type(e).__name__
+                    'exception_type': type(e).__name__,
+                    'exception_details': str(e)
                 },
                 'analysis_function': 'analyze_md_excess_demand',
                 'display_config': config
