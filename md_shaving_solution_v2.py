@@ -703,20 +703,11 @@ def _render_battery_selection_dropdown():
                 }
                 df_specs = pd.DataFrame(spec_data)
                 st.dataframe(df_specs, use_container_width=True, hide_index=True)
-                
-                # Store selected battery in session state for use in other parts of the analysis
-                st.session_state.tabled_analysis_selected_battery = {
-                    'id': selected_battery_data['id'],
-                    'spec': battery_spec,
-                    'capacity_kwh': selected_battery_data['capacity_kwh'],
-                    'power_kw': selected_battery_data['power_kw'],
-                    'label': selected_battery_label
-                }
-                
+
                 # Add cost per kWh input for financial calculations
                 st.markdown("**💰 Battery Cost Configuration:**")
                 col1, col2 = st.columns(2)
-                
+
                 with col1:
                     cost_per_kwh = st.number_input(
                         "Battery Cost (RM per kWh):",
@@ -727,15 +718,26 @@ def _render_battery_selection_dropdown():
                         key="battery_cost_per_kwh",
                         help="Enter the estimated cost per kWh for battery investment calculations"
                     )
-                
+
                 with col2:
                     total_battery_cost = selected_battery_data['capacity_kwh'] * cost_per_kwh
                     st.metric("Estimated Battery Cost", f"RM {total_battery_cost:,.0f}")
-                
+
                 # Store cost info in battery data for use in calculations
                 selected_battery_data['cost_per_kwh'] = cost_per_kwh
                 selected_battery_data['total_cost'] = total_battery_cost
-                
+
+                # Store selected battery in session state AFTER cost input to ensure latest values
+                st.session_state.tabled_analysis_selected_battery = {
+                    'id': selected_battery_data['id'],
+                    'spec': battery_spec,
+                    'capacity_kwh': selected_battery_data['capacity_kwh'],
+                    'power_kw': selected_battery_data['power_kw'],
+                    'label': selected_battery_label,
+                    'cost_per_kwh': cost_per_kwh,
+                    'total_cost': total_battery_cost
+                }
+
                 return selected_battery_data
             else:
                 st.info("💡 Select a battery from the dropdown above to view detailed specifications and analysis.")
@@ -921,7 +923,8 @@ def _render_battery_sizing_analysis(max_power_shaving_required, recommended_ener
             md_shaving_percentage = (md_shaved_kw / max_power_shaving_required * 100) if max_power_shaving_required > 0 else 0
 
             # Column 5: Cost of batteries
-            estimated_cost_per_kwh = 1250  # RM per kWh (consistent with main app)
+            # Use the cost from user input in battery selection dropdown, fallback to 1250 if not available
+            estimated_cost_per_kwh = selected_battery.get('cost_per_kwh', 1250)
             total_battery_cost = total_energy_kwh * estimated_cost_per_kwh
             
             # Create analysis table
