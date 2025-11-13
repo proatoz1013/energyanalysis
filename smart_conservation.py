@@ -1369,6 +1369,7 @@ class SmartConservationDebugger:
         # Central registry of all available analysis functions
         registry = {
             'excess_demand': self.format_excess_demand_analysis,
+            'md_excess_demand': self.analyze_md_excess_demand,
             'window_analysis': self.generate_window_analysis_table,
             # Future analysis functions can be added here without changing V3:
             # 'battery_performance': self.analyze_battery_performance_for_display,
@@ -1442,6 +1443,133 @@ class SmartConservationDebugger:
         })
         
         return result
+
+    def analyze_md_excess_demand(self, display_config=None):
+        """
+        Analyze MD excess demand using MdExcess class and display using existing infrastructure.
+        
+        This method demonstrates the complete workflow:
+        1. Creates MdExcess instance from controller configuration
+        2. Calls calculate_excess_demand() to get excess demand data
+        3. Uses existing format_excess_demand_analysis() to format the data
+        4. Uses existing display infrastructure to create the table
+        
+        This is a complete implementation that utilizes all existing methods
+        without creating any redundancy.
+        
+        Args:
+            display_config (dict, optional): Display configuration parameters
+                - 'max_rows': Maximum rows to display (default: 10)
+                - 'debug_output': Show debug information (default: False)
+                - 'show_summary': Include summary statistics (default: True)
+                
+        Returns:
+            dict: Complete analysis result with dataframe, summary, and metadata
+                Same format as display_analysis_table() for consistency
+                
+        Examples:
+            # Basic usage
+            result = debugger.analyze_md_excess_demand()
+            
+            # With custom configuration
+            result = debugger.analyze_md_excess_demand(
+                display_config={'max_rows': 20, 'debug_output': False}
+            )
+            
+            # Display the result in Streamlit
+            st.dataframe(result['dataframe'])
+            st.json(result['summary'])
+        """
+        # Set default display configuration
+        config = {
+            'max_rows': 10,
+            'debug_output': False,  # Less verbose for this specific analysis
+            'show_summary': True
+        }
+        if display_config:
+            config.update(display_config)
+        
+        try:
+            # Step 1: Get configuration data from controller
+            config_data = self.controller.config_data
+            if not config_data:
+                return {
+                    'dataframe': pd.DataFrame(),
+                    'summary': {'error': 'No configuration data available in controller'},
+                    'metadata': {'error': 'Missing configuration', 'analysis_type': 'md_excess_demand'},
+                    'analysis_function': 'analyze_md_excess_demand',
+                    'display_config': config
+                }
+            
+            # Step 2: Create MdExcess instance and calculate excess demand
+            md_excess = MdExcess(config_data)
+            excess_demand = md_excess.calculate_excess_demand()
+            
+            if config['debug_output']:
+                print(f"🔍 MD Excess Analysis - Calculated excess for {len(excess_demand)} timestamps")
+                print(f"   Max excess: {excess_demand.max():.2f} kW")
+                print(f"   Events with excess: {(excess_demand > 0).sum()}")
+            
+            # Step 3: Use existing format_excess_demand_analysis to format the data
+            # This method will automatically get current_demand from df_sim and use our calculated excess_demand
+            formatted_result = self.format_excess_demand_analysis(
+                excess_demand=excess_demand
+            )
+            
+            # Check if formatting was successful
+            if not formatted_result['data']:
+                return {
+                    'dataframe': pd.DataFrame(),
+                    'summary': formatted_result.get('summary', {'error': 'Formatting failed'}),
+                    'metadata': formatted_result.get('metadata', {'error': 'No formatted data'}),
+                    'analysis_function': 'analyze_md_excess_demand',
+                    'display_config': config
+                }
+            
+            # Step 4: Use existing display infrastructure to create the table
+            table_result = self.create_dynamic_analysis_table(
+                data_records=formatted_result['data'],
+                summary_stats=formatted_result['summary'],
+                metadata=formatted_result['metadata'],
+                max_rows=config['max_rows']
+            )
+            
+            # Step 5: Add method-specific metadata
+            table_result.update({
+                'analysis_function': 'analyze_md_excess_demand',
+                'md_excess_used': True,
+                'excess_calculation_method': 'MdExcess.calculate_excess_demand',
+                'display_config': config,
+                'workflow_steps': [
+                    'Created MdExcess instance',
+                    'Called calculate_excess_demand()',
+                    'Used format_excess_demand_analysis()',
+                    'Used create_dynamic_analysis_table()',
+                    'Added metadata and returned result'
+                ]
+            })
+            
+            if config['debug_output']:
+                print(f"✅ Analysis complete - {table_result['displayed_records']} rows displayed")
+            
+            return table_result
+            
+        except Exception as e:
+            error_message = f'MD excess analysis failed: {str(e)}'
+            if config['debug_output']:
+                print(f"❌ Error in analyze_md_excess_demand: {error_message}")
+            
+            return {
+                'dataframe': pd.DataFrame(),
+                'summary': {'error': error_message},
+                'metadata': {
+                    'error': 'Method execution failed',
+                    'analysis_type': 'md_excess_demand',
+                    'exception_type': type(e).__name__
+                },
+                'analysis_function': 'analyze_md_excess_demand',
+                'display_config': config
+            }
 
 class MdExcess:
     def __init__(self, config_source):
