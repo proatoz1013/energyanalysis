@@ -20,7 +20,7 @@ class MdShavingMode(Enum):
     """Enumeration of MD Shaving operational modes."""
     IDLE = "idle"
     MONITORING = "monitoring"
-    ACTIVE = "active"
+    NORMAL = "normal"
     CONSERVATION = "conservation"
 
 class MdShavingConfig:
@@ -260,6 +260,7 @@ class _MdEventState:
     smoothed_excess_kw: float = 0.0
     above_trigger_count: int = 0
     below_trigger_count: int = 0
+    event_id: int = 0
     max_excess_kw: float = 0.0
     max_severity: float = 0.0
     total_discharged_kwh: float = 0.0
@@ -1375,6 +1376,10 @@ class SmartConservationDebugger:
             'excess_demand': self.analyze_md_excess_demand,
             'md_excess_demand': self.analyze_md_excess_demand,
             'window_analysis': self.generate_window_analysis_table,
+            'event_status': self.analyze_event_status,
+            'trigger_events': self.analyze_event_status,
+            'historical_events': self.analyze_historical_events,
+            'process_historical_events': self.analyze_historical_events,
             # Future analysis functions can be added here without changing V3:
             # 'battery_performance': self.analyze_battery_performance_for_display,
             # 'tariff_optimization': self.analyze_tariff_optimization_for_display,
@@ -1614,6 +1619,420 @@ class SmartConservationDebugger:
                 'analysis_function': 'analyze_md_excess_demand',
                 'display_config': config
             }
+    
+   
+        """
+        Analyze MD event status using TriggerEvents with real simulation data.
+        
+        This method creates a TriggerEvents instance, processes real excess demand data
+        through the trigger counter logic, and displays the results using existing
+        infrastructure - just like analyze_md_excess_demand but for trigger events.
+        
+        Args:
+            display_config (dict, optional): Display configuration parameters
+                - 'max_rows': Maximum rows to display (default: 10)
+                - 'debug_output': Show debug information (default: True)
+                - 'show_summary': Include summary statistics (default: True)
+            trigger_threshold_kw (float): Trigger threshold for TriggerEvents (default: 50.0)
+                
+        Returns:
+            dict: Complete analysis result with dataframe, summary, and metadata
+                Same format as display_analysis_table() for consistency
+        """
+        # Set default display configuration
+        config = {
+            'max_rows': 10,
+            'debug_output': True,
+            'show_summary': True
+        }
+        if display_config:
+            config.update(display_config)
+        
+        try:
+            # 🔍 DEBUG CHECKPOINT 1: Configuration data
+            config_data = self.controller.config_data
+            if config['debug_output']:
+                print(f"🔍 DEBUG 1: config_data available: {config_data is not None}")
+            
+            if not config_data:
+                if config['debug_output']:
+                    print("❌ FAILURE: No configuration data available in controller")
+                return {
+                    'dataframe': pd.DataFrame(),
+                    'summary': {'error': 'No configuration data available in controller'},
+                    'metadata': {'error': 'Missing configuration', 'analysis_type': 'event_status'},
+                    'analysis_function': 'analyze_event_status',
+                    'display_config': config
+                }
+            
+            # 🔍 DEBUG CHECKPOINT 2: Get excess demand data (same as MD excess analysis)
+            if config['debug_output']:
+                print(f"🔍 DEBUG 2: Getting excess demand data...")
+            
+            md_excess = MdExcess(config_data)
+            excess_demand = md_excess.calculate_excess_demand()
+            
+            if config['debug_output']:
+                print(f"   Excess demand calculated: {excess_demand is not None}")
+                if excess_demand is not None:
+                    print(f"   Excess demand length: {len(excess_demand)}")
+                    print(f"   Max excess: {excess_demand.max():.2f} kW")
+            
+            # 🔍 DEBUG CHECKPOINT 3: Process through TriggerEvents
+            if config['debug_output']:
+                print(f"🔍 DEBUG 3: Processing trigger events (threshold: {trigger_threshold_kw} kW)...")
+            
+            trigger_events = TriggerEvents(trigger_threshold_kw=trigger_threshold_kw)
+            event_state = _MdEventState()
+            
+            # Process each excess demand value through trigger logic
+            trigger_results = []
+            for i, (timestamp, excess_val) in enumerate(excess_demand.items()):
+                # Update trigger counters based on excess demand
+                trigger_result = trigger_events.update_trigger_counters(
+                    smoothed_excess_kw=excess_val,
+                    event_state=event_state
+                )
+                
+                # Get current event status
+                event_status = trigger_events.get_event_status(event_state)
+                
+                # Add timestamp and processing info
+                event_status.update({
+                    'timestamp': timestamp,
+                    'excess_demand_kw': excess_val,
+                    'trigger_result': trigger_result['trigger_status'],
+                    'counter_changed': trigger_result.get('counter_reset', False)
+                })
+                
+                trigger_results.append(event_status)
+                
+                # Only keep recent results to avoid too much data
+                if len(trigger_results) > config['max_rows'] * 10:  # Keep 10x more than display
+                    trigger_results = trigger_results[-config['max_rows'] * 5:]  # Keep 5x for variety
+            
+            if config['debug_output']:
+                print(f"   Processed {len(excess_demand)} excess values")
+                print(f"   Final trigger results: {len(trigger_results)} records")
+                print(f"   Final above_trigger_count: {event_state.above_trigger_count}")
+                print(f"   Final below_trigger_count: {event_state.below_trigger_count}")
+            
+            # 🔍 DEBUG CHECKPOINT 4: Format the data
+            if config['debug_output']:
+                print(f"🔍 DEBUG 4: Formatting trigger event data...")
+            
+            formatted_result = self.format_event_status_analysis(trigger_results)
+            
+            if config['debug_output']:
+                print(f"   Formatting result: {formatted_result is not None}")
+                if formatted_result:
+                    print(f"   Formatted data length: {len(formatted_result.get('data', []))}")
+            
+            # 🔍 DEBUG CHECKPOINT 5: Create dynamic table
+            if config['debug_output']:
+                print(f"🔍 DEBUG 5: Creating trigger event table...")
+            
+            table_result = self.create_dynamic_analysis_table(
+                data_records=formatted_result['data'],
+                summary_stats=formatted_result['summary'],
+                metadata=formatted_result['metadata'],
+                max_rows=config['max_rows']
+            )
+            
+            if config['debug_output']:
+                print(f"   Table creation successful: {table_result is not None}")
+                if table_result:
+                    print(f"   Table rows: {table_result.get('displayed_records', 0)}")
+            
+            # Add method-specific metadata
+            table_result.update({
+                'analysis_function': 'analyze_event_status',
+                'trigger_events_used': True,
+                'trigger_threshold_kw': trigger_threshold_kw,
+                'display_config': config,
+                'workflow_steps': [
+                    'Created MdExcess instance',
+                    'Calculated excess demand',
+                    'Created TriggerEvents instance',
+                    'Processed through trigger counter logic',
+                    'Used format_event_status_analysis()',
+                    'Used create_dynamic_analysis_table()'
+                ]
+            })
+            
+            if config['debug_output']:
+                print(f"✅ SUCCESS: Event status analysis complete - {table_result['displayed_records']} rows displayed")
+            
+            return table_result
+            
+        except Exception as e:
+            error_message = f'Event status analysis failed: {str(e)}'
+            if config.get('debug_output', False):
+                print(f"❌ EXCEPTION in analyze_event_status: {error_message}")
+                import traceback
+                print(f"   Traceback: {traceback.format_exc()}")
+            
+            return {
+                'dataframe': pd.DataFrame(),
+                'summary': {'error': error_message},
+                'metadata': {
+                    'error': 'Method execution failed',
+                    'analysis_type': 'event_status',
+                    'exception_type': type(e).__name__,
+                    'exception_details': str(e)
+                },
+                'analysis_function': 'analyze_event_status',
+                'display_config': config
+            }
+    
+    def analyze_historical_events(self, display_config=None):
+        """
+        Analyze complete historical dataset using process_historical_events method.
+        
+        This method uses TriggerEvents.process_historical_events() to classify the entire
+        dataset into events and non-events using the simplified logic: excess_demand > 0.
+        It reuses existing display infrastructure for consistent formatting and presentation.
+        
+        Args:
+            display_config (dict, optional): Display configuration parameters
+                - 'max_rows': Maximum rows to display (default: 100)
+                - 'debug_output': Show debug information (default: False)
+                - 'show_summary': Include summary statistics (default: True)
+                
+        Returns:
+            dict: Complete analysis result with dataframe, summary, and metadata
+        """
+        # Set default display configuration
+        config = {
+            'max_rows': 100,
+            'debug_output': False,
+            'show_summary': True
+        }
+        if display_config:
+            config.update(display_config)
+        
+        try:
+            # Get configuration data
+            config_data = self.controller.config_data
+            if not config_data:
+                return {
+                    'dataframe': pd.DataFrame(),
+                    'summary': {'error': 'No configuration data available'},
+                    'metadata': {'error': 'Missing configuration', 'analysis_type': 'historical_events'},
+                    'analysis_function': 'analyze_historical_events',
+                    'display_config': config
+                }
+            
+            # Process historical events using TriggerEvents
+            trigger_events = TriggerEvents()
+            enhanced_df = trigger_events.process_historical_events(config_data)
+            
+            # Convert enhanced dataframe to display format
+            display_data = []
+            for idx, row in enhanced_df.head(config['max_rows'] * 2).iterrows():
+                display_row = {
+                    'timestamp': idx,
+                    'current_power_kw': round(row[config_data['power_col']], 2),
+                    'target_kw': round(config_data['target_series'].loc[idx] if idx in config_data['target_series'].index else 0, 2),
+                    'excess_demand_kw': round(row['excess_demand_kw'], 2),
+                    'is_event': 'Yes' if row['is_event'] else 'No',
+                    'event_id': row['event_id'],
+                    'event_start': 'Yes' if row['event_start'] else 'No',
+                    'event_duration_min': round(row['event_duration'], 1)
+                }
+                display_data.append(display_row)
+            
+            # Calculate summary statistics
+            summary_stats = {
+                'total_timestamps': len(enhanced_df),
+                'total_event_timestamps': int(enhanced_df['is_event'].sum()),
+                'total_non_event_timestamps': int((~enhanced_df['is_event']).sum()),
+                'unique_events_detected': int(enhanced_df[enhanced_df['event_id'] > 0]['event_id'].nunique()),
+                'max_excess_demand_kw': float(enhanced_df['excess_demand_kw'].max()),
+                'min_excess_demand_kw': float(enhanced_df['excess_demand_kw'].min()),
+                'avg_excess_during_events': float(enhanced_df[enhanced_df['is_event']]['excess_demand_kw'].mean()) if enhanced_df['is_event'].any() else 0,
+                'event_percentage': round(enhanced_df['is_event'].sum() / len(enhanced_df) * 100, 1)
+            }
+            
+            # Create table using existing infrastructure
+            table_result = self.create_dynamic_analysis_table(
+                data_records=display_data,
+                summary_stats=summary_stats,
+                metadata={
+                    'analysis_type': 'historical_events',
+                    'method_used': 'process_historical_events',
+                    'event_logic': 'excess_demand > 0',
+                    'trigger_source': 'target_series (monthly target)'
+                },
+                max_rows=config['max_rows']
+            )
+            
+            # Add method-specific metadata
+            table_result.update({
+                'analysis_function': 'analyze_historical_events',
+                'enhanced_dataframe': enhanced_df,  # Include full processed dataset
+                'display_config': config,
+                'workflow_steps': [
+                    'Created TriggerEvents instance',
+                    'Called process_historical_events() with simplified logic',
+                    'Classified events as excess_demand > 0',
+                    'Used create_dynamic_analysis_table() for display'
+                ]
+            })
+            
+            return table_result
+            
+        except Exception as e:
+            return {
+                'dataframe': pd.DataFrame(),
+                'summary': {'error': f'Historical events analysis failed: {str(e)}'},
+                'metadata': {
+                    'error': 'Method execution failed',
+                    'analysis_type': 'historical_events',
+                    'exception_type': type(e).__name__,
+                    'exception_details': str(e)
+                },
+                'analysis_function': 'analyze_historical_events',
+                'display_config': config
+            }
+    
+    
+        """
+        Format event status data for table display using existing infrastructure.
+        
+        This method takes event status data from TriggerEvents.get_event_status()
+        and formats it for display in conservation_tab2 using the same structure
+        as other analysis methods.
+        
+        Args:
+            event_scenarios: List of event status dictionaries from get_event_status()
+            
+        Returns:
+            dict: Dictionary with 'data', 'summary', and 'metadata' for table display
+        """
+        if not event_scenarios:
+            return {
+                'data': [],
+                'summary': {'error': 'No event scenarios provided'},
+                'metadata': {'error': 'Missing event data', 'analysis_type': 'event_status_analysis'}
+            }
+        
+        # Format data for table display
+        analysis_data = []
+        summary_stats = {
+            'total_scenarios': len(event_scenarios),
+            'active_events': 0,
+            'conservation_events': 0,
+            'max_excess_kw': 0.0,
+            'max_severity': 0.0,
+            'total_discharged_kwh': 0.0,
+            'avg_above_trigger_count': 0.0,
+            'avg_below_trigger_count': 0.0
+        }
+        
+        above_counts = []
+        below_counts = []
+        
+        # Process each event scenario
+        for i, event_status in enumerate(event_scenarios):
+            # Create formatted record
+            record = {
+                'scenario_id': i + 1,
+                'scenario': event_status.get('scenario', f'Scenario {i + 1}'),
+                'timestamp': event_status.get('timestamp', 'N/A'),
+                'description': event_status.get('description', 'No description'),
+                'event_active': 'Yes' if event_status.get('event_active', False) else 'No',
+                'event_id': event_status.get('event_id', 0),
+                'duration_minutes': round(event_status.get('duration_minutes', 0.0), 1),
+                'smoothed_excess_kw': round(event_status.get('smoothed_excess_kw', 0.0), 2),
+                'above_trigger_count': event_status.get('above_trigger_count', 0),
+                'below_trigger_count': event_status.get('below_trigger_count', 0),
+                'max_excess_kw': round(event_status.get('max_excess_kw', 0.0), 2),
+                'max_severity': round(event_status.get('max_severity', 0.0), 2),
+                'total_discharged_kwh': round(event_status.get('total_discharged_kwh', 0.0), 2),
+                'entered_conservation': 'Yes' if event_status.get('entered_conservation', False) else 'No',
+                'trigger_threshold_kw': event_status.get('trigger_threshold_kw', 50.0),
+                'controller_mode': event_status.get('controller_mode', 'Unknown')
+            }
+            
+            analysis_data.append(record)
+            
+            # Update summary statistics
+            if event_status.get('event_active', False):
+                summary_stats['active_events'] += 1
+            
+            if event_status.get('entered_conservation', False):
+                summary_stats['conservation_events'] += 1
+            
+            # Track numeric values for averages and maximums
+            max_excess = event_status.get('max_excess_kw', 0.0)
+            if max_excess > summary_stats['max_excess_kw']:
+                summary_stats['max_excess_kw'] = max_excess
+            
+            max_sev = event_status.get('max_severity', 0.0)
+            if max_sev > summary_stats['max_severity']:
+                summary_stats['max_severity'] = max_sev
+            
+            summary_stats['total_discharged_kwh'] += event_status.get('total_discharged_kwh', 0.0)
+            
+            above_counts.append(event_status.get('above_trigger_count', 0))
+            below_counts.append(event_status.get('below_trigger_count', 0))
+        
+        # Calculate averages
+        if above_counts:
+            summary_stats['avg_above_trigger_count'] = sum(above_counts) / len(above_counts)
+        if below_counts:
+            summary_stats['avg_below_trigger_count'] = sum(below_counts) / len(below_counts)
+        
+        # Add percentage calculations
+        summary_stats.update({
+            'active_event_percentage': (summary_stats['active_events'] / summary_stats['total_scenarios'] * 100) if summary_stats['total_scenarios'] > 0 else 0,
+            'conservation_percentage': (summary_stats['conservation_events'] / summary_stats['total_scenarios'] * 100) if summary_stats['total_scenarios'] > 0 else 0
+        })
+        
+        # Create metadata
+        metadata = {
+            'analysis_type': 'event_status_analysis',
+            'total_records': len(analysis_data),
+            'columns': [
+                'scenario_id', 'scenario', 'timestamp', 'description', 'event_active', 
+                'event_id', 'duration_minutes', 'smoothed_excess_kw', 'above_trigger_count',
+                'below_trigger_count', 'max_excess_kw', 'max_severity', 
+                'total_discharged_kwh', 'entered_conservation', 'trigger_threshold_kw',
+                'controller_mode'
+            ],
+            'data_types': {
+                'scenario_id': 'integer',
+                'scenario': 'string',
+                'timestamp': 'datetime',
+                'description': 'string',
+                'event_active': 'boolean_string',
+                'event_id': 'integer',
+                'duration_minutes': 'float',
+                'smoothed_excess_kw': 'float',
+                'above_trigger_count': 'integer',
+                'below_trigger_count': 'integer',
+                'max_excess_kw': 'float',
+                'max_severity': 'float',
+                'total_discharged_kwh': 'float',
+                'entered_conservation': 'boolean_string',
+                'trigger_threshold_kw': 'float',
+                'controller_mode': 'string'
+            },
+            'units': {
+                'duration_minutes': 'minutes',
+                'smoothed_excess_kw': 'kW',
+                'max_excess_kw': 'kW',
+                'total_discharged_kwh': 'kWh',
+                'trigger_threshold_kw': 'kW'
+            }
+        }
+        
+        return {
+            'data': analysis_data,
+            'summary': summary_stats,
+            'metadata': metadata
+        }
 
 class MdExcess:
     def __init__(self, config_source):
@@ -1713,7 +2132,312 @@ class MdExcess:
                 'timestamps_with_excess': []
             }
     
-
+class TriggerEvents:
+    """
+    Event trigger management for MD excess demand monitoring.
+    
+    This class handles the logic for tracking trigger events based on
+    excess demand relative to monthly targets. Events are classified as
+    any timestamp where MD excess > 0 (exceeding the target).
+    """
+    
+    def __init__(self, trigger_threshold_kw=50.0):
+        """
+        Initialize TriggerEvents with a configurable trigger threshold.
+        
+        Args:
+            trigger_threshold_kw (float): The trigger level in kW above which
+                                        excess demand is considered significant
+        """
+        self.trigger_threshold_kw = trigger_threshold_kw
+    
+    def process_historical_events(self, config_data):
+        """
+        Process entire df_sim dataset to classify each timestamp as event/non-event.
+        
+        This method processes the complete historical dataset using the simplified logic:
+        - Trigger = target_series (monthly target) 
+        - Event = any timestamp where MD excess > 0
+        - Assigns sequential event IDs to continuous event periods
+        
+        Args:
+            config_data (dict): Configuration containing df_sim, power_col, target_series
+            
+        Returns:
+            pd.DataFrame: Enhanced dataset with event classification columns:
+                - 'excess_demand_kw': calculated excess (current_power - target)
+                - 'is_event': boolean event classification (excess > 0)
+                - 'event_id': sequential event ID (0 for non-events)
+                - 'event_start': boolean marking start of new events
+                - 'event_duration': minutes since event started
+        """
+        import pandas as pd
+        
+        # Extract required data from config
+        df_sim = config_data['df_sim'].copy()
+        
+        # Use existing MdExcess method to calculate excess demand
+        md_excess = MdExcess(config_data)
+        excess_demand = md_excess.calculate_excess_demand()
+        
+        # Add excess demand to the dataframe
+        df_sim['excess_demand_kw'] = excess_demand
+        
+        # Classify events: excess > 0 means event
+        df_sim['is_event'] = df_sim['excess_demand_kw'] > 0
+        
+        # Initialize event tracking columns
+        df_sim['event_id'] = 0
+        df_sim['event_start'] = False
+        df_sim['event_duration'] = 0.0
+        
+        # Use existing methods for event processing
+        event_state = _MdEventState()
+        controller_state = _MdControllerState()
+        
+        # Process each timestamp using existing event management methods
+        for i in range(len(df_sim)):
+            current_row = df_sim.iloc[i]
+            current_timestamp = current_row.name
+            is_event = current_row['is_event']
+            
+            if is_event and not event_state.active:
+                # Start new event using existing method
+                event_result = self.start_event(event_state, controller_state, current_timestamp)
+                df_sim.iloc[i, df_sim.columns.get_loc('event_start')] = True
+                df_sim.iloc[i, df_sim.columns.get_loc('event_duration')] = 0.0
+                
+            elif is_event and event_state.active:
+                # Continue existing event - calculate duration
+                if event_state.start_time:
+                    time_diff = current_timestamp - event_state.start_time
+                    event_state.duration_minutes = time_diff.total_seconds() / 60.0
+                    df_sim.iloc[i, df_sim.columns.get_loc('event_duration')] = event_state.duration_minutes
+                df_sim.iloc[i, df_sim.columns.get_loc('event_start')] = False
+                
+            else:
+                # Not an event - reset state
+                event_state.active = False
+                df_sim.iloc[i, df_sim.columns.get_loc('event_start')] = False
+                df_sim.iloc[i, df_sim.columns.get_loc('event_duration')] = 0.0
+            
+            # Assign event ID (0 for non-events)
+            df_sim.iloc[i, df_sim.columns.get_loc('event_id')] = event_state.event_id if is_event else 0
+        
+        return df_sim
+    
+    def update_trigger_counters(self, smoothed_excess_kw, event_state):
+        """
+        Update trigger counters based on smoothed excess demand level.
+        
+        This method implements the trigger logic:
+        - If smoothed excess > trigger level: increment above_trigger_count, reset below_trigger_count
+        - If smoothed excess ≤ trigger level: increment below_trigger_count, reset above_trigger_count
+        
+        Args:
+            smoothed_excess_kw (float): Current smoothed excess demand value in kW
+            event_state (_MdEventState): Event state object containing the counters to update
+            
+        Returns:
+            dict: Summary of counter updates performed
+        """
+        # Store previous values for tracking changes
+        prev_above = event_state.above_trigger_count
+        prev_below = event_state.below_trigger_count
+        
+        if smoothed_excess_kw > self.trigger_threshold_kw:
+            # Above trigger level logic
+            event_state.above_trigger_count += 1
+            event_state.below_trigger_count = 0
+            trigger_status = "above_trigger"
+            
+        else:
+            # At or below trigger level logic  
+            event_state.below_trigger_count += 1
+            event_state.above_trigger_count = 0
+            trigger_status = "at_or_below_trigger"
+        
+        # Return summary of what happened
+        return {
+            'trigger_status': trigger_status,
+            'smoothed_excess_kw': smoothed_excess_kw,
+            'trigger_threshold_kw': self.trigger_threshold_kw,
+            'above_trigger_count': event_state.above_trigger_count,
+            'below_trigger_count': event_state.below_trigger_count,
+            'above_count_changed': event_state.above_trigger_count != prev_above,
+            'below_count_changed': event_state.below_trigger_count != prev_below,
+            'counter_reset': (prev_above > 0 and event_state.above_trigger_count == 0) or 
+                           (prev_below > 0 and event_state.below_trigger_count == 0)
+        }
+    
+    def analyze_trigger_pattern(self, event_state):
+        """
+        Analyze the current trigger pattern for decision making.
+        
+        This method provides insights into the trigger state that can be used
+        for smart conservation decisions, such as determining trigger stability
+        or persistence of conditions.
+        
+        Args:
+            event_state (_MdEventState): Current event state with counter values
+            
+        Returns:
+            dict: Analysis of current trigger pattern and recommendations
+        """
+        total_counts = event_state.above_trigger_count + event_state.below_trigger_count
+        
+        analysis = {
+            'above_trigger_count': event_state.above_trigger_count,
+            'below_trigger_count': event_state.below_trigger_count,
+            'total_trigger_events': total_counts,
+            'current_trend': 'above' if event_state.above_trigger_count > 0 else 'below',
+            'trigger_threshold_kw': self.trigger_threshold_kw
+        }
+        
+        # Add pattern-based insights
+        if event_state.above_trigger_count >= 3:
+            analysis['pattern'] = 'sustained_above_trigger'
+            analysis['confidence'] = 'high'
+            analysis['recommendation'] = 'consider_conservation_action'
+        elif event_state.above_trigger_count >= 1:
+            analysis['pattern'] = 'emerging_above_trigger'
+            analysis['confidence'] = 'medium' 
+            analysis['recommendation'] = 'monitor_closely'
+        elif event_state.below_trigger_count >= 5:
+            analysis['pattern'] = 'sustained_below_trigger'
+            analysis['confidence'] = 'high'
+            analysis['recommendation'] = 'safe_to_reduce_conservation'
+        else:
+            analysis['pattern'] = 'transitional'
+            analysis['confidence'] = 'low'
+            analysis['recommendation'] = 'continue_monitoring'
+            
+        return analysis
+    
+    def start_event(self, event_state, controller_state, current_timestamp):
+        """
+        Start a new MD excess event if no event is currently active.
+        
+        This method handles event initialization when trigger conditions indicate
+        the start of a new excess demand event. It manages event ID tracking,
+        state initialization, and mode setting.
+        
+        Args:
+            event_state (_MdEventState): Event state object to initialize
+            controller_state (_MdControllerState): Controller state for mode setting
+            current_timestamp (datetime): Current timestamp for event start tracking
+            
+        Returns:
+            dict: Summary of event initialization actions performed
+        """
+        # Check if an event is already active
+        if event_state.active:
+            return {
+                'action': 'no_action',
+                'reason': 'event_already_active',
+                'current_event_id': event_state.event_id,
+                'active_since': event_state.start_time
+            }
+        
+        # Start new event initialization
+        previous_event_id = event_state.event_id
+        
+        # Increment event ID for new event
+        event_state.event_id += 1
+        
+        # Mark event as active
+        event_state.active = True
+        
+        # Record the start timestamp
+        event_state.start_time = current_timestamp
+        
+        # Reset event duration and per-event statistics
+        self._reset_event_statistics(event_state)
+        
+        # Set controller mode to "NORMAL" for the new event
+        self._set_event_mode(controller_state)
+        
+        return {
+            'action': 'event_started',
+            'new_event_id': event_state.event_id,
+            'previous_event_id': previous_event_id,
+            'start_timestamp': current_timestamp,
+            'event_active': event_state.active,
+            'controller_mode': controller_state.mode.value,
+            'statistics_reset': True,
+            'trigger_threshold_kw': self.trigger_threshold_kw
+        }
+    
+    def _reset_event_statistics(self, event_state):
+        """
+        Reset event duration and per-event statistics for a new event.
+        
+        This private method clears all per-event tracking variables to ensure
+        a clean state for the new event being started.
+        
+        Args:
+            event_state (_MdEventState): Event state object to reset
+        """
+        # Reset duration tracking
+        event_state.duration_minutes = 0.0
+        
+        # Reset per-event statistics
+        event_state.max_excess_kw = 0.0
+        event_state.max_severity = 0.0
+        event_state.total_discharged_kwh = 0.0
+        
+        # Reset conservation flag
+        event_state.entered_conservation = False
+        
+        # Reset smoothed excess (will be updated by trigger processing)
+        event_state.smoothed_excess_kw = 0.0
+        
+        # Note: Trigger counters (above_trigger_count, below_trigger_count) 
+        # are NOT reset here as they continue across events for pattern tracking
+    
+    def _set_event_mode(self, controller_state):
+        """
+        Set controller mode to NORMAL for a new event.
+        
+        This private method updates the controller's operational mode when
+        a new event starts, setting it to NORMAL mode as the initial state.
+        
+        Args:
+            controller_state (_MdControllerState): Controller state to update
+        """
+        # Import the enum to access NORMAL mode
+        from enum import Enum
+        
+        # Set mode to NORMAL for new event
+        controller_state.mode = MdShavingMode.NORMAL
+    
+    def get_event_status(self, event_state):
+        """
+        Get comprehensive status information for the current event.
+        
+        This method provides detailed information about the current event state,
+        useful for monitoring and debugging event progression.
+        
+        Args:
+            event_state (_MdEventState): Event state to analyze
+            
+        Returns:
+            dict: Comprehensive event status information
+        """
+        return {
+            'event_active': event_state.active,
+            'event_id': event_state.event_id,
+            'start_time': event_state.start_time,
+            'duration_minutes': event_state.duration_minutes,
+            'smoothed_excess_kw': event_state.smoothed_excess_kw,
+            'above_trigger_count': event_state.above_trigger_count,
+            'below_trigger_count': event_state.below_trigger_count,
+            'max_excess_kw': event_state.max_excess_kw,
+            'max_severity': event_state.max_severity,
+            'total_discharged_kwh': event_state.total_discharged_kwh,
+            'entered_conservation': event_state.entered_conservation,
+            'trigger_threshold_kw': self.trigger_threshold_kw
+        }
 
 #TO-DO: Verify the size of monthly targets and refer to how excess is calculated in v3
 #TO-DO: streamline debugging feature (discuss best practice with ChatGPT)

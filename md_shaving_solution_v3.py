@@ -3293,6 +3293,62 @@ def render_smart_conservation_debug_analysis():
                     except Exception as e:
                         st.error(f"❌ Error preparing download: {str(e)}")
         
+        # =====================================================================
+        # NEW: EVENT STATUS ANALYSIS 
+        # =====================================================================
+        st.markdown("---")  # Separator
+        st.markdown("#### 📊 Historical Event Analysis")
+        
+        with st.spinner("Generating historical event analysis..."):
+            # Get historical events analysis using the new method
+            event_analysis_data = debugger.analyze_historical_events(
+                display_config={
+                    'max_rows': max_rows,
+                    'show_summary': show_summary,
+                    'debug_output': False  # Minimal debug output as requested
+                }
+            )
+            
+            # Check if we have valid event data
+            if 'error' in event_analysis_data.get('metadata', {}):
+                st.error(f"Event analysis error: {event_analysis_data['metadata']['error']}")
+            elif event_analysis_data['dataframe'].empty:
+                st.warning("No event status data available")
+            else:
+                # Display event summary statistics if available and requested
+                if show_summary and event_analysis_data.get('summary'):
+                    event_summary = event_analysis_data['summary']
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        st.metric("Total Scenarios", f"{event_summary.get('total_scenarios', 0):,}")
+                        st.metric("Active Events", f"{event_summary.get('active_events', 0)}")
+                        
+                    with col2:
+                        st.metric("Conservation Events", f"{event_summary.get('conservation_events', 0)}")
+                        st.metric("Max Excess", f"{event_summary.get('max_excess_kw', 0):.1f} kW")
+                        
+                    with col3:
+                        st.metric("Avg Above Triggers", f"{event_summary.get('avg_above_trigger_count', 0):.1f}")
+                        st.metric("Total Energy Used", f"{event_summary.get('total_discharged_kwh', 0):.1f} kWh")
+                
+                # Display the event status DataFrame
+                st.markdown(f"**Showing {event_analysis_data['displayed_records']} trigger event records**")
+                st.dataframe(
+                    event_analysis_data['dataframe'],
+                    use_container_width=True,
+                    hide_index=True
+                )
+                
+                # Event status insights
+                st.info("""
+                **🎯 Trigger Event Analysis Insights:**
+                - **Above Trigger Count**: Number of consecutive periods above trigger threshold
+                - **Below Trigger Count**: Number of consecutive periods at/below trigger threshold  
+                - **Event Status**: Shows progression of trigger events with real excess demand data
+                - **Conservation Mode**: Tracks when conservation strategies are engaged
+                """)
+        
         # Additional analysis options
         with st.expander("🔍 Advanced Analysis Options", expanded=False):
             st.markdown("""
