@@ -499,33 +499,28 @@ class SmartConstants:
         else:
             return 'general'
 
-    def is_md_active(self):
+    def is_md_active(self, timestamp, config_data):
         """
-        Takes a series and returns a boolean
-        Checks current tariff type from config dict
-        Calls is_peak_rp4 to determine if timestamp is in peak period if TOU
-        Returns True if general tariff (always active)
+        Check if MD recording is active based on tariff type and RP4 peak period logic.
+        
+        For TOU tariffs: MD is recorded only during RP4 peak periods (weekday 2PM-10PM, excluding holidays)
+        For General tariffs: MD is recorded 24/7
+        
+        Args:
+            timestamp: The timestamp to check for MD recording activity
+            config_data: Configuration dictionary with tariff_type and holidays
+            
+        Returns:
+            bool: True if MD recording is active, False otherwise
         """
-        # Get tariff type from config
-        tariff_type = self.get_config_param('tariff_type', 'general')
+        # Get tariff type from passed config_data
+        tariff_type = config_data.get('tariff_type', 'general')
         
         # Check if TOU tariff
-        is_tou = SmartConstants.is_tou_tariff(tariff_type)
-        
-        if is_tou:
+        if SmartConstants.is_tou_tariff(tariff_type):
             # For TOU tariffs, MD is only active during RP4 peak periods
-            # Need timestamp to check, use last_timestamp from state
-            current_timestamp = self.state.last_timestamp if self.state else None
-            
-            if not current_timestamp:
-                # If no timestamp available, return False for safety
-                return False
-            
-            # Get holidays from config
-            holidays = self.get_config_param('holidays', set())
-            
-            # Check if in RP4 peak period
-            return SmartConstants.is_peak_rp4(current_timestamp, holidays)
+            holidays = config_data.get('holidays', set())
+            return SmartConstants.is_peak_rp4(timestamp, holidays)
         else:
             # For General tariffs, MD recording is always active (24/7)
             return True
@@ -2665,6 +2660,9 @@ class MdOrchestrator:
 
         # Create trigger events instance
         trigger_events = TriggerEvents()
+
+        # create smart constants instance
+        sc = SmartConstants()
         
         # Create controller and window type for severity score calculation
         controller = MdShavingController(df_sim)
@@ -2684,7 +2682,7 @@ class MdOrchestrator:
             
             # Get MD window status for this timestamp
             # Use is_md_active() which checks tariff type and RP4 peak period logic
-            inside_md_window = controller.is_md_active(current_timestamp)
+            inside_md_window = sc.is_md_active(current_timestamp, config_data)
                
             # Check if current event is active by calling set_event_state
             current_event_active = trigger_events.set_event_state(current_excess, inside_md_window, event_state)
@@ -2697,7 +2695,7 @@ class MdOrchestrator:
                 
                 # Get previous MD window status
                 previous_timestamp = previous_row.name
-                previous_inside_md_window = controller.is_md_active(previous_timestamp)
+                previous_inside_md_window = sc.is_md_active(previous_timestamp, config_data)
                 
                 # Calculate previous event state using same logic
                 previous_event_active = trigger_events.set_event_state(previous_excess, previous_inside_md_window, event_state)
