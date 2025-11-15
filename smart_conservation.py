@@ -255,15 +255,14 @@ class _MdEventState:
     """
     active: bool = False
     event_id: int = 0
+    is_event: bool = False
     start_time: Optional[datetime] = None
     duration_minutes: float = 0.0
     smoothed_excess_kw: float = 0.0
     above_trigger_count: int = 0
     below_trigger_count: int = 0
-    event_id: int = 0
     max_excess_kw: float = 0.0
     severity_score: float = 0.0
-    event_active: bool = False
     max_severity: float = 0.0
     total_discharged_kwh: float = 0.0
     entered_conservation: bool = False
@@ -326,7 +325,9 @@ class SmartConstants:
             'default_soc_reserve': 50.0,           # Standard reserve percentage
             'early_window_soc_reserve': 70.0,      # Conservative early period
             'late_window_soc_reserve': 40.0,       # Aggressive late period
-            'work_day_midpoint_factor': 0.5        # 50% split for early/late window
+            'work_day_midpoint_factor': 0.5,
+            'default_md_start_hour': 14,
+            'default_md_end_hour': 22        # 50% split for early/late window
         }
     
     @classmethod
@@ -342,6 +343,112 @@ class SmartConstants:
             'summary_precision': 1,         # Decimal places for summary stats
             'percentage_precision': 1       # Decimal places for percentages
         }
+    
+    @classmethod
+    def get_rp4_peak_constants(cls):
+        """
+        Get RP4 peak period constants from PEAK_OFFPEAK_LOGIC_COMPARISON.md.
+        
+        Universal RP4 peak definition (applies to all voltage levels):
+        - Peak: Monday-Friday, 2:00 PM - 10:00 PM (excluding public holidays)
+        - Off-Peak: All other times (weekends, holidays, weekday nights/mornings)
+        
+        Source: tariffs/peak_logic.py - is_peak_rp4() function
+        
+        Returns:
+            dict: RP4 peak period configuration
+        """
+        return {
+            'peak_days': {0, 1, 2, 3, 4},    # Monday=0 to Friday=4
+            'weekend_days': {5, 6},           # Saturday=5, Sunday=6
+            'peak_start_hour': 14,            # 2:00 PM
+            'peak_end_hour': 22,              # 10:00 PM
+            'exclude_holidays': True          # Don't count holidays as peak
+        }
+    
+    @classmethod
+    def is_weekend(cls, timestamp):
+        """
+        Check if timestamp falls on a weekend (Saturday or Sunday).
+        
+        Args:
+            timestamp (datetime): Timestamp to check
+            
+        Returns:
+            bool: True if Saturday (5) or Sunday (6)
+        """
+        rp4_constants = cls.get_rp4_peak_constants()
+        return timestamp.weekday() in rp4_constants['weekend_days']
+    
+    @classmethod
+    def is_weekday(cls, timestamp):
+        """
+        Check if timestamp falls on a weekday (Monday-Friday).
+        
+        Args:
+            timestamp (datetime): Timestamp to check
+            
+        Returns:
+            bool: True if Monday (0) through Friday (4)
+        """
+        rp4_constants = cls.get_rp4_peak_constants()
+        return timestamp.weekday() in rp4_constants['peak_days']
+    
+    @classmethod
+    def is_public_holiday(cls, timestamp, holidays=None):
+        """
+        Check if timestamp falls on a public holiday.
+        
+        Args:
+            timestamp (datetime): Timestamp to check
+            holidays (set/list/dict): Holiday dates from config
+            
+        Returns:
+            bool: True if it's a public holiday
+        """
+        if not holidays:
+            return False
+        
+        timestamp_date = timestamp.date() if hasattr(timestamp, 'date') else timestamp
+        
+        if isinstance(holidays, (set, list)):
+            return timestamp_date in holidays
+        elif isinstance(holidays, dict):
+            return timestamp_date in holidays.keys()
+        else:
+            return False
+    
+    @classmethod
+    def is_peak_rp4(cls, timestamp, holidays=None):
+        """
+        Check if timestamp is in RP4 peak period using universal logic.
+        
+        Implements the same logic as tariffs/peak_logic.py is_peak_rp4():
+        Peak = Weekday (Mon-Fri) AND Peak Hours (2PM-10PM) AND Not Holiday
+        
+        From PEAK_OFFPEAK_LOGIC_COMPARISON.md:
+        - Peak: Monday-Friday, 2:00 PM - 10:00 PM (excluding public holidays)
+        - Off-Peak: All other times (weekends, holidays, weekday nights/mornings)
+        
+        Args:
+            timestamp (datetime): Timestamp to check
+            holidays (set/list/dict): Public holiday dates
+            
+        Returns:
+            bool: True if in RP4 peak period
+        """
+        # 1. HOLIDAY CHECK (first priority)
+        if cls.is_public_holiday(timestamp, holidays):
+            return False
+        
+        # 2. WEEKDAY CHECK (Mon-Fri = 0-4)
+        if not cls.is_weekday(timestamp):
+            return False
+        
+        # 3. HOUR CHECK (2PM-10PM = 14-22)
+        rp4_constants = cls.get_rp4_peak_constants()
+        hour = timestamp.hour if hasattr(timestamp, 'hour') else 0
+        return rp4_constants['peak_start_hour'] <= hour < rp4_constants['peak_end_hour']
     
     @classmethod
     def get_tariff_classification_rules(cls):
@@ -641,6 +748,9 @@ class MdShavingController:
         # Get tariff window constants
         tariff_constants = SmartConstants.get_tariff_window_constants()
         
+        # Get holidays from config (supporting multiple formats: set, list, dict)
+        holidays = self.get_config_param('holidays', set())
+        
         # Initialize result dictionary
         result = {
             'tariff_type': tariff_type,
@@ -650,8 +760,20 @@ class MdShavingController:
             'window_rules': 'standard',
             'is_early_window': False,
             'is_late_window': False,
-            'soc_reserve_percent': tariff_constants['default_soc_reserve']
+            'soc_reserve_percent': tariff_constants['default_soc_reserve'],
+            # Add RP4 peak logic classifications
+            'is_weekend': False,
+            'is_weekday': False,
+            'is_holiday': False,
+            'is_peak_rp4': False
         }
+        
+        # Add RP4 peak classifications if timestamp is valid
+        if current_timestamp and hasattr(current_timestamp, 'weekday'):
+            result['is_weekend'] = SmartConstants.is_weekend(current_timestamp)
+            result['is_weekday'] = SmartConstants.is_weekday(current_timestamp)
+            result['is_holiday'] = SmartConstants.is_public_holiday(current_timestamp, holidays)
+            result['is_peak_rp4'] = SmartConstants.is_peak_rp4(current_timestamp, holidays)
         
         # 2. If TOU, check if we're inside or outside the MD window
         if result['is_tou']:
@@ -700,6 +822,14 @@ class MdShavingController:
             result['soc_reserve_percent'] = tariff_constants['default_soc_reserve']
         
         return result
+
+    def _is_md_window(self):
+       """
+       
+       
+       
+       
+       """
 
 class SmartConservationDebugger:
     """
@@ -1343,7 +1473,7 @@ class SmartConservationDebugger:
                 'excess_demand_kw': 'kW',
                 'total_excess_kwh': 'kWh'
             }
-        }
+        };
         
         return {
             'data': analysis_data,
@@ -1840,7 +1970,8 @@ class SmartConservationDebugger:
                     'is_event': 'Yes' if row['is_event'] else 'No',
                     'event_id': row['event_id'],
                     'event_start': 'Yes' if row['event_start'] else 'No',
-                    'event_duration_min': round(row['event_duration'], 1)
+                    'event_duration_min': round(row['event_duration'], 1),
+                    'severity_score': round(row['severity_score'], 2)
                 }
                 display_data.append(display_row)
             
@@ -2153,148 +2284,43 @@ class TriggerEvents:
         """
         self.trigger_threshold_kw = trigger_threshold_kw
     
-    def update_trigger_counters(self, smoothed_excess_kw, event_state):
+    def set_event_state(self, current_excess, inside_md_window, event_state):
         """
-        Update trigger counters based on smoothed excess demand level.
-        
-        This method implements the trigger logic:
-        - If smoothed excess > trigger level: increment above_trigger_count, reset below_trigger_count
-        - If smoothed excess ≤ trigger level: increment below_trigger_count, reset above_trigger_count
-        
-        Args:
-            smoothed_excess_kw (float): Current smoothed excess demand value in kW
-            event_state (_MdEventState): Event state object containing the counters to update
-            
-        Returns:
-            dict: Summary of counter updates performed
+        Simple boolean logic to determine if event_state.active is True or False
+        If excess demand is not zero AND in MD window, set event_state.active = True
+        Else, set event_state.active = False
         """
-        # Store previous values for tracking changes
-        prev_above = event_state.above_trigger_count
-        prev_below = event_state.below_trigger_count
-        
-        if smoothed_excess_kw > self.trigger_threshold_kw:
-            # Above trigger level logic
-            event_state.above_trigger_count += 1
-            event_state.below_trigger_count = 0
-            trigger_status = "above_trigger"
-            
+        # Simple boolean logic: excess demand not zero AND in MD window
+        if (current_excess > 0) and inside_md_window:
+            event_state.active = True
         else:
-            # At or below trigger level logic  
-            event_state.below_trigger_count += 1
-            event_state.above_trigger_count = 0
-            trigger_status = "at_or_below_trigger"
+            event_state.active = False
+            
+        return event_state.active
         
-        # Return summary of what happened
-        return {
-            'trigger_status': trigger_status,
-            'smoothed_excess_kw': smoothed_excess_kw,
-            'trigger_threshold_kw': self.trigger_threshold_kw,
-            'above_trigger_count': event_state.above_trigger_count,
-            'below_trigger_count': event_state.below_trigger_count,
-            'above_count_changed': event_state.above_trigger_count != prev_above,
-            'below_count_changed': event_state.below_trigger_count != prev_below,
-            'counter_reset': (prev_above > 0 and event_state.above_trigger_count == 0) or 
-                           (prev_below > 0 and event_state.below_trigger_count == 0)
-        }
-    
-    def analyze_trigger_pattern(self, event_state):
+    def set_event_id(self, event_state):
         """
-        Analyze the current trigger pattern for decision making.
+        Create persistent event counter and increment it for new events.
         
-        This method provides insights into the trigger state that can be used
-        for smart conservation decisions, such as determining trigger stability
-        or persistence of conditions.
+        This method only handles the persistent counter increment logic.
+        All 4-case conditional logic is handled in the orchestrator loop.
         
         Args:
-            event_state (_MdEventState): Current event state with counter values
+            event_state (_MdEventState): Event state object to update
             
         Returns:
-            dict: Analysis of current trigger pattern and recommendations
+            int: The new event ID assigned to this event
         """
-        total_counts = event_state.above_trigger_count + event_state.below_trigger_count
+        # Initialize persistent counter if it doesn't exist
+        if not hasattr(event_state, 'persistent_event_counter'):
+            event_state.persistent_event_counter = 0
         
-        analysis = {
-            'above_trigger_count': event_state.above_trigger_count,
-            'below_trigger_count': event_state.below_trigger_count,
-            'total_trigger_events': total_counts,
-            'current_trend': 'above' if event_state.above_trigger_count > 0 else 'below',
-            'trigger_threshold_kw': self.trigger_threshold_kw
-        }
+        # Increment the persistent counter and assign to event_id
+        event_state.persistent_event_counter += 1
+        event_state.event_id = event_state.persistent_event_counter
         
-        # Add pattern-based insights
-        if event_state.above_trigger_count >= 3:
-            analysis['pattern'] = 'sustained_above_trigger'
-            analysis['confidence'] = 'high'
-            analysis['recommendation'] = 'consider_conservation_action'
-        elif event_state.above_trigger_count >= 1:
-            analysis['pattern'] = 'emerging_above_trigger'
-            analysis['confidence'] = 'medium' 
-            analysis['recommendation'] = 'monitor_closely'
-        elif event_state.below_trigger_count >= 5:
-            analysis['pattern'] = 'sustained_below_trigger'
-            analysis['confidence'] = 'high'
-            analysis['recommendation'] = 'safe_to_reduce_conservation'
-        else:
-            analysis['pattern'] = 'transitional'
-            analysis['confidence'] = 'low'
-            analysis['recommendation'] = 'continue_monitoring'
-            
-        return analysis
-    
-    def start_event(self, event_state, controller_state, current_timestamp):
-        """
-        Start a new MD excess event if no event is currently active.
-        
-        This method handles event initialization when trigger conditions indicate
-        the start of a new excess demand event. It manages event ID tracking,
-        state initialization, and mode setting.
-        
-        Args:
-            event_state (_MdEventState): Event state object to initialize
-            controller_state (_MdControllerState): Controller state for mode setting
-            current_timestamp (datetime): Current timestamp for event start tracking
-            
-        Returns:
-            dict: Summary of event initialization actions performed
-        """
-        # Check if an event is already active
-        if event_state.active:
-            return {
-                'action': 'no_action',
-                'reason': 'event_already_active',
-                'current_event_id': event_state.event_id,
-                'active_since': event_state.start_time
-            }
-        
-        # Start new event initialization
-        previous_event_id = event_state.event_id
-        
-        # Increment event ID for new event
-        event_state.event_id += 1
-        
-        # Mark event as active
-        event_state.active = True
-        
-        # Record the start timestamp
-        event_state.start_time = current_timestamp
-        
-        # Reset event duration and per-event statistics
-        self._reset_event_statistics(event_state)
-        
-        # Set controller mode to "NORMAL" for the new event
-        self._set_event_mode(controller_state)
-        
-        return {
-            'action': 'event_started',
-            'new_event_id': event_state.event_id,
-            'previous_event_id': previous_event_id,
-            'start_timestamp': current_timestamp,
-            'event_active': event_state.active,
-            'controller_mode': controller_state.mode.value,
-            'statistics_reset': True,
-            'trigger_threshold_kw': self.trigger_threshold_kw
-        }
-    
+        return event_state.event_id
+  
     def _reset_event_statistics(self, event_state):
         """
         Reset event duration and per-event statistics for a new event.
@@ -2321,23 +2347,31 @@ class TriggerEvents:
         
         # Note: Trigger counters (above_trigger_count, below_trigger_count) 
         # are NOT reset here as they continue across events for pattern tracking
-    
+       
     def _set_event_mode(self, controller_state):
         """
-        Set controller mode to NORMAL for a new event.
+        Set the MD shaving controller mode when an event is detected.
         
-        This private method updates the controller's operational mode when
-        a new event starts, setting it to NORMAL mode as the initial state.
+        This method updates the controller state to set the appropriate
+        MD shaving mode when an event becomes active. It sets the mode
+        to NORMAL to indicate active MD shaving operations.
         
         Args:
-            controller_state (_MdControllerState): Controller state to update
+            controller_state (_MdControllerState): Controller state object to update
         """
-        # Import the enum to access NORMAL mode
+        # Import the enum here to avoid circular imports
         from enum import Enum
         
-        # Set mode to NORMAL for new event
+        # Define MdShavingMode if not already defined
+        class MdShavingMode(Enum):
+            IDLE = "idle"
+            NORMAL = "normal" 
+            CONSERVATION = "conservation"
+            EMERGENCY = "emergency"
+        
+        # Set controller mode to NORMAL for active MD shaving
         controller_state.mode = MdShavingMode.NORMAL
-    
+        
     def get_event_status(self, event_state):
         """
         Get comprehensive status information for the current event.
@@ -2366,7 +2400,7 @@ class TriggerEvents:
             'trigger_threshold_kw': self.trigger_threshold_kw
         }
 
-class MdWindowType:
+class SeverityScore:
     """
     Utility class for MD window status checking.
     
@@ -2445,88 +2479,32 @@ class MdWindowType:
         Returns:
             dict: Summary of event status actions performed
         """
-        try:
-            # Check if current timestamp is inside MD window
-            window_conditions = self.controller._check_tariff_window_conditions(current_timestamp)
-            inside_md_window = window_conditions.get('inside_md_window', False)
-            
-            if not inside_md_window:
-                # Not inside MD window - override event active logic
-                event_state.active = False
-                event_state.severity_score = 0.0
-                controller_state.mode = MdShavingMode.IDLE
-                
-                return {
-                    'action': 'event_deactivated',
-                    'reason': 'outside_md_window',
-                    'timestamp': current_timestamp,
-                    'inside_md_window': False,
-                    'event_active': event_state.active,
-                    'severity_score': event_state.severity_score,
-                    'controller_mode': controller_state.mode.value,
-                    'window_conditions': window_conditions
-                }
-                
-            else:
-                # Inside MD window - reset severity and set controller mode
-                # calculate severity score using active_event method
-                # w1*excess_diff + w2*event_duration_score + w3*tightness_value
-                # for now, w1, w2 are 1 and w3 is 2
-                # assign weights as variables for easy tuning later
-                # return severity score and other relevant data
-                
+        trigger_events = TriggerEvents()
+        active_event_data = self.severity_params()
+        battery_excess_diff = active_event_data.get('battery_excess_difference_kw', 0.0)
+        tightness_value = active_event_data.get('tightness_value', 0.5)
 
-                active_event_data = self.active_event()
-                battery_excess_diff = active_event_data.get('battery_excess_difference_kw', 0.0)
-                tightness_value = active_event_data.get('tightness_value', 0.5)
+        # Calculate severity score: w1*excess_diff + w2*event_duration_score + w3*tightness_value
+        # Assign weights as variables for easy tuning later
+        w1 = 1.0  # Weight for excess difference
+        w2 = 1.0  # Weight for event duration
+        w3 = 2.0  # Weight for tightness value
+                
+        # Get event duration and normalize to score (0-1 range)
+        event_duration_minutes = active_event_data.get('event_duration_minutes', 0)
+        event_duration_score = min(event_duration_minutes / 60.0, 1.0)  # Normalize to hour, cap at 1.0
+                
+        # Calculate severity score
+        severity_score = w1 * battery_excess_diff + w2 * event_duration_score + w3 * tightness_value
+                
+        # Update event state with calculated severity
+        event_state.severity_score = severity_score
+             
 
-                # Calculate severity score: w1*excess_diff + w2*event_duration_score + w3*tightness_value
-                # Assign weights as variables for easy tuning later
-                w1 = 1.0  # Weight for excess difference
-                w2 = 1.0  # Weight for event duration
-                w3 = 2.0  # Weight for tightness value
+        return severity_score        
                 
-                # Get event duration and normalize to score (0-1 range)
-                event_duration_minutes = active_event_data.get('event_duration_minutes', 0)
-                event_duration_score = min(event_duration_minutes / 60.0, 1.0)  # Normalize to hour, cap at 1.0
-                
-                # Calculate severity score
-                severity_score = w1 * battery_excess_diff + w2 * event_duration_score + w3 * tightness_value
-                
-                # Update event state with calculated severity
-                event_state.severity_score = severity_score
-                controller_state.mode = MdShavingMode.IDLE
- 
-                return {
-                    'action': 'no_override',
-                    'reason': 'inside_md_window', 
-                    'timestamp': current_timestamp,
-                    'inside_md_window': True,
-                    'event_active': event_state.active,
-                    'severity_score': event_state.severity_score,
-                    'controller_mode': controller_state.mode.value,
-                    'battery_excess_difference_kw': battery_excess_diff,
-                    'event_duration_minutes': event_duration_minutes,
-                    'tightness_value': tightness_value,
-                    'active_event_data': active_event_data,
-                    'window_conditions': window_conditions
-                }
-                
-        except Exception as e:
-
-            # Default to deactivating event if window check fails
-            event_state.active = False
-            
-            return {
-
-                'action': 'event_deactivated',
-                'reason': 'window_check_failed',
-                'timestamp': current_timestamp,
-                'error': str(e),
-                'event_active': event_state.active
-            }
         
-    def active_event(self):
+    def severity_params(self):
         """
         Retrieve battery maximum discharge capacity and calculate difference with current excess. 
         Return as a variable for use in conservation logic. 
@@ -2601,7 +2579,6 @@ class MdWindowType:
             'soc_tightness': soc_tightness,
             'tightness_value': tightness_value
         } 
-
 class MdOrchestrator:
 
     """
@@ -2644,62 +2621,103 @@ class MdOrchestrator:
         # Add excess demand to the dataframe
         df_sim['excess_demand_kw'] = excess_demand
         
-        # Classify events: excess > 0 means event
-        df_sim['is_event'] = df_sim['excess_demand_kw'] > 0
-        
-        # Initialize event tracking columns
+        # Initialize event tracking columns (is_event will be derived from event_state.active)
+        df_sim['is_event'] = False
         df_sim['event_id'] = 0
         df_sim['event_start'] = False
         df_sim['event_duration'] = 0.0
+        df_sim['severity_score'] = 0.0
         
         # Use existing methods for event processing
         event_state = _MdEventState()
         controller_state = _MdControllerState()
+
+        # Create trigger events instance
+        trigger_events = TriggerEvents()
+        
+        # Create controller and window type for severity score calculation
+        controller = MdShavingController(df_sim)
+        controller.import_config(config_data)
+       
+        
+        # Create severity score calculator
+        severity_calculator = SeverityScore(controller)
         
         # Process each timestamp using existing event management methods
         for i in range(len(df_sim)):
             current_row = df_sim.iloc[i]
             current_timestamp = current_row.name
-            is_event = current_row['is_event']
+            current_excess = current_row['excess_demand_kw']
             
-            if is_event and not event_state.active:
-                # Start new event using existing method
-                event_result = self.start_event(event_state, controller_state, current_timestamp)
+            # Get MD window status for this timestamp
+            window_conditions = controller._check_tariff_window_conditions(current_timestamp)
+            inside_md_window = window_conditions.get('inside_md_window', False)
+               
+            # Check if current event is active by calling set_event_state
+            current_event_active = trigger_events.set_event_state(current_excess, inside_md_window, event_state)
+            
+            # Calculate previous_event_active based on row i-1
+            if i > 0:
+                # Get previous row data
+                previous_row = df_sim.iloc[i-1]
+                previous_excess = previous_row['excess_demand_kw']
+                
+                # Get previous MD window status
+                previous_timestamp = previous_row.name
+                previous_window_conditions = controller._check_tariff_window_conditions(previous_timestamp)
+                previous_inside_md_window = previous_window_conditions.get('inside_md_window', False)
+                
+                # Calculate previous event state using same logic
+                previous_event_active = trigger_events.set_event_state(previous_excess, previous_inside_md_window, event_state)
+            else:
+                # For first row (i=0), there is no previous event
+                previous_event_active = False
+            
+            # Apply concrete 4-case logic for event ID assignment
+            if not previous_event_active and current_event_active:
+                # Case 1: NEW event starts (previous=False, current=True)
+                # Increment event ID and initialize
+                event_state.is_event = current_event_active
+                event_state.event_id = trigger_events.set_event_id(event_state)
+                event_state.start_time = current_timestamp
+                trigger_events._set_event_mode(controller_state)
                 df_sim.iloc[i, df_sim.columns.get_loc('event_start')] = True
                 df_sim.iloc[i, df_sim.columns.get_loc('event_duration')] = 0.0
                 
-            elif is_event and event_state.active:
-                # Continue existing event - calculate duration
+            elif previous_event_active and current_event_active:
+                # Case 2: CONTINUE existing event (previous=True, current=True)
+                # Calculate duration, maintain same event_id
+                event_state.is_event = current_event_active
+               
                 if event_state.start_time:
                     time_diff = current_timestamp - event_state.start_time
                     event_state.duration_minutes = time_diff.total_seconds() / 60.0
-                    df_sim.iloc[i, df_sim.columns.get_loc('event_duration')] = event_state.duration_minutes
                 df_sim.iloc[i, df_sim.columns.get_loc('event_start')] = False
+                df_sim.iloc[i, df_sim.columns.get_loc('event_duration')] = event_state.duration_minutes
                 
-            else:
-                # Not an event - reset state
-                event_state.active = False
+            elif previous_event_active and not current_event_active:
+                # Case 3: Event ENDED (previous=True, current=False)
+                # Reset event_id to 0, but keep persistent counter for next event
+                event_state.is_event = current_event_active
+                event_state.event_id = 0
+                trigger_events._reset_event_statistics(event_state)
                 df_sim.iloc[i, df_sim.columns.get_loc('event_start')] = False
                 df_sim.iloc[i, df_sim.columns.get_loc('event_duration')] = 0.0
+                
+            else:
+                # Case 4: No event (previous=False, current=False)
+                # Keep event_id at 0, no change to persistent counter
+                event_state.is_event = current_event_active
+                event_state.event_id = 0
+                df_sim.iloc[i, df_sim.columns.get_loc('event_start')] = False
+                df_sim.iloc[i, df_sim.columns.get_loc('event_duration')] = 0.0
+          
+            # Derive the displayable is_event from event_state.active
+            df_sim.iloc[i, df_sim.columns.get_loc('is_event')] = event_state.is_event
             
-            # Assign event ID (0 for non-events)
-            df_sim.iloc[i, df_sim.columns.get_loc('event_id')] = event_state.event_id if is_event else 0
-        
+            # Append all relevant data to df_sim
+            df_sim.iloc[i, df_sim.columns.get_loc('event_id')] = event_state.event_id 
+            #df_sim.iloc[i, df_sim.columns.get_loc('severity_score')] = severity_score 
+
         return df_sim
        
-    def compute_severity_score(self):
-        """
-        Compute severity score for MD excess demand events.
-
-        Passes df_sim through MdWindowType to get severity scores.
-
-        Calls severity_score method for each timestamp.
-
-        Returns:
-            df_sim with severity scores added.
-        """
-        # Placeholder implementation
-        return {
-            'max_severity_score': 0.0,
-            'avg_severity_score': 0.0
-        }
