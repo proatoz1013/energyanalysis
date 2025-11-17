@@ -1981,9 +1981,9 @@ class SmartConservationDebugger:
                     'display_config': config
                 }
             
-            # Process historical events using TriggerEvents
+            # Process historical events using TriggerEvents with battery state tracking
             trigger_events = MdOrchestrator()
-            enhanced_df = trigger_events.process_historical_events(config_data)
+            enhanced_df = trigger_events.process_events_with_battery_state(config_data, initial_soc_percent=95.0)
             
             # Convert enhanced dataframe to display format
             display_data = []
@@ -1997,7 +1997,9 @@ class SmartConservationDebugger:
                     'event_id': row['event_id'],
                     'event_start': 'Yes' if row['event_start'] else 'No',
                     'event_duration_min': round(row['event_duration'], 1),
-                    'severity_score': round(row['severity_score'], 2)
+                    'severity_score': round(row['severity_score'], 2),
+                    'battery_soc_kwh': round(row['battery_soc_kwh'], 2),
+                    'battery_soc_percent': round(row['battery_soc_percent'], 2)
                 }
                 display_data.append(display_row)
             
@@ -2019,8 +2021,8 @@ class SmartConservationDebugger:
                 summary_stats=summary_stats,
                 metadata={
                     'analysis_type': 'historical_events',
-                    'method_used': 'process_historical_events',
-                    'event_logic': 'excess_demand > 0',
+                    'method_used': 'process_events_with_battery_state',
+                    'event_logic': 'excess_demand > 0 with battery SOC tracking',
                     'trigger_source': 'target_series (monthly target)'
                 },
                 max_rows=config['max_rows']
@@ -2032,9 +2034,9 @@ class SmartConservationDebugger:
                 'enhanced_dataframe': enhanced_df,  # Include full processed dataset
                 'display_config': config,
                 'workflow_steps': [
-                    'Created TriggerEvents instance',
-                    'Called process_historical_events() with simplified logic',
-                    'Classified events as excess_demand > 0',
+                    'Created MdOrchestrator instance',
+                    'Called process_events_with_battery_state() with 95% initial SOC',
+                    'Classified events as excess_demand > 0 with battery state tracking',
                     'Used create_dynamic_analysis_table() for display'
                 ]
             })
