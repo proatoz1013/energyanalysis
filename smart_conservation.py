@@ -2508,7 +2508,7 @@ class SeverityScore:
             dict: Summary of event status actions performed
         """
         trigger_events = TriggerEvents()
-        active_event_data = self.severity_params()
+        active_event_data = self.severity_params(event_state=event_state)
         battery_excess_diff = active_event_data.get('battery_excess_difference_kw', 0.0)
         tightness_value = active_event_data.get('tightness_value', 0.5)
 
@@ -2518,9 +2518,9 @@ class SeverityScore:
         w2 = 1.0  # Weight for event duration
         w3 = 2.0  # Weight for tightness value
                 
-        # Get event duration and normalize to score (0-1 range)
+        # Get event duration score (no cap - increases continuously with duration)
         event_duration_minutes = active_event_data.get('event_duration_minutes', 0)
-        event_duration_score = min(event_duration_minutes / 60.0, 1.0)  # Normalize to hour, cap at 1.0
+        event_duration_score = event_duration_minutes / 60.0  # Convert to hours, no cap
                 
         # Calculate severity score
         severity_score = w1 * battery_excess_diff + w2 * event_duration_score + w3 * tightness_value
@@ -2532,16 +2532,19 @@ class SeverityScore:
         return severity_score        
                 
         
-    def severity_params(self):
+    def severity_params(self, event_state=None):
         """
         Retrieve battery maximum discharge capacity and calculate difference with current excess. 
         Return as a variable for use in conservation logic. 
 
-        Retrieve active event duration and store as an integer. 
+        Retrieve active event duration from event_state parameter (passed directly from orchestrator).
 
         Retrieve battery SOC and assign a tightness value.
 
         Return a dictionary with these values.
+        
+        Args:
+            event_state (_MdEventState, optional): Event state object containing duration_minutes
         """
         # Get battery capacity from controller configuration
         battery_capacity = self.controller.get_config_param('battery_capacity', 0.0)
@@ -2576,9 +2579,8 @@ class SeverityScore:
             # Excess exceeds battery capacity - higher severity, capped at 1.0
             battery_excess_difference = min(1.0, 0.5 + abs(raw_battery_excess_difference) / max(battery_kw_conserved, 1.0))
         
-        # Retrieve active event duration from controller state
-        event_state = getattr(self.controller.state, 'event', None)
-        if event_state and hasattr(event_state, 'duration_minutes'):
+        # Retrieve active event duration from event_state parameter (direct access)
+        if event_state is not None and hasattr(event_state, 'duration_minutes'):
             event_duration_minutes = int(event_state.duration_minutes)
         else:
             event_duration_minutes = 0
