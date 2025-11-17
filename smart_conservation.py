@@ -2445,6 +2445,46 @@ class SeverityScore:
         """
         self.controller = controller
     
+    def _get_event_duration_from_dataframe(self, current_timestamp):
+        """
+        Retrieve event duration for current timestamp from df_sim.
+        
+        This helper method reads the 'event_duration' column from the simulation
+        dataframe to get the current event's duration in minutes.
+        
+        Args:
+            current_timestamp (datetime): Timestamp to look up
+            
+        Returns:
+            float: Event duration in minutes, or 0.0 if not found/not in event
+        """
+        try:
+            # Get df_sim from controller config
+            config_data = self.controller.config_data
+            if not config_data:
+                return 0.0
+            
+            df_sim = config_data.get('df_sim')
+            if df_sim is None:
+                return 0.0
+            
+            # Check if timestamp exists in dataframe
+            if current_timestamp not in df_sim.index:
+                return 0.0
+            
+            # Get event_duration column value
+            if 'event_duration' not in df_sim.columns:
+                return 0.0
+            
+            duration_minutes = df_sim.loc[current_timestamp, 'event_duration']
+            
+            # Return as float, handling any NaN or invalid values
+            return float(duration_minutes) if duration_minutes is not None else 0.0
+            
+        except Exception as e:
+            # If any error occurs, return 0.0 as safe default
+            return 0.0
+    
     def check_md_window_status(self, df_sim=None):
         """
         Check MD window status for all timestamps in df_sim using existing _check_tariff_window_conditions.
@@ -2508,7 +2548,10 @@ class SeverityScore:
             dict: Summary of event status actions performed
         """
         trigger_events = TriggerEvents()
-        active_event_data = self.severity_params()
+        
+        # ✅ UPDATED: Pass current_timestamp to severity_params to retrieve event duration from dataframe
+        active_event_data = self.severity_params(current_timestamp=current_timestamp)
+        
         battery_excess_diff = active_event_data.get('battery_excess_difference_kw', 0.0)
         tightness_value = active_event_data.get('tightness_value', 0.5)
 
@@ -2530,18 +2573,23 @@ class SeverityScore:
              
 
         return severity_score        
-                
-        
-    def severity_params(self):
+                      
+    def severity_params(self, current_timestamp=None):
         """
         Retrieve battery maximum discharge capacity and calculate difference with current excess. 
         Return as a variable for use in conservation logic. 
 
-        Retrieve active event duration and store as an integer. 
+        Retrieve active event duration from df_sim dataframe using helper method.
 
         Retrieve battery SOC and assign a tightness value.
 
         Return a dictionary with these values.
+        
+        Args:
+            current_timestamp (datetime, optional): Timestamp to retrieve event duration for
+        
+        Returns:
+            dict: Dictionary containing severity parameters including event duration from dataframe
         """
         # Get battery capacity from controller configuration
         battery_capacity = self.controller.get_config_param('battery_capacity', 0.0)
@@ -2576,10 +2624,9 @@ class SeverityScore:
             # Excess exceeds battery capacity - higher severity, capped at 1.0
             battery_excess_difference = min(1.0, 0.5 + abs(raw_battery_excess_difference) / max(battery_kw_conserved, 1.0))
         
-        # Retrieve active event duration from controller state
-        event_state = getattr(self.controller.state, 'event', None)
-        if event_state and hasattr(event_state, 'duration_minutes'):
-            event_duration_minutes = int(event_state.duration_minutes)
+        # ✅ NEW: Retrieve event duration from df_sim dataframe using helper method
+        if current_timestamp is not None:
+            event_duration_minutes = int(self._get_event_duration_from_dataframe(current_timestamp))
         else:
             event_duration_minutes = 0
         
@@ -2857,9 +2904,6 @@ class DecisionMaker:
                 'conservation_level': 'emergency',
                 'reasoning': f"Emergency severity ({severity_score:.2f}) - conserving 75%+ capacity"
             }
-
-
-
 
 class MdOrchestrator:
 
