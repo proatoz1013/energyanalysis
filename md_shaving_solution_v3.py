@@ -3340,6 +3340,56 @@ def render_smart_conservation_debug_analysis():
                     hide_index=True
                 )
                 
+                # Add download button for complete historical events dataframe
+                st.markdown("---")
+                st.markdown("#### 📥 Download Complete Event Analysis")
+                
+                if st.button("💾 Download Full Historical Events Results", help="Download complete process_historical_events dataframe as CSV"):
+                    try:
+                        from smart_conservation import MdOrchestrator
+                        
+                        # Call process_historical_events to get complete dataframe
+                        orchestrator = MdOrchestrator()
+                        df_full_events = orchestrator.process_historical_events(config)
+                        
+                        if not df_full_events.empty:
+                            # Convert to CSV
+                            csv_data = df_full_events.to_csv(index=True)
+                            
+                            # Provide download
+                            st.download_button(
+                                label="📊 Download Complete Historical Events CSV",
+                                data=csv_data,
+                                file_name=f"historical_events_full_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                                mime="text/csv",
+                                key="download_historical_events"
+                            )
+                            
+                            # Display info about the download
+                            st.success(f"""
+                            ✅ **Complete Historical Events Data Ready!**
+                            
+                            **Dataframe Details:**
+                            - Total Records: {len(df_full_events):,}
+                            - Columns: {', '.join(df_full_events.columns.tolist())}
+                            - Date Range: {df_full_events.index[0]} to {df_full_events.index[-1]}
+                            
+                            **Includes:**
+                            - Excess Demand (kW)
+                            - Event Classification (is_event)
+                            - Event IDs (sequential for continuous events)
+                            - Event Start markers
+                            - Event Duration (minutes)
+                            - Severity Scores
+                            """)
+                        else:
+                            st.warning("⚠️ No event data available for download")
+                            
+                    except Exception as e:
+                        st.error(f"❌ Error preparing historical events download: {str(e)}")
+                        if st.checkbox("Show download error details", key="show_download_error"):
+                            st.exception(e)
+                
                 # Event status insights
                 st.info("""
                 **🎯 Trigger Event Analysis Insights:**

@@ -2605,6 +2605,260 @@ class SeverityScore:
             'soc_tightness': soc_tightness,
             'tightness_value': tightness_value
         } 
+
+class DecisionMaker:
+    """
+    Decision maker using four-case conditional logic for event management.
+    
+    Determines when to calculate severity score. This is the bridge between 
+    the smart_conservation module and the smart_battery_executor module. 
+
+    It is a refactor of the existing logic in process_historical_events and 
+    exists as a method to be called in future orchestrator functions. 
+    """
+
+    def four_case_event_logic(self, previous_event_active, current_event_active, 
+                                current_timestamp, event_state, controller_state, 
+                                severity_calculator, df_sim, row_index,
+                                battery_soc_kwh=None, battery_soc_percent=None):
+        """
+        Apply four-case conditional logic to manage event state and calculate severity score.
+        
+        This method is called by the battery executor to determine discharge strategy based
+        on event transitions and severity assessment. It bridges Smart Conservation (System 1)
+        and Smart Battery Executor (System 2).
+        
+        Args:
+            previous_event_active (bool): Event active state from previous timestamp
+            current_event_active (bool): Event active state for current timestamp
+            current_timestamp (datetime): Current timestamp being processed
+            event_state (_MdEventState): Event state object tracking current event
+            controller_state (_MdControllerState): Controller state for mode management
+            severity_calculator (SeverityScore): Calculator for severity assessment
+            df_sim (pd.DataFrame): Simulation dataframe for storing results
+            row_index (int): Current row index in df_sim (i)
+            battery_soc_kwh (float, optional): Current battery SOC in kWh (from executor)
+            battery_soc_percent (float, optional): Current battery SOC as percentage (from executor)
+            
+        Returns:
+            dict: Event processing result with keys:
+                - 'event_case': str ('new_event', 'continue_event', 'event_ended', 'no_event')
+                - 'severity_score': float (calculated severity for discharge strategy)
+                - 'event_id': int (current event ID)
+                - 'event_duration_minutes': float (duration since event start)
+                - 'should_calculate_severity': bool (whether severity was calculated)
+                - 'discharge_recommendation': dict (recommended discharge strategy)
+                
+        Example:
+            result = decision_maker.four_case_event_logic(
+                previous_event_active=False,
+                current_event_active=True,
+                current_timestamp=timestamp,
+                event_state=event_state,
+                controller_state=controller_state,
+                severity_calculator=severity_calc,
+                df_sim=df_sim,
+                row_index=i,
+                battery_soc_kwh=450.0,  # From battery executor
+                battery_soc_percent=75.0  # From battery executor
+            )
+        """
+        # Initialize return structure
+        result = {
+            'event_case': None,
+            'severity_score': 0.0,
+            'event_id': 0,
+            'event_duration_minutes': 0.0,
+            'should_calculate_severity': False,
+            'discharge_recommendation': {}
+        }
+        
+        # Create trigger events instance for event management methods
+        trigger_events = TriggerEvents()
+        
+        # Update controller config with current battery SOC if provided
+        # This allows severity_params to use actual battery state instead of static config
+        if battery_soc_percent is not None:
+            severity_calculator.controller.config_data['battery_soc_percent'] = battery_soc_percent
+        if battery_soc_kwh is not None:
+            severity_calculator.controller.config_data['battery_soc_kwh'] = battery_soc_kwh
+        
+        # CASE 1: NEW event starts (previous=False, current=True)
+        if not previous_event_active and current_event_active:
+            # Set event case type
+            result['event_case'] = 'new_event'
+            
+            # Update event state
+            event_state.is_event = current_event_active
+            event_state.event_id = trigger_events.set_event_id(event_state)
+            event_state.start_time = current_timestamp
+            trigger_events._set_event_mode(controller_state)
+            
+            # Store in dataframe
+            df_sim.iloc[row_index, df_sim.columns.get_loc('event_start')] = True
+            df_sim.iloc[row_index, df_sim.columns.get_loc('event_duration')] = 0.0
+            
+            # Calculate severity score for new event start
+            severity = severity_calculator.severity_score(current_timestamp, event_state, controller_state)
+            df_sim.iloc[row_index, df_sim.columns.get_loc('severity_score')] = severity
+            
+            # Update result
+            result['severity_score'] = severity
+            result['event_id'] = event_state.event_id
+            result['event_duration_minutes'] = 0.0
+            result['should_calculate_severity'] = True
+            
+            # Get discharge recommendation based on severity
+            result['discharge_recommendation'] = self._get_discharge_recommendation_from_severity(
+                severity, battery_soc_percent
+            )
+        
+        # CASE 2: CONTINUE existing event (previous=True, current=True)
+        elif previous_event_active and current_event_active:
+            # Set event case type
+            result['event_case'] = 'continue_event'
+            
+            # Update event state
+            event_state.is_event = current_event_active
+            
+            # Calculate duration
+            if event_state.start_time:
+                time_diff = current_timestamp - event_state.start_time
+                event_state.duration_minutes = time_diff.total_seconds() / 60.0
+            
+            # Store in dataframe
+            df_sim.iloc[row_index, df_sim.columns.get_loc('event_start')] = False
+            df_sim.iloc[row_index, df_sim.columns.get_loc('event_duration')] = event_state.duration_minutes
+            
+            # Calculate severity score for continuing event
+            severity = severity_calculator.severity_score(current_timestamp, event_state, controller_state)
+            df_sim.iloc[row_index, df_sim.columns.get_loc('severity_score')] = severity
+            
+            # Update result
+            result['severity_score'] = severity
+            result['event_id'] = event_state.event_id
+            result['event_duration_minutes'] = event_state.duration_minutes
+            result['should_calculate_severity'] = True
+            
+            # Get discharge recommendation based on severity
+            result['discharge_recommendation'] = self._get_discharge_recommendation_from_severity(
+                severity, battery_soc_percent
+            )
+        
+        # CASE 3: Event ENDED (previous=True, current=False)
+        elif previous_event_active and not current_event_active:
+            # Set event case type
+            result['event_case'] = 'event_ended'
+            
+            # Update event state - reset for next event
+            event_state.is_event = current_event_active
+            event_state.event_id = 0
+            trigger_events._reset_event_statistics(event_state)
+            
+            # Store in dataframe
+            df_sim.iloc[row_index, df_sim.columns.get_loc('event_start')] = False
+            df_sim.iloc[row_index, df_sim.columns.get_loc('event_duration')] = 0.0
+            df_sim.iloc[row_index, df_sim.columns.get_loc('severity_score')] = 0.0
+            
+            # Update result - no discharge during non-events
+            result['severity_score'] = 0.0
+            result['event_id'] = 0
+            result['event_duration_minutes'] = 0.0
+            result['should_calculate_severity'] = False
+            result['discharge_recommendation'] = {
+                'action': 'idle',
+                'discharge_multiplier': 0.0,
+                'conservation_level': 'none',
+                'reasoning': 'Event ended - entering idle/charge mode'
+            }
+        
+        # CASE 4: No event (previous=False, current=False)
+        else:
+            # Set event case type
+            result['event_case'] = 'no_event'
+            
+            # Update event state
+            event_state.is_event = current_event_active
+            event_state.event_id = 0
+            
+            # Store in dataframe
+            df_sim.iloc[row_index, df_sim.columns.get_loc('event_start')] = False
+            df_sim.iloc[row_index, df_sim.columns.get_loc('event_duration')] = 0.0
+            df_sim.iloc[row_index, df_sim.columns.get_loc('severity_score')] = 0.0
+            
+            # Update result - no discharge during non-events
+            result['severity_score'] = 0.0
+            result['event_id'] = 0
+            result['event_duration_minutes'] = 0.0
+            result['should_calculate_severity'] = False
+            result['discharge_recommendation'] = {
+                'action': 'charge',
+                'discharge_multiplier': 0.0,
+                'conservation_level': 'none',
+                'reasoning': 'No event - charging mode if SOC < 95%'
+            }
+        
+        # Derive displayable is_event from event_state.active
+        df_sim.iloc[row_index, df_sim.columns.get_loc('is_event')] = event_state.is_event
+        
+        return result
+    
+    def _get_discharge_recommendation_from_severity(self, severity_score, battery_soc_percent=None):
+        """
+        Convert severity score into discharge recommendation for battery executor.
+        
+        This method translates the severity score (0-5+ range) into actionable
+        discharge multipliers using the severity-based conservation strategy.
+        
+        Args:
+            severity_score (float): Calculated severity score
+            battery_soc_percent (float, optional): Current battery SOC percentage
+            
+        Returns:
+            dict: Discharge recommendation with keys:
+                - 'action': str ('discharge', 'conserve', 'idle')
+                - 'discharge_multiplier': float (0.0-1.0, percentage of full discharge)
+                - 'conservation_level': str ('normal', 'moderate', 'strong', 'emergency')
+                - 'reasoning': str (explanation of recommendation)
+        """
+        # Severity-based discharge multipliers (from Option B discussion)
+        if severity_score < 1.0:
+            return {
+                'action': 'discharge',
+                'discharge_multiplier': 1.0,  # Full discharge capability
+                'conservation_level': 'normal',
+                'reasoning': f"Low severity ({severity_score:.2f}) - full discharge capacity"
+            }
+        
+        elif 1.0 <= severity_score < 2.0:
+            return {
+                'action': 'discharge',
+                'discharge_multiplier': 0.75,  # Reduce discharge 25%
+                'conservation_level': 'moderate',
+                'reasoning': f"Moderate severity ({severity_score:.2f}) - conserving 25% capacity"
+            }
+        
+        elif 2.0 <= severity_score < 3.0:
+            return {
+                'action': 'discharge',
+                'discharge_multiplier': 0.50,  # Reduce discharge 50%
+                'conservation_level': 'strong',
+                'reasoning': f"Strong severity ({severity_score:.2f}) - conserving 50% capacity"
+            }
+        
+        else:  # severity >= 3.0
+            # Emergency mode - minimal discharge
+            multiplier = 0.25 if battery_soc_percent and battery_soc_percent > 20 else 0.1
+            return {
+                'action': 'conserve',
+                'discharge_multiplier': multiplier,
+                'conservation_level': 'emergency',
+                'reasoning': f"Emergency severity ({severity_score:.2f}) - conserving 75%+ capacity"
+            }
+
+
+
+
 class MdOrchestrator:
 
     """
@@ -2714,6 +2968,10 @@ class MdOrchestrator:
                 df_sim.iloc[i, df_sim.columns.get_loc('event_start')] = True
                 df_sim.iloc[i, df_sim.columns.get_loc('event_duration')] = 0.0
                 
+                # Calculate severity score for new event start
+                severity = severity_calculator.severity_score(current_timestamp, event_state, controller_state)
+                df_sim.iloc[i, df_sim.columns.get_loc('severity_score')] = severity
+                
             elif previous_event_active and current_event_active:
                 # Case 2: CONTINUE existing event (previous=True, current=True)
                 # Calculate duration, maintain same event_id
@@ -2725,6 +2983,10 @@ class MdOrchestrator:
                 df_sim.iloc[i, df_sim.columns.get_loc('event_start')] = False
                 df_sim.iloc[i, df_sim.columns.get_loc('event_duration')] = event_state.duration_minutes
                 
+                # Calculate severity score for continuing event
+                severity = severity_calculator.severity_score(current_timestamp, event_state, controller_state)
+                df_sim.iloc[i, df_sim.columns.get_loc('severity_score')] = severity
+                
             elif previous_event_active and not current_event_active:
                 # Case 3: Event ENDED (previous=True, current=False)
                 # Reset event_id to 0, but keep persistent counter for next event
@@ -2733,6 +2995,7 @@ class MdOrchestrator:
                 trigger_events._reset_event_statistics(event_state)
                 df_sim.iloc[i, df_sim.columns.get_loc('event_start')] = False
                 df_sim.iloc[i, df_sim.columns.get_loc('event_duration')] = 0.0
+                df_sim.iloc[i, df_sim.columns.get_loc('severity_score')] = 0.0
                 
             else:
                 # Case 4: No event (previous=False, current=False)
@@ -2741,13 +3004,135 @@ class MdOrchestrator:
                 event_state.event_id = 0
                 df_sim.iloc[i, df_sim.columns.get_loc('event_start')] = False
                 df_sim.iloc[i, df_sim.columns.get_loc('event_duration')] = 0.0
+                df_sim.iloc[i, df_sim.columns.get_loc('severity_score')] = 0.0
           
             # Derive the displayable is_event from event_state.active
             df_sim.iloc[i, df_sim.columns.get_loc('is_event')] = event_state.is_event
             
             # Append all relevant data to df_sim
-            df_sim.iloc[i, df_sim.columns.get_loc('event_id')] = event_state.event_id 
-            #df_sim.iloc[i, df_sim.columns.get_loc('severity_score')] = severity_score 
+            df_sim.iloc[i, df_sim.columns.get_loc('event_id')] = event_state.event_id
 
         return df_sim
-       
+    
+    def process_events_with_battery_state(self, config_data, initial_soc_percent=95.0):
+        """
+        Process historical events using DecisionMaker.four_case_event_logic() with battery state tracking.
+        
+        This orchestrator method reproduces the logic of process_historical_events() but delegates
+        the four-case conditional logic to DecisionMaker.four_case_event_logic(). This enables
+        integration with the Smart Battery Executor by passing dynamic battery SOC state.
+        
+        Key differences from process_historical_events():
+        - Uses DecisionMaker.four_case_event_logic() instead of inline 4-case logic
+        - Tracks battery SOC state across timestamps (placeholder for now)
+        - Passes battery state to severity calculation for dynamic recommendations
+        - Prepares for future Smart Battery Executor integration
+        
+        Args:
+            config_data (dict): Configuration containing df_sim, power_col, target_series, battery params
+            initial_soc_percent (float, optional): Starting battery SOC percentage (default: 95.0)
+            
+        Returns:
+            pd.DataFrame: Enhanced dataset with event classification columns:
+                - 'excess_demand_kw': calculated excess (current_power - target)
+                - 'is_event': boolean event classification (excess > 0)
+                - 'event_id': sequential event ID (0 for non-events)
+                - 'event_start': boolean marking start of new events
+                - 'event_duration': minutes since event started
+                - 'severity_score': calculated severity score
+                - 'battery_soc_percent': tracked battery SOC (placeholder)
+        """
+        import pandas as pd
+        
+        # Extract required data from config
+        df_sim = config_data['df_sim'].copy()
+        
+        # Use existing MdExcess method to calculate excess demand
+        md_excess = MdExcess(config_data)
+        excess_demand = md_excess.calculate_excess_demand()
+        
+        # Add excess demand to the dataframe
+        df_sim['excess_demand_kw'] = excess_demand
+        
+        # Initialize event tracking columns
+        df_sim['is_event'] = False
+        df_sim['event_id'] = 0
+        df_sim['event_start'] = False
+        df_sim['event_duration'] = 0.0
+        df_sim['severity_score'] = 0.0
+        df_sim['battery_soc_percent'] = 0.0  # Track battery SOC
+        
+        # Initialize state objects
+        event_state = _MdEventState()
+        controller_state = _MdControllerState()
+        
+        # Create required instances
+        trigger_events = TriggerEvents()
+        sc = SmartConstants()
+        
+        # Create controller for severity calculation
+        controller = MdShavingController(df_sim)
+        controller.import_config(config_data)
+        
+        # Create severity score calculator
+        severity_calculator = SeverityScore(controller)
+        
+        # Create decision maker instance
+        decision_maker = DecisionMaker()
+        
+        # Initialize battery state tracking
+        battery_capacity_kwh = config_data.get('battery_capacity', 600.0)  # Default 600 kWh
+        current_soc_kwh = battery_capacity_kwh * (initial_soc_percent / 100.0)
+        current_soc_percent = initial_soc_percent
+        
+        # Process each timestamp using DecisionMaker.four_case_event_logic()
+        for i in range(len(df_sim)):
+            current_row = df_sim.iloc[i]
+            current_timestamp = current_row.name
+            current_excess = current_row['excess_demand_kw']
+            
+            # Get MD window status for this timestamp
+            inside_md_window = sc.is_md_active(current_timestamp, config_data)
+            
+            # Check if current event is active
+            current_event_active = trigger_events.set_event_state(current_excess, inside_md_window, event_state)
+            
+            # Calculate previous_event_active
+            if i > 0:
+                previous_row = df_sim.iloc[i-1]
+                previous_excess = previous_row['excess_demand_kw']
+                previous_timestamp = previous_row.name
+                previous_inside_md_window = sc.is_md_active(previous_timestamp, config_data)
+                previous_event_active = trigger_events.set_event_state(previous_excess, previous_inside_md_window, event_state)
+            else:
+                previous_event_active = False
+            
+            # Call DecisionMaker.four_case_event_logic() instead of inline 4-case logic
+            event_result = decision_maker.four_case_event_logic(
+                previous_event_active=previous_event_active,
+                current_event_active=current_event_active,
+                current_timestamp=current_timestamp,
+                event_state=event_state,
+                controller_state=controller_state,
+                severity_calculator=severity_calculator,
+                df_sim=df_sim,
+                row_index=i,
+                battery_soc_kwh=current_soc_kwh,      # Pass current battery state
+                battery_soc_percent=current_soc_percent  # Pass current SOC percentage
+            )
+            
+            # Store battery SOC in dataframe
+            df_sim.iloc[i, df_sim.columns.get_loc('battery_soc_percent')] = current_soc_percent
+            
+            # Store event_id in dataframe
+            df_sim.iloc[i, df_sim.columns.get_loc('event_id')] = event_result['event_id']
+            
+            # TODO: Update battery SOC based on discharge/charge actions
+            # This will be implemented when Smart Battery Executor is integrated
+            # For now, SOC remains constant (placeholder)
+            # Future implementation will call Smart Battery Executor here to:
+            # 1. Execute discharge based on event_result['discharge_recommendation']
+            # 2. Update current_soc_kwh and current_soc_percent
+            # 3. Track energy discharged/charged
+        
+        return df_sim
