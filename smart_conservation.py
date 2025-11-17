@@ -3062,7 +3062,8 @@ class MdOrchestrator:
         df_sim['event_start'] = False
         df_sim['event_duration'] = 0.0
         df_sim['severity_score'] = 0.0
-        df_sim['battery_soc_percent'] = 0.0  # Track battery SOC
+        df_sim['battery_soc_kwh'] = 0.0  # Track battery SOC in kWh
+        df_sim['battery_soc_percent'] = 0.0  # Track battery SOC in percentage
         
         # Initialize state objects
         event_state = _MdEventState()
@@ -3124,6 +3125,7 @@ class MdOrchestrator:
             )
             
             # Store battery SOC in dataframe
+            df_sim.iloc[i, df_sim.columns.get_loc('battery_soc_kwh')] = current_soc_kwh
             df_sim.iloc[i, df_sim.columns.get_loc('battery_soc_percent')] = current_soc_percent
             
             # Store event_id in dataframe
