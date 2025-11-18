@@ -2807,6 +2807,60 @@ class DecisionMaker:
         
         return result
     
+    def _get_discharge_recommendation_from_severity(self, severity_score, battery_soc_percent):
+        """
+        Generate discharge recommendation based on severity score.
+        
+        This helper method translates severity scores into actionable discharge strategies
+        for the battery executor.
+        
+        Args:
+            severity_score (float): Current severity score
+            battery_soc_percent (float): Current battery SOC percentage
+            
+        Returns:
+            dict: Discharge recommendation with keys:
+                - 'action': str ('discharge', 'idle')
+                - 'discharge_multiplier': float (0.0-1.0, where 1.0 = full power)
+                - 'conservation_level': str ('none', 'normal', 'conservation')
+                - 'reasoning': str (explanation of recommendation)
+        """
+        # Handle idle/no discharge cases
+        if severity_score == 0.0:
+            return {
+                'action': 'idle',
+                'discharge_multiplier': 0.0,
+                'conservation_level': 'none',
+                'reasoning': 'No event active'
+            }
+        
+        # Check battery SOC constraints
+        if battery_soc_percent is not None and battery_soc_percent < 10.0:
+            return {
+                'action': 'idle',
+                'discharge_multiplier': 0.0,
+                'conservation_level': 'none',
+                'reasoning': f'Battery SOC too low ({battery_soc_percent:.1f}%)'
+            }
+        
+        # Severity-based discharge strategy
+        if severity_score < 3.5:
+            # Normal discharge mode
+            return {
+                'action': 'discharge',
+                'discharge_multiplier': 1.0,
+                'conservation_level': 'normal',
+                'reasoning': f'Normal discharge - severity ({severity_score:.2f}) below threshold (3.5)'
+            }
+        else:
+            # Conservation mode - reduced discharge
+            return {
+                'action': 'discharge',
+                'discharge_multiplier': 0.5,  # 50% of normal discharge power
+                'conservation_level': 'conservation',
+                'reasoning': f'Conservation mode - severity ({severity_score:.2f}) exceeds threshold (3.5)'
+            }
+    
     def set_controller_mode_by_severity(self, event_start, is_event, severity_score, 
                                        controller_state, severity_threshold=3.5):
         """
@@ -3151,7 +3205,8 @@ class MdOrchestrator:
             df_sim.iloc[i, df_sim.columns.get_loc('event_id')] = event_result['event_id']
             
             # Determine controller mode based on severity score
-            event_start = df_sim.iloc[i]['event_start']
+            # Read event_start from event_result instead of dataframe to avoid timing issues
+            event_start = (event_result['event_case'] == 'new_event')
             is_event = event_state.is_event
             severity_score = event_result['severity_score']
             
