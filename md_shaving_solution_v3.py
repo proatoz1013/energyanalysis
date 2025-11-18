@@ -3399,6 +3399,214 @@ def render_smart_conservation_debug_analysis():
                 - **Conservation Mode**: Tracks when conservation strategies are engaged
                 """)
         
+        # =====================================================================
+        # NEW: SMART SHAVING RESULTS (MainSmartShaving orchestrator)
+        # =====================================================================
+        st.markdown("---")  # Separator
+        st.markdown("#### 🔋 Smart Shaving Battery Operations")
+        st.markdown("**Complete smart battery shaving workflow with dynamic SOC tracking and controller mode switching**")
+        
+        with st.spinner("Running MainSmartShaving orchestrator..."):
+            try:
+                # Get smart shaving results using the new orchestrator method
+                shaving_analysis_data = debugger.analyze_smart_shaving_results(
+                    display_config={
+                        'max_rows': max_rows,
+                        'show_summary': show_summary,
+                        'debug_output': False
+                    }
+                )
+                
+                # Check if we have valid smart shaving data
+                if 'error' in shaving_analysis_data.get('metadata', {}):
+                    st.error(f"Smart shaving analysis error: {shaving_analysis_data['metadata']['error']}")
+                elif shaving_analysis_data['dataframe'].empty:
+                    st.warning("No smart shaving data available")
+                else:
+                    # Display smart shaving summary statistics if available and requested
+                    if show_summary and shaving_analysis_data.get('summary'):
+                        shaving_summary = shaving_analysis_data['summary']
+                        
+                        # Event Detection Summary
+                        st.markdown("##### 📊 Event Detection Summary")
+                        col1, col2, col3, col4 = st.columns(4)
+                        
+                        with col1:
+                            st.metric("Total Timestamps", f"{shaving_summary.get('total_timestamps', 0):,}")
+                            st.metric("Event Timestamps", f"{shaving_summary.get('total_event_timestamps', 0):,}")
+                            
+                        with col2:
+                            st.metric("Unique Events", f"{shaving_summary.get('unique_events_detected', 0)}")
+                            st.metric("Event Percentage", f"{shaving_summary.get('event_percentage', 0):.1f}%")
+                            
+                        with col3:
+                            st.metric("Max Excess", f"{shaving_summary.get('max_excess_demand_kw', 0):.1f} kW")
+                            st.metric("Avg Excess (Events)", f"{shaving_summary.get('avg_excess_during_events', 0):.1f} kW")
+                            
+                        with col4:
+                            st.metric("Max Severity", f"{shaving_summary.get('max_severity_score', 0):.2f}")
+                            st.metric("Avg Severity (Events)", f"{shaving_summary.get('avg_severity_during_events', 0):.2f}")
+                        
+                        # Controller Mode Summary
+                        st.markdown("##### 🎛️ Controller Mode Distribution")
+                        col1, col2, col3, col4 = st.columns(4)
+                        
+                        with col1:
+                            st.metric("IDLE Mode", f"{shaving_summary.get('idle_mode_count', 0):,}")
+                            
+                        with col2:
+                            st.metric("NORMAL Mode", f"{shaving_summary.get('normal_mode_count', 0):,}")
+                            
+                        with col3:
+                            st.metric("CONSERVATION Mode", f"{shaving_summary.get('conservation_mode_count', 0):,}")
+                            
+                        with col4:
+                            st.metric("Conservation %", f"{shaving_summary.get('conservation_mode_percentage', 0):.1f}%")
+                        
+                        # Battery SOC Summary
+                        st.markdown("##### 🔋 Battery State of Charge (SOC)")
+                        col1, col2, col3, col4, col5 = st.columns(5)
+                        
+                        with col1:
+                            st.metric("Initial SOC", f"{shaving_summary.get('initial_soc_percent', 95.0):.1f}%")
+                            
+                        with col2:
+                            st.metric("Final SOC", f"{shaving_summary.get('final_soc_percent', 0):.1f}%")
+                            
+                        with col3:
+                            st.metric("Min SOC", f"{shaving_summary.get('min_soc_percent', 0):.1f}%")
+                            
+                        with col4:
+                            st.metric("Avg SOC", f"{shaving_summary.get('avg_soc_percent', 0):.1f}%")
+                            
+                        with col5:
+                            st.metric("SOC Range", f"{shaving_summary.get('soc_range_percent', 0):.1f}%")
+                        
+                        # Battery Operations Summary
+                        st.markdown("##### ⚡ Battery Operations")
+                        col1, col2, col3, col4 = st.columns(4)
+                        
+                        with col1:
+                            st.metric("Total Discharged", f"{shaving_summary.get('total_energy_discharged_kwh', 0):.1f} kWh")
+                            st.metric("Max Discharge Power", f"{shaving_summary.get('max_discharge_power_kw', 0):.1f} kW")
+                            
+                        with col2:
+                            st.metric("Total Charged", f"{shaving_summary.get('total_energy_charged_kwh', 0):.1f} kWh")
+                            st.metric("Max Charge Power", f"{shaving_summary.get('max_charge_power_kw', 0):.1f} kW")
+                            
+                        with col3:
+                            st.metric("Net Energy Used", f"{shaving_summary.get('net_energy_consumed_kwh', 0):.1f} kWh")
+                            st.metric("Discharge Events", f"{shaving_summary.get('discharge_count', 0):,}")
+                            
+                        with col4:
+                            st.metric("Charge Events", f"{shaving_summary.get('charge_count', 0):,}")
+                            st.metric("Blocked Events", f"{shaving_summary.get('blocked_count', 0):,}")
+                        
+                        # Demand Reduction Summary
+                        st.markdown("##### 📉 Demand Reduction Performance")
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            st.metric("Max Net Demand", f"{shaving_summary.get('max_net_demand_kw', 0):.1f} kW")
+                            
+                        with col2:
+                            st.metric("Avg Demand Reduction", f"{shaving_summary.get('avg_demand_reduction_kw', 0):.1f} kW")
+                            
+                        with col3:
+                            st.metric("Total Demand Reduction", f"{shaving_summary.get('total_demand_reduction_kwh', 0):.1f} kWh")
+                    
+                    # Display the smart shaving DataFrame
+                    st.markdown(f"**Showing {shaving_analysis_data['displayed_records']} of {shaving_analysis_data['total_records']} smart shaving records**")
+                    st.dataframe(
+                        shaving_analysis_data['dataframe'],
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                    
+                    # Add download button for complete smart shaving results
+                    st.markdown("---")
+                    st.markdown("#### 📥 Download Complete Smart Shaving Results")
+                    
+                    if st.button("💾 Download Full Smart Shaving Results", help="Download complete MainSmartShaving dataframe with all 14 columns", key="download_smart_shaving"):
+                        try:
+                            # Get the enhanced dataframe from the analysis result
+                            if 'enhanced_dataframe' in shaving_analysis_data:
+                                df_full_shaving = shaving_analysis_data['enhanced_dataframe']
+                                
+                                if not df_full_shaving.empty:
+                                    # Convert to CSV
+                                    csv_data = df_full_shaving.to_csv(index=True)
+                                    
+                                    # Provide download
+                                    st.download_button(
+                                        label="📊 Download Complete Smart Shaving CSV",
+                                        data=csv_data,
+                                        file_name=f"smart_shaving_results_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                                        mime="text/csv",
+                                        key="download_smart_shaving_csv"
+                                    )
+                                    
+                                    # Display info about the download
+                                    st.success(f"""
+                                    ✅ **Complete Smart Shaving Data Ready!**
+                                    
+                                    **Dataframe Details:**
+                                    - Total Records: {len(df_full_shaving):,}
+                                    - Columns: {len(df_full_shaving.columns)}
+                                    - Date Range: {df_full_shaving.index[0]} to {df_full_shaving.index[-1]}
+                                    
+                                    **Includes All 14 Columns:**
+                                    - Event Detection: excess_demand_kw, is_event, event_id, event_start, event_duration
+                                    - Severity & Mode: severity_score, controller_mode
+                                    - Battery SOC: battery_soc_kwh, battery_soc_percent
+                                    - Battery Operations: battery_power_kw, energy_discharged_kwh, energy_charged_kwh, operation_type
+                                    - Net Result: net_demand_kw
+                                    """)
+                                else:
+                                    st.warning("⚠️ No smart shaving data available for download")
+                            else:
+                                st.warning("⚠️ Enhanced dataframe not available in analysis results")
+                                
+                        except Exception as e:
+                            st.error(f"❌ Error preparing smart shaving download: {str(e)}")
+                            if st.checkbox("Show download error details", key="show_shaving_download_error"):
+                                st.exception(e)
+                    
+                    # Smart shaving insights
+                    st.info("""
+                    **🎯 Smart Shaving Orchestration Insights:**
+                    - **Dynamic SOC Awareness**: Severity calculation receives current SOC at each iteration
+                    - **Automatic Mode Switching**: Controller transitions between IDLE/NORMAL/CONSERVATION based on severity threshold (3.5)
+                    - **Conservation Mode**: Reduces discharge multiplier to preserve battery energy when needed
+                    - **Safety Constraints**: Prevents discharge if SOC < 10% or charge during MD window
+                    - **Complete Tracking**: 14 columns capture full battery operation lifecycle
+                    
+                    **Operation Types:**
+                    - **discharge**: Normal battery discharge during events
+                    - **discharge_conserve**: Reduced discharge in conservation mode
+                    - **charge**: Battery charging outside MD windows
+                    - **blocked**: Operation prevented by safety constraints
+                    """)
+                    
+                    # Display workflow steps if available
+                    if 'workflow_steps' in shaving_analysis_data:
+                        with st.expander("🔄 Workflow Steps", expanded=False):
+                            for step in shaving_analysis_data['workflow_steps']:
+                                st.markdown(f"- {step}")
+                    
+                    # Display key features if available
+                    if 'key_features' in shaving_analysis_data:
+                        with st.expander("✨ Key Features", expanded=False):
+                            for feature in shaving_analysis_data['key_features']:
+                                st.markdown(f"- {feature}")
+                
+            except Exception as e:
+                st.error(f"❌ Smart shaving analysis error: {str(e)}")
+                st.info("💡 MainSmartShaving orchestrator encountered an error. Check configuration and try again.")
+                
+                if st.checkbox("Show smart shaving error details", key="show_shaving_error"):
+                    st.exception(e)
+        
         # Additional analysis options
         with st.expander("🔍 Advanced Analysis Options", expanded=False):
             st.markdown("""

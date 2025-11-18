@@ -525,6 +525,160 @@ class SmartConstants:
             # For General tariffs, MD recording is always active (24/7)
             return True
 
+class SafeConstraints:
+    """
+    Safety constraint checker for battery operations.
+    
+    This class provides methods to check safety constraints before allowing
+    battery discharge or charge operations:
+    - Minimum SOC check: Prevents discharge if battery is too low
+    - MD window check: Prevents charging during MD recording periods
+    """
+    
+    def __init__(self, min_soc_threshold_percent=10.0):
+        """
+        Initialize safety constraints checker.
+        
+        Args:
+            min_soc_threshold_percent (float): Minimum SOC % for safe discharge (default: 10%)
+        """
+        self.min_soc_threshold_percent = min_soc_threshold_percent
+    
+    def check_min_soc_constraint(self, current_soc_percent):
+        """
+        Check if battery SOC is above minimum safe level for discharge.
+        
+        This safety check prevents battery from being discharged when SOC is critically low,
+        protecting battery health and ensuring reserve capacity remains available.
+        
+        Args:
+            current_soc_percent (float): Current battery SOC as percentage
+            
+        Returns:
+            dict: {
+                'is_safe': bool,              # True if SOC is above minimum threshold
+                'can_discharge': bool,         # True if discharge is allowed
+                'current_soc': float,          # Current SOC percentage
+                'min_threshold': float,        # Minimum SOC threshold
+                'safety_margin': float,        # How much above/below threshold (+ = safe, - = unsafe)
+                'reason': str                  # Explanation of safety status
+            }
+        """
+        is_safe = current_soc_percent >= self.min_soc_threshold_percent
+        safety_margin = current_soc_percent - self.min_soc_threshold_percent
+        
+        if is_safe:
+            reason = f"SOC {current_soc_percent:.1f}% is above minimum threshold {self.min_soc_threshold_percent:.1f}%"
+        else:
+            reason = f"SOC {current_soc_percent:.1f}% is below minimum threshold {self.min_soc_threshold_percent:.1f}% - discharge blocked"
+        
+        return {
+            'is_safe': is_safe,
+            'can_discharge': is_safe,
+            'current_soc': current_soc_percent,
+            'min_threshold': self.min_soc_threshold_percent,
+            'safety_margin': safety_margin,
+            'reason': reason
+        }
+    
+    def check_md_window_constraint(self, timestamp, config_data, allow_charge_during_md=False):
+        """
+        Check if charging is allowed based on MD window status.
+        
+        This safety check prevents charging during MD recording periods (for TOU tariffs)
+        to avoid increasing demand charges. For General tariffs, charging may be allowed
+        depending on configuration.
+        
+        Args:
+            timestamp: Current timestamp to check
+            config_data: Configuration dictionary with tariff_type and holidays
+            allow_charge_during_md (bool): Override to allow charging during MD window (default: False)
+            
+        Returns:
+            dict: {
+                'is_md_window': bool,         # True if currently in MD recording window
+                'can_charge': bool,           # True if charging is allowed
+                'tariff_type': str,           # Tariff type being used
+                'reason': str                 # Explanation of charge permission
+            }
+        """
+        # Use SmartConstants to check MD window status
+        sc = SmartConstants()
+        is_md_window = sc.is_md_active(timestamp, config_data)
+        tariff_type = config_data.get('tariff_type', 'general')
+        
+        # Determine if charging is allowed
+        if allow_charge_during_md:
+            can_charge = True
+            reason = "Charging allowed (override enabled)"
+        elif is_md_window:
+            can_charge = False
+            reason = f"Charging blocked - currently in MD window ({tariff_type} tariff)"
+        else:
+            can_charge = True
+            reason = f"Charging allowed - outside MD window ({tariff_type} tariff)"
+        
+        return {
+            'is_md_window': is_md_window,
+            'can_charge': can_charge,
+            'tariff_type': tariff_type,
+            'reason': reason
+        }
+    
+    def check_all_constraints(self, current_soc_percent, timestamp, config_data, 
+                             operation_type='discharge', allow_charge_during_md=False):
+        """
+        Check all applicable safety constraints for battery operation.
+        
+        Args:
+            current_soc_percent (float): Current battery SOC percentage
+            timestamp: Current timestamp
+            config_data: Configuration dictionary
+            operation_type (str): 'discharge' or 'charge'
+            allow_charge_during_md (bool): Override for MD window charging restriction
+            
+        Returns:
+            dict: {
+                'is_safe': bool,              # True if all constraints pass
+                'can_proceed': bool,          # True if operation is allowed
+                'soc_check': dict,            # Results from SOC check
+                'md_window_check': dict,      # Results from MD window check (if charging)
+                'blocked_reasons': list       # List of reasons if operation blocked
+            }
+        """
+        blocked_reasons = []
+        
+        # Check SOC constraint for discharge
+        if operation_type == 'discharge':
+            soc_check = self.check_min_soc_constraint(current_soc_percent)
+            if not soc_check['can_discharge']:
+                blocked_reasons.append(soc_check['reason'])
+            
+            md_window_check = None  # Not applicable for discharge
+            can_proceed = soc_check['can_discharge']
+        
+        # Check MD window constraint for charge
+        elif operation_type == 'charge':
+            soc_check = None  # Not applicable for charge
+            md_window_check = self.check_md_window_constraint(timestamp, config_data, allow_charge_during_md)
+            if not md_window_check['can_charge']:
+                blocked_reasons.append(md_window_check['reason'])
+            
+            can_proceed = md_window_check['can_charge']
+        
+        else:
+            raise ValueError(f"Invalid operation_type: {operation_type}. Must be 'discharge' or 'charge'")
+        
+        is_safe = len(blocked_reasons) == 0
+        
+        return {
+            'is_safe': is_safe,
+            'can_proceed': can_proceed,
+            'soc_check': soc_check,
+            'md_window_check': md_window_check,
+            'blocked_reasons': blocked_reasons
+        }
+
 class MdShavingController:
     """
     Controller class for MD (Maximum Demand) Shaving operations.
@@ -1538,6 +1692,8 @@ class SmartConservationDebugger:
             'trigger_events': self.analyze_event_status,
             'historical_events': self.analyze_historical_events,
             'process_historical_events': self.analyze_historical_events,
+            'smart_shaving': self.analyze_smart_shaving_results,
+            'smart_shaving_results': self.analyze_smart_shaving_results,
             # Future analysis functions can be added here without changing V3:
             # 'battery_performance': self.analyze_battery_performance_for_display,
             # 'tariff_optimization': self.analyze_tariff_optimization_for_display,
@@ -2058,6 +2214,193 @@ class SmartConservationDebugger:
                 'display_config': config
             }
     
+    def analyze_smart_shaving_results(self, display_config=None):
+        """
+        Analyze complete smart shaving results from MainSmartShaving orchestrator.
+        
+        This method uses MdOrchestrator.MainSmartShaving() to execute the complete
+        smart battery shaving workflow with dynamic SOC tracking, controller mode
+        switching, and battery operations. Results are formatted for display using
+        existing infrastructure.
+        
+        Displays comprehensive battery operation data including:
+        - Event detection and severity scoring
+        - Controller mode transitions (IDLE/NORMAL/CONSERVATION)
+        - Battery SOC dynamics (charge/discharge/conservation)
+        - Energy flows and net demand after battery operations
+        - Safety constraint checks and operation blocking
+        
+        Args:
+            display_config (dict, optional): Display configuration parameters
+                - 'max_rows': Maximum rows to display (default: 100)
+                - 'debug_output': Show debug information (default: False)
+                - 'show_summary': Include summary statistics (default: True)
+                
+        Returns:
+            dict: Complete analysis result with dataframe, summary, and metadata
+                Same format as analyze_historical_events() for consistency
+        """
+        # Set default display configuration
+        config = {
+            'max_rows': 100,
+            'debug_output': False,
+            'show_summary': True
+        }
+        if display_config:
+            config.update(display_config)
+        
+        try:
+            # Get configuration data
+            config_data = self.controller.config_data
+            if not config_data:
+                return {
+                    'dataframe': pd.DataFrame(),
+                    'summary': {'error': 'No configuration data available'},
+                    'metadata': {'error': 'Missing configuration', 'analysis_type': 'smart_shaving_results'},
+                    'analysis_function': 'analyze_smart_shaving_results',
+                    'display_config': config
+                }
+            
+            # Execute MainSmartShaving orchestrator
+            orchestrator = MdOrchestrator()
+            enhanced_df = orchestrator.MainSmartShaving(config_data, initial_soc_percent=95.0)
+            
+            # Convert enhanced dataframe to display format with battery operation details
+            display_data = []
+            for idx, row in enhanced_df.head(config['max_rows'] * 2).iterrows():
+                display_row = {
+                    'timestamp': idx,
+                    'current_power_kw': round(row[config_data['power_col']], 2),
+                    'target_kw': round(config_data['target_series'].loc[idx] if idx in config_data['target_series'].index else 0, 2),
+                    'excess_demand_kw': round(row['excess_demand_kw'], 2),
+                    'is_event': 'Yes' if row['is_event'] else 'No',
+                    'event_id': row['event_id'],
+                    'event_start': 'Yes' if row['event_start'] else 'No',
+                    'event_duration_min': round(row['event_duration'], 1),
+                    'severity_score': round(row['severity_score'], 2),
+                    'controller_mode': row['controller_mode'],
+                    'battery_soc_kwh': round(row['battery_soc_kwh'], 2),
+                    'battery_soc_percent': round(row['battery_soc_percent'], 2),
+                    'battery_power_kw': round(row['battery_power_kw'], 2),
+                    'net_demand_kw': round(row['net_demand_kw'], 2),
+                    'energy_discharged_kwh': round(row['energy_discharged_kwh'], 3),
+                    'energy_charged_kwh': round(row['energy_charged_kwh'], 3),
+                    'operation_type': row['operation_type'],
+                    'battery_action': row.get('battery_action', 'none')  # NEW: Show function called
+                }
+                display_data.append(display_row)
+            
+            # Calculate comprehensive summary statistics
+            summary_stats = {
+                # Event statistics
+                'total_timestamps': len(enhanced_df),
+                'total_event_timestamps': int(enhanced_df['is_event'].sum()),
+                'total_non_event_timestamps': int((~enhanced_df['is_event']).sum()),
+                'unique_events_detected': int(enhanced_df[enhanced_df['event_id'] > 0]['event_id'].nunique()),
+                'event_percentage': round(enhanced_df['is_event'].sum() / len(enhanced_df) * 100, 1),
+                
+                # Excess demand statistics
+                'max_excess_demand_kw': float(enhanced_df['excess_demand_kw'].max()),
+                'avg_excess_during_events': float(enhanced_df[enhanced_df['is_event']]['excess_demand_kw'].mean()) if enhanced_df['is_event'].any() else 0,
+                
+                # Severity statistics
+                'max_severity_score': float(enhanced_df['severity_score'].max()),
+                'avg_severity_during_events': float(enhanced_df[enhanced_df['is_event']]['severity_score'].mean()) if enhanced_df['is_event'].any() else 0,
+                
+                # Controller mode statistics
+                'idle_mode_count': int((enhanced_df['controller_mode'] == 'IDLE').sum()),
+                'normal_mode_count': int((enhanced_df['controller_mode'] == 'NORMAL').sum()),
+                'conservation_mode_count': int((enhanced_df['controller_mode'] == 'CONSERVATION').sum()),
+                'conservation_mode_percentage': round((enhanced_df['controller_mode'] == 'CONSERVATION').sum() / len(enhanced_df) * 100, 1),
+                
+                # Battery SOC statistics
+                'initial_soc_percent': 95.0,
+                'final_soc_percent': float(enhanced_df['battery_soc_percent'].iloc[-1]),
+                'min_soc_percent': float(enhanced_df['battery_soc_percent'].min()),
+                'max_soc_percent': float(enhanced_df['battery_soc_percent'].max()),
+                'avg_soc_percent': float(enhanced_df['battery_soc_percent'].mean()),
+                'soc_range_percent': float(enhanced_df['battery_soc_percent'].max() - enhanced_df['battery_soc_percent'].min()),
+                
+                # Battery operation statistics
+                'total_energy_discharged_kwh': float(enhanced_df['energy_discharged_kwh'].sum()),
+                'total_energy_charged_kwh': float(enhanced_df['energy_charged_kwh'].sum()),
+                'net_energy_consumed_kwh': float(enhanced_df['energy_discharged_kwh'].sum() - enhanced_df['energy_charged_kwh'].sum()),
+                'discharge_count': int((enhanced_df['operation_type'].isin(['discharge', 'discharge_conserve'])).sum()),
+                'charge_count': int((enhanced_df['operation_type'] == 'charge').sum()),
+                'blocked_count': int((enhanced_df['operation_type'] == 'blocked').sum()),
+                'max_discharge_power_kw': float(enhanced_df[enhanced_df['battery_power_kw'] > 0]['battery_power_kw'].max()) if (enhanced_df['battery_power_kw'] > 0).any() else 0,
+                'max_charge_power_kw': float(abs(enhanced_df[enhanced_df['battery_power_kw'] < 0]['battery_power_kw'].min())) if (enhanced_df['battery_power_kw'] < 0).any() else 0,
+                
+                # Battery action statistics (NEW: Track actual function calls)
+                'default_discharge_calls': int((enhanced_df.get('battery_action', pd.Series()) == 'execute_default_shaving_discharge').sum()),
+                'conservation_discharge_calls': int((enhanced_df.get('battery_action', pd.Series()) == 'execute_conservation_discharge').sum()),
+                'recharge_calls': int((enhanced_df.get('battery_action', pd.Series()) == 'execute_battery_recharge').sum()),
+                'blocked_calls': int((enhanced_df.get('battery_action', pd.Series()).str.contains('blocked', na=False)).sum()),
+                
+                # Demand reduction statistics
+                'max_net_demand_kw': float(enhanced_df['net_demand_kw'].max()),
+                'avg_demand_reduction_kw': float((enhanced_df[config_data['power_col']] - enhanced_df['net_demand_kw']).mean()),
+                'total_demand_reduction_kwh': float((enhanced_df[config_data['power_col']] - enhanced_df['net_demand_kw']).sum() * config_data.get('interval_hours', 0.5))
+            }
+            
+            # Create table using existing infrastructure
+            table_result = self.create_dynamic_analysis_table(
+                data_records=display_data,
+                summary_stats=summary_stats,
+                metadata={
+                    'analysis_type': 'smart_shaving_results',
+                    'method_used': 'MainSmartShaving',
+                    'orchestration_logic': 'Event detection → Severity calculation → Mode switching → Battery operations → SOC update',
+                    'controller_modes': 'IDLE, NORMAL, CONSERVATION',
+                    'operation_types': 'discharge, discharge_conserve, charge, blocked',
+                    'safety_constraints': 'Min SOC check (10%), MD window check for charging',
+                    'soc_feedback': 'Dynamic SOC feeds back into severity calculation'
+                },
+                max_rows=config['max_rows']
+            )
+            
+            # Add method-specific metadata
+            table_result.update({
+                'analysis_function': 'analyze_smart_shaving_results',
+                'enhanced_dataframe': enhanced_df,  # Include full processed dataset
+                'display_config': config,
+                'workflow_steps': [
+                    'Created MdOrchestrator instance',
+                    'Called MainSmartShaving() with 95% initial SOC',
+                    'Processed complete smart shaving workflow:',
+                    '  - Event detection with 4-case logic',
+                    '  - Dynamic severity calculation with current SOC',
+                    '  - Controller mode switching (IDLE↔NORMAL↔CONSERVATION)',
+                    '  - Safety constraint checking',
+                    '  - Battery operations (discharge/conserve/charge)',
+                    '  - SOC state propagation across iterations',
+                    'Used create_dynamic_analysis_table() for display'
+                ],
+                'key_features': [
+                    'Dynamic SOC awareness in severity calculation',
+                    'Automatic mode transitions based on severity threshold (3.5)',
+                    'Conservation mode reduces discharge to preserve SOC',
+                    'Safety constraints block unsafe operations',
+                    'Continuous SOC feedback loop'
+                ]
+            })
+            
+            return table_result
+            
+        except Exception as e:
+            return {
+                'dataframe': pd.DataFrame(),
+                'summary': {'error': f'Smart shaving analysis failed: {str(e)}'},
+                'metadata': {
+                    'error': 'Method execution failed',
+                    'analysis_type': 'smart_shaving_results',
+                    'exception_type': type(e).__name__,
+                    'exception_details': str(e)
+                },
+                'analysis_function': 'analyze_smart_shaving_results',
+                'display_config': config
+            }
+    
     
         """
         Format event status data for table display using existing infrastructure.
@@ -2315,9 +2658,22 @@ class TriggerEvents:
     
     def set_event_state(self, current_excess, inside_md_window, event_state):
         """
-        Simple boolean logic to determine if event_state.active is True or False
-        If excess demand is not zero AND in MD window, set event_state.active = True
-        Else, set event_state.active = False
+        Simple boolean logic to determine if event_state.active is True or False.
+        
+        Event is active when BOTH conditions are met:
+        1. excess_demand > 0 (current demand exceeds target)
+        2. inside_md_window = True (currently in MD recording period)
+        
+        For TOU tariffs: MD window is only 2PM-10PM weekdays (excluding holidays)
+        For General tariffs: MD window is 24/7
+        
+        Args:
+            current_excess (float): Current excess demand in kW
+            inside_md_window (bool): Whether currently inside MD recording window
+            event_state (_MdEventState): Event state object to update
+            
+        Returns:
+            bool: True if event is active (excess > 0 AND inside MD window), False otherwise
         """
         # Simple boolean logic: excess demand not zero AND in MD window
         if (current_excess > 0) and inside_md_window:
@@ -2929,9 +3285,6 @@ class DecisionMaker:
             'severity_exceeded': severity_score >= severity_threshold
         }
 
-
-
-
 class MdOrchestrator:
 
     """
@@ -3088,6 +3441,7 @@ class MdOrchestrator:
         return df_sim
     
     def process_events_with_battery_state(self, config_data, initial_soc_percent=95.0):
+
         """
         Process historical events using DecisionMaker.four_case_event_logic() with battery state tracking.
         
@@ -3232,3 +3586,265 @@ class MdOrchestrator:
             # 3. Track energy discharged/charged
         
         return df_sim
+
+    def MainSmartShaving(self, config_data, initial_soc_percent=95.0):
+        """
+        Main orchestrator function to execute smart shaving based on severity score.
+        
+        This complete orchestrator integrates:
+        - Event detection and 4-case logic
+        - Dynamic severity calculation with current SOC
+        - Controller mode switching (IDLE/NORMAL/CONSERVATION)
+        - Battery discharge/charge operations via smart_battery_executor
+        - Continuous SOC state tracking across iterations
+        - Safety constraint checking
+        
+        Severity score determines controller mode, which governs charge and discharge operations.
+        Returns df_sim with live SOC values that feed back into severity calculations.
+        
+        Args:
+            config_data (dict): Configuration containing df_sim, power_col, target_series, battery params
+            initial_soc_percent (float): Starting battery SOC percentage (default: 95.0)
+            
+        Returns:
+            pd.DataFrame: Complete dataset with battery operations:
+                - 'excess_demand_kw': calculated excess demand
+                - 'is_event': boolean event classification
+                - 'event_id': sequential event ID
+                - 'event_start': boolean marking new events
+                - 'event_duration': minutes since event started
+                - 'severity_score': dynamic severity score
+                - 'controller_mode': IDLE/NORMAL/CONSERVATION
+                - 'battery_soc_kwh': live SOC in kWh
+                - 'battery_soc_percent': live SOC percentage
+                - 'battery_power_kw': discharge/charge power (+/-)
+                - 'net_demand_kw': demand after battery operation
+                - 'energy_discharged_kwh': energy discharged per interval
+                - 'energy_charged_kwh': energy charged per interval
+        """
+        import pandas as pd
+        from smart_battery_executor import (
+            calculate_battery_kw_conserved,
+            calculate_available_grid_power,
+            execute_mode_based_battery_operation
+        )
+        
+        # ========== INITIALIZATION ==========
+        
+        # Extract required data from config
+        df_sim = config_data['df_sim'].copy()
+        power_col = config_data['power_col']
+        
+        # Battery parameters - extract from battery_sizing dictionary
+        battery_sizing = config_data.get('battery_sizing', {})
+        battery_capacity_kwh = battery_sizing.get('capacity_kwh', config_data.get('battery_capacity', 600.0))
+        max_power_kw = battery_sizing.get('power_rating_kw', 1734.4)
+        max_charge_power_kw = max_power_kw  # Assume symmetric
+        grid_capacity_kw = config_data.get('grid_capacity', 15000.0)
+        
+        # Interval - convert from hours if already in hours
+        interval_hours = config_data.get('interval_hours', 0.5)
+        if 'interval_minutes' in config_data:
+            interval_hours = config_data['interval_minutes'] / 60.0
+        
+        # Calculate excess demand once
+        md_excess = MdExcess(config_data)
+        excess_demand = md_excess.calculate_excess_demand()
+        df_sim['excess_demand_kw'] = excess_demand
+        
+        # Initialize all tracking columns
+        df_sim['is_event'] = False
+        df_sim['event_id'] = 0
+        df_sim['event_start'] = False
+        df_sim['event_duration'] = 0.0
+        df_sim['severity_score'] = 0.0
+        df_sim['controller_mode'] = 'IDLE'
+        df_sim['battery_soc_kwh'] = 0.0
+        df_sim['battery_soc_percent'] = 0.0
+        df_sim['battery_power_kw'] = 0.0  # +discharge, -charge
+        df_sim['net_demand_kw'] = 0.0
+        df_sim['energy_discharged_kwh'] = 0.0
+        df_sim['energy_charged_kwh'] = 0.0
+        df_sim['operation_type'] = 'idle'
+        df_sim['battery_action'] = 'none'  # NEW: Track actual battery operation executed
+        
+        # Initialize state objects
+        event_state = _MdEventState()
+        controller_state = _MdControllerState()
+        
+        # Create component instances
+        trigger_events = TriggerEvents()
+        sc = SmartConstants()
+        controller = MdShavingController(df_sim)
+        controller.import_config(config_data)
+        severity_calculator = SeverityScore(controller)
+        decision_maker = DecisionMaker()
+        safety_checker = SafeConstraints(min_soc_threshold_percent=10.0)
+        
+        # Initialize battery SOC (CRITICAL: This persists across iterations)
+        current_soc_kwh = battery_capacity_kwh * (initial_soc_percent / 100.0)
+        current_soc_percent = initial_soc_percent
+        
+        # ========== MAIN PROCESSING LOOP ==========
+        
+        for i in range(len(df_sim)):
+            # Step 1: Get current row data
+            current_row = df_sim.iloc[i]
+            current_timestamp = current_row.name
+            current_demand_kw = current_row[power_col]
+            current_excess = current_row['excess_demand_kw']
+            monthly_target_kw = config_data['target_series'].loc[current_timestamp]
+            
+            # Step 2: Check MD window status
+            inside_md_window = sc.is_md_active(current_timestamp, config_data)
+            
+            # Step 3: Check if current event is active
+            current_event_active = trigger_events.set_event_state(
+                current_excess, inside_md_window, event_state
+            )
+            
+            # Step 4: Determine previous event state
+            if i > 0:
+                previous_row = df_sim.iloc[i-1]
+                previous_excess = previous_row['excess_demand_kw']
+                previous_timestamp = previous_row.name
+                previous_inside_md_window = sc.is_md_active(previous_timestamp, config_data)
+                previous_event_active = trigger_events.set_event_state(
+                    previous_excess, previous_inside_md_window, event_state
+                )
+            else:
+                previous_event_active = False
+            
+            # Step 5: Process 4-case event logic WITH CURRENT SOC
+            event_result = decision_maker.four_case_event_logic(
+                previous_event_active=previous_event_active,
+                current_event_active=current_event_active,
+                current_timestamp=current_timestamp,
+                event_state=event_state,
+                controller_state=controller_state,
+                severity_calculator=severity_calculator,
+                df_sim=df_sim,
+                row_index=i,
+                battery_soc_kwh=current_soc_kwh,          # ⚠️ PASS CURRENT SOC
+                battery_soc_percent=current_soc_percent    # ⚠️ PASS CURRENT SOC %
+            )
+            
+            # Extract event information
+            event_start = (event_result['event_case'] == 'new_event')
+            is_event = event_state.is_event
+            severity_score = event_result['severity_score']
+            
+            # Step 6: Calculate battery_kw_conserved from discharge recommendation
+            discharge_rec = event_result['discharge_recommendation']
+            if is_event and current_excess > 0:
+                battery_kw_conserved = calculate_battery_kw_conserved(
+                    current_excess_kw=current_excess,
+                    discharge_multiplier=discharge_rec.get('discharge_multiplier', 1.0)
+                )
+            else:
+                battery_kw_conserved = 0.0
+            
+            # Step 7: Calculate available grid power for charging
+            available_grid_power_kw = calculate_available_grid_power(
+                grid_capacity_kw=grid_capacity_kw,
+                current_demand_kw=current_demand_kw
+            )
+            
+            # Step 8: Execute battery operation based on controller mode
+            operation_result = execute_mode_based_battery_operation(
+                event_start=event_start,
+                is_event=is_event,
+                severity_score=severity_score,
+                controller_state=controller_state,
+                decision_maker=decision_maker,
+                current_demand_kw=current_demand_kw,
+                monthly_target_kw=monthly_target_kw,
+                battery_kw_conserved=battery_kw_conserved,
+                current_soc_kwh=current_soc_kwh,          # ⚠️ USE CURRENT SOC
+                battery_capacity_kwh=battery_capacity_kwh,
+                max_power_kw=max_power_kw,
+                available_grid_power_kw=available_grid_power_kw,
+                max_charge_power_kw=max_charge_power_kw,
+                interval_hours=interval_hours,
+                efficiency=0.95,
+                severity_threshold=3.5,
+                safety_checker=safety_checker,
+                current_timestamp=current_timestamp,
+                config_data=config_data
+            )
+            
+            # DEBUG: Print safety check results for events
+            if is_event and i < 20:  # Show first 20 event rows
+                print(f"\n🔍 DEBUG Row {i} ({current_timestamp}):")
+                print(f"   Is Event: {is_event}, Event ID: {event_result['event_id']}")
+                print(f"   Excess Demand: {current_excess:.1f} kW")
+                print(f"   Inside MD Window: {inside_md_window}")
+                print(f"   Controller Mode: {operation_result['controller_status']['mode']}")
+                print(f"   Current SOC: {current_soc_percent:.1f}%")
+                print(f"   Operation Type: {operation_result['operation_type']}")
+                if operation_result['operation_type'] == 'blocked':
+                    print(f"   ❌ BLOCKED Reasons: {operation_result['battery_operation'].get('blocked_reasons', [])}")
+                    if 'safety_check' in operation_result and operation_result['safety_check']:
+                        sc = operation_result['safety_check']
+                        print(f"   Safety Check Details:")
+                        print(f"      - Can Proceed: {sc.get('can_proceed', 'N/A')}")
+                        print(f"      - SOC Check: {sc.get('soc_check', 'N/A')}")
+                        print(f"      - MD Window Check: {sc.get('md_window_check', 'N/A')}")
+            
+            # Step 9: UPDATE SOC FOR NEXT ITERATION (⚠️ CRITICAL!)
+            battery_op = operation_result['battery_operation']
+            current_soc_kwh = battery_op['updated_soc_kwh']          # ⚠️ UPDATE FOR NEXT ITERATION
+            current_soc_percent = battery_op['updated_soc_percent']  # ⚠️ UPDATE FOR NEXT ITERATION
+            
+            # Step 10: Extract battery operation details
+            operation_type = operation_result['operation_type']
+            
+            # NEW: Track which battery operation was actually executed
+            battery_action = 'none'
+            
+            if operation_type == 'discharge':
+                battery_action = 'execute_default_shaving_discharge'
+                battery_power_kw = battery_op['discharge_power_kw']
+                net_demand_kw = battery_op['net_demand_kw']
+                energy_discharged_kwh = battery_op['energy_discharged_kwh']
+                energy_charged_kwh = 0.0
+                
+            elif operation_type == 'discharge_conserve':
+                battery_action = 'execute_conservation_discharge'
+                battery_power_kw = battery_op['discharge_power_kw']
+                net_demand_kw = battery_op['net_demand_kw']
+                energy_discharged_kwh = battery_op['energy_discharged_kwh']
+                energy_charged_kwh = 0.0
+                
+            elif operation_type == 'charge':
+                battery_action = 'execute_battery_recharge'
+                battery_power_kw = -battery_op['charge_power_kw']  # Negative for charge
+                net_demand_kw = current_demand_kw  # No change to demand during charge
+                energy_discharged_kwh = 0.0
+                energy_charged_kwh = battery_op['energy_charged_kwh']
+                
+            else:  # 'blocked' or other
+                battery_action = f'blocked_{operation_type}'
+                battery_power_kw = 0.0
+                net_demand_kw = current_demand_kw
+                energy_discharged_kwh = 0.0
+                energy_charged_kwh = 0.0
+            
+            # Step 11: Write all results to dataframe
+            df_sim.iloc[i, df_sim.columns.get_loc('is_event')] = is_event
+            df_sim.iloc[i, df_sim.columns.get_loc('event_id')] = event_result['event_id']
+            df_sim.iloc[i, df_sim.columns.get_loc('event_start')] = event_start
+            df_sim.iloc[i, df_sim.columns.get_loc('event_duration')] = event_result['event_duration_minutes']
+            df_sim.iloc[i, df_sim.columns.get_loc('severity_score')] = severity_score
+            df_sim.iloc[i, df_sim.columns.get_loc('controller_mode')] = operation_result['controller_status']['mode']
+            df_sim.iloc[i, df_sim.columns.get_loc('battery_soc_kwh')] = current_soc_kwh
+            df_sim.iloc[i, df_sim.columns.get_loc('battery_soc_percent')] = current_soc_percent
+            df_sim.iloc[i, df_sim.columns.get_loc('battery_power_kw')] = battery_power_kw
+            df_sim.iloc[i, df_sim.columns.get_loc('net_demand_kw')] = net_demand_kw
+            df_sim.iloc[i, df_sim.columns.get_loc('energy_discharged_kwh')] = energy_discharged_kwh
+            df_sim.iloc[i, df_sim.columns.get_loc('energy_charged_kwh')] = energy_charged_kwh
+            df_sim.iloc[i, df_sim.columns.get_loc('operation_type')] = operation_type
+            df_sim.iloc[i, df_sim.columns.get_loc('battery_action')] = battery_action  # NEW: Track function called
+        
+        return df_sim
+   
