@@ -2807,58 +2807,72 @@ class DecisionMaker:
         
         return result
     
-    def _get_discharge_recommendation_from_severity(self, severity_score, battery_soc_percent=None):
+    def set_controller_mode_by_severity(self, event_start, is_event, severity_score, 
+                                       controller_state, severity_threshold=3.5):
         """
-        Convert severity score into discharge recommendation for battery executor.
+        Set controller mode based on event status and severity score.
         
-        This method translates the severity score (0-5+ range) into actionable
-        discharge multipliers using the severity-based conservation strategy.
+        This method implements mode switching logic using severity score thresholds:
+        1. Event start → NORMAL shaving mode
+        2. Severity ≥ threshold → CONSERVATION mode
+        3. Severity < threshold (but still event) → NORMAL mode
+        4. Not event → IDLE mode
         
         Args:
-            severity_score (float): Calculated severity score
-            battery_soc_percent (float, optional): Current battery SOC percentage
+            event_start (bool): True if this is a new event starting
+            is_event (bool): True if currently in an event
+            severity_score (float): Current severity score
+            controller_state (_MdControllerState): Controller state object to update
+            severity_threshold (float): Severity threshold for conservation (default: 3.5)
             
         Returns:
-            dict: Discharge recommendation with keys:
-                - 'action': str ('discharge', 'conserve', 'idle')
-                - 'discharge_multiplier': float (0.0-1.0, percentage of full discharge)
-                - 'conservation_level': str ('normal', 'moderate', 'strong', 'emergency')
-                - 'reasoning': str (explanation of recommendation)
+            dict: Controller status with keys:
+                - 'mode': str ('IDLE', 'NORMAL', 'CONSERVATION')
+                - 'mode_changed': bool (True if mode changed)
+                - 'previous_mode': str (mode before this update)
+                - 'trigger_reason': str (reason for mode change)
+                - 'severity_score': float (current severity score)
+                - 'severity_threshold': float (threshold used)
+                - 'severity_exceeded': bool (True if severity ≥ threshold)
         """
-        # Severity-based discharge multipliers (from Option B discussion)
-        if severity_score < 1.0:
-            return {
-                'action': 'discharge',
-                'discharge_multiplier': 1.0,  # Full discharge capability
-                'conservation_level': 'normal',
-                'reasoning': f"Low severity ({severity_score:.2f}) - full discharge capacity"
-            }
+        # Store previous mode for comparison
+        previous_mode = controller_state.mode.value if hasattr(controller_state.mode, 'value') else str(controller_state.mode)
+        trigger_reason = "No change"
         
-        elif 1.0 <= severity_score < 2.0:
-            return {
-                'action': 'discharge',
-                'discharge_multiplier': 0.75,  # Reduce discharge 25%
-                'conservation_level': 'moderate',
-                'reasoning': f"Moderate severity ({severity_score:.2f}) - conserving 25% capacity"
-            }
+        # Logic 1: If event start = true, turn on normal shaving mode
+        if event_start:
+            controller_state.mode = MdShavingMode.NORMAL
+            trigger_reason = "New event started"
         
-        elif 2.0 <= severity_score < 3.0:
-            return {
-                'action': 'discharge',
-                'discharge_multiplier': 0.50,  # Reduce discharge 50%
-                'conservation_level': 'strong',
-                'reasoning': f"Strong severity ({severity_score:.2f}) - conserving 50% capacity"
-            }
+        # Logic 2: If severity score hits threshold, change to CONSERVATION
+        elif is_event and severity_score >= severity_threshold:
+            controller_state.mode = MdShavingMode.CONSERVATION
+            trigger_reason = f"Severity score ({severity_score:.2f}) exceeded threshold ({severity_threshold})"
         
-        else:  # severity >= 3.0
-            # Emergency mode - minimal discharge
-            multiplier = 0.25 if battery_soc_percent and battery_soc_percent > 20 else 0.1
-            return {
-                'action': 'conserve',
-                'discharge_multiplier': multiplier,
-                'conservation_level': 'emergency',
-                'reasoning': f"Emergency severity ({severity_score:.2f}) - conserving 75%+ capacity"
-            }
+        # Logic 3: If severity below threshold but still is event, switch to normal mode
+        elif is_event and severity_score < severity_threshold:
+            controller_state.mode = MdShavingMode.NORMAL
+            trigger_reason = f"Event active but severity ({severity_score:.2f}) below threshold ({severity_threshold})"
+        
+        # Logic 4: If it is not event, turn controller mode to idle
+        elif not is_event:
+            controller_state.mode = MdShavingMode.IDLE
+            trigger_reason = "No active event"
+        
+        # Determine if mode changed
+        current_mode = controller_state.mode.value if hasattr(controller_state.mode, 'value') else str(controller_state.mode)
+        mode_changed = (previous_mode != current_mode)
+        
+        # Return controller status
+        return {
+            'mode': current_mode,
+            'mode_changed': mode_changed,
+            'previous_mode': previous_mode,
+            'trigger_reason': trigger_reason,
+            'severity_score': severity_score,
+            'severity_threshold': severity_threshold,
+            'severity_exceeded': severity_score >= severity_threshold
+        }
 
 
 
@@ -3044,7 +3058,9 @@ class MdOrchestrator:
                 - 'event_start': boolean marking start of new events
                 - 'event_duration': minutes since event started
                 - 'severity_score': calculated severity score
-                - 'battery_soc_percent': tracked battery SOC (placeholder)
+                - 'battery_soc_kwh': tracked battery SOC in kWh
+                - 'battery_soc_percent': tracked battery SOC as percentage
+                - 'controller_mode': controller operating mode (IDLE/NORMAL/CONSERVATION)
         """
         import pandas as pd
         
@@ -3066,6 +3082,7 @@ class MdOrchestrator:
         df_sim['severity_score'] = 0.0
         df_sim['battery_soc_kwh'] = 0.0  # Track battery SOC in kWh
         df_sim['battery_soc_percent'] = 0.0  # Track battery SOC in percentage
+        df_sim['controller_mode'] = 'IDLE'  # Track controller mode
         
         # Initialize state objects
         event_state = _MdEventState()
@@ -3132,6 +3149,23 @@ class MdOrchestrator:
             
             # Store event_id in dataframe
             df_sim.iloc[i, df_sim.columns.get_loc('event_id')] = event_result['event_id']
+            
+            # Determine controller mode based on severity score
+            event_start = df_sim.iloc[i]['event_start']
+            is_event = event_state.is_event
+            severity_score = event_result['severity_score']
+            
+            # Call set_controller_mode_by_severity to determine mode
+            mode_result = decision_maker.set_controller_mode_by_severity(
+                event_start=event_start,
+                is_event=is_event,
+                severity_score=severity_score,
+                controller_state=controller_state,
+                severity_threshold=3.5
+            )
+            
+            # Store controller mode in dataframe
+            df_sim.iloc[i, df_sim.columns.get_loc('controller_mode')] = mode_result['mode']
             
             # TODO: Update battery SOC based on discharge/charge actions
             # This will be implemented when Smart Battery Executor is integrated
