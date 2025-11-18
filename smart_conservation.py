@@ -1999,7 +1999,8 @@ class SmartConservationDebugger:
                     'event_duration_min': round(row['event_duration'], 1),
                     'severity_score': round(row['severity_score'], 2),
                     'battery_soc_kwh': round(row['battery_soc_kwh'], 2),
-                    'battery_soc_percent': round(row['battery_soc_percent'], 2)
+                    'battery_soc_percent': round(row['battery_soc_percent'], 2),
+                    'controller_mode': row['controller_mode']
                 }
                 display_data.append(display_row)
             
