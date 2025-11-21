@@ -3622,7 +3622,19 @@ def render_smart_conservation_debug_analysis():
             - **Late Window (40% SOC Reserve)**: Aggressive discharge strategy for late MD period  
             - **Off-Peak (50% SOC Reserve)**: Balanced approach outside MD windows
             """)
-            
+        
+        # === BATTERY PERFORMANCE COMPARISON ===
+        st.markdown("---")
+        st.markdown("### ⚡ Battery Performance Comparison")
+        st.markdown("**Compare Default vs Simple Conservation vs Smart Conservation strategies**")
+        
+        if st.checkbox("🔬 Show Battery Performance Comparison", value=False, key="show_battery_comparison"):
+            try:
+                _display_battery_performance_comparison(config, initial_soc_percent=95.0)
+            except Exception as e:
+                st.error(f"❌ Battery performance comparison error: {str(e)}")
+                if st.checkbox("Show comparison error details", key="show_comparison_error"):
+                    st.exception(e)
         
     except ImportError as e:
         st.error(f"❌ Smart Conservation module import failed: {str(e)}")
@@ -3787,6 +3799,222 @@ def _display_tou_vs_general_comparison(results, selected_tariff=None):
         use_container_width=True,
         hide_index=True
     )
+
+
+def _display_battery_performance_comparison(config_data, initial_soc_percent=95.0):
+    """
+    Display comprehensive comparison of three battery strategies:
+    1. Default Shaving - Full discharge to monthly target
+    2. Simple Conservation - Fixed 50% discharge reduction
+    3. Smart Conservation - Adaptive severity-based mode switching
+    
+    Args:
+        config_data: Configuration dictionary with all simulation parameters
+        initial_soc_percent: Starting SOC for all three methods (default: 95%)
+    """
+    st.markdown("---")
+    st.subheader("⚡ Battery Performance Comparison")
+    st.caption("Compare Default Shaving vs Simple Conservation vs Smart Conservation strategies")
+    
+    # Import the comparator
+    try:
+        from battery_performance_comparator import BatteryPerformanceComparator
+    except ImportError:
+        st.error("❌ Battery Performance Comparator module not found. Please ensure 'battery_performance_comparator.py' is available.")
+        return
+    
+    # Explanation of the three methods
+    with st.expander("📋 Comparison Methods Explained", expanded=False):
+        st.markdown("""
+        ### Three Battery Discharge Strategies:
+        
+        **1️⃣ Default Shaving (Baseline)**
+        - Discharges full power to monthly target during all events
+        - No SOC preservation logic
+        - Maximum immediate demand reduction
+        - Risk: May deplete battery early in the billing period
+        
+        **2️⃣ Simple Conservation (Fixed 50% Reduction)**
+        - Always conserves 50% of max discharge power during events
+        - Conservative approach to preserve SOC
+        - Consistent battery life protection
+        - Trade-off: May not fully shave peaks
+        
+        **3️⃣ Smart Conservation (Adaptive)**
+        - Dynamic severity-based mode switching
+        - Severity threshold: 3.0
+        - IDLE → NORMAL → CONSERVATION modes
+        - Intelligent decision-making based on:
+          - Current SOC level
+          - Event severity (demand vs target gap)
+          - Prediction horizon (remaining events)
+          - Time of day and date context
+        """)
+    
+    # User configuration - always set defaults
+    initial_soc = initial_soc_percent
+    max_rows_display = 100
+    
+    with st.expander("⚙️ Comparison Configuration", expanded=False):
+        initial_soc = st.slider(
+            "Initial SOC (%)", 
+            min_value=50, 
+            max_value=100, 
+            value=int(initial_soc_percent), 
+            step=5,
+            help="Starting State of Charge for all three methods"
+        )
+        
+        max_rows_display = st.slider(
+            "Max Rows to Display",
+            min_value=50,
+            max_value=500,
+            value=100,
+            step=50,
+            help="Number of timestamps to show in comparison table"
+        )
+    
+    # Run comparison
+    if st.button("🚀 Run Battery Performance Comparison", type="primary"):
+        with st.spinner("Running three battery strategies..."):
+            try:
+                # Create comparator instance
+                comparator = BatteryPerformanceComparator(
+                    config_data=config_data,
+                    initial_soc_percent=initial_soc
+                )
+                
+                # Execute all three methods
+                results = comparator.run_all_methods()
+                
+                # Display success message
+                st.success("✅ All three battery strategies completed successfully!")
+                
+                # Display comparison summary metrics
+                st.markdown("### 📊 Performance Summary Comparison")
+                
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.markdown("#### 1️⃣ Default Shaving")
+                    final_soc_default = results['default_shaving']['battery_soc_percent'].iloc[-1]
+                    total_discharge_default = results['default_shaving']['battery_power_kw'].sum() * config_data.get('interval_hours', 0.25)
+                    st.metric("Final SOC", f"{final_soc_default:.1f}%")
+                    st.metric("Total Discharged", f"{total_discharge_default:.1f} kWh")
+                
+                with col2:
+                    st.markdown("#### 2️⃣ Simple Conservation")
+                    final_soc_simple = results['simple_conservation']['battery_soc_percent'].iloc[-1]
+                    total_discharge_simple = results['simple_conservation']['battery_power_kw'].sum() * config_data.get('interval_hours', 0.25)
+                    st.metric("Final SOC", f"{final_soc_simple:.1f}%", delta=f"{final_soc_simple - final_soc_default:+.1f}%")
+                    st.metric("Total Discharged", f"{total_discharge_simple:.1f} kWh", delta=f"{total_discharge_simple - total_discharge_default:+.1f} kWh")
+                
+                with col3:
+                    st.markdown("#### 3️⃣ Smart Conservation")
+                    final_soc_smart = results['smart_conservation']['battery_soc_percent'].iloc[-1]
+                    total_discharge_smart = results['smart_conservation']['battery_power_kw'].sum() * config_data.get('interval_hours', 0.25)
+                    st.metric("Final SOC", f"{final_soc_smart:.1f}%", delta=f"{final_soc_smart - final_soc_default:+.1f}%")
+                    st.metric("Total Discharged", f"{total_discharge_smart:.1f} kWh", delta=f"{total_discharge_smart - total_discharge_default:+.1f} kWh")
+                
+                # Create and display comparison table
+                st.markdown("---")
+                st.markdown("### 📋 Detailed Comparison Table")
+                
+                comparison_df = comparator.create_comparison_table(max_rows=max_rows_display)
+                
+                if 'error' not in comparison_df.columns:
+                    # Apply color coding to status columns
+                    def highlight_status(val):
+                        if val == 'Success':
+                            return 'background-color: #90EE90'  # Light green
+                        elif val == 'Partial':
+                            return 'background-color: #FFD700'  # Gold
+                        elif val == 'Failed':
+                            return 'background-color: #FF6B6B'  # Light red
+                        else:
+                            return ''
+                    
+                    styled_df = comparison_df.style.applymap(
+                        highlight_status,
+                        subset=['default_status', 'simple_conservation_status', 'smart_conservation_status']
+                    )
+                    
+                    st.dataframe(styled_df, use_container_width=True, height=600)
+                    
+                    # Display summary statistics
+                    st.markdown("---")
+                    st.markdown("### 📈 Summary Statistics")
+                    
+                    summary = comparator.comparison_summary
+                    
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    col1.metric("Total Rows", summary['total_rows'])
+                    col2.metric("Event Rows", summary['event_rows'])
+                    col3.metric("Interval", f"{config_data.get('interval_hours', 0.25)*60:.0f} min")
+                    col4.metric("Initial SOC", f"{initial_soc}%")
+                    
+                    # Success rates comparison
+                    st.markdown("#### Success Rate Comparison")
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        st.markdown("**Default Shaving**")
+                        st.metric("Success Rate", f"{summary['default']['success_rate']:.1f}%")
+                        st.metric("Partial Rate", f"{summary['default']['partial_rate']:.1f}%")
+                        st.metric("Failed Rate", f"{summary['default']['failed_rate']:.1f}%")
+                    
+                    with col2:
+                        st.markdown("**Simple Conservation**")
+                        st.metric("Success Rate", f"{summary['simple_conservation']['success_rate']:.1f}%")
+                        st.metric("Partial Rate", f"{summary['simple_conservation']['partial_rate']:.1f}%")
+                        st.metric("Failed Rate", f"{summary['simple_conservation']['failed_rate']:.1f}%")
+                    
+                    with col3:
+                        st.markdown("**Smart Conservation**")
+                        st.metric("Success Rate", f"{summary['smart_conservation']['success_rate']:.1f}%")
+                        st.metric("Partial Rate", f"{summary['smart_conservation']['partial_rate']:.1f}%")
+                        st.metric("Failed Rate", f"{summary['smart_conservation']['failed_rate']:.1f}%")
+                    
+                    # Energy analysis
+                    st.markdown("---")
+                    st.markdown("#### Energy & Savings Analysis")
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        st.markdown("**Default Shaving**")
+                        st.metric("Total Shaved", f"{summary['default']['total_shaved_kwh']:.1f} kWh")
+                        st.metric("Savings Lost", f"{summary['default']['total_savings_lost_kwh']:.1f} kWh")
+                    
+                    with col2:
+                        st.markdown("**Simple Conservation**")
+                        st.metric("Total Shaved", f"{summary['simple_conservation']['total_shaved_kwh']:.1f} kWh")
+                        st.metric("Savings Lost", f"{summary['simple_conservation']['total_savings_lost_kwh']:.1f} kWh")
+                    
+                    with col3:
+                        st.markdown("**Smart Conservation**")
+                        st.metric("Total Shaved", f"{summary['smart_conservation']['total_shaved_kwh']:.1f} kWh")
+                        st.metric("Savings Lost", f"{summary['smart_conservation']['total_savings_lost_kwh']:.1f} kWh")
+                    
+                    # Download option
+                    st.markdown("---")
+                    csv = comparison_df.to_csv(index=False)
+                    st.download_button(
+                        label="📥 Download Comparison CSV",
+                        data=csv,
+                        file_name="battery_performance_comparison.csv",
+                        mime="text/csv"
+                    )
+                    
+                else:
+                    st.error("❌ Error: Please run run_all_methods() first")
+                
+            except Exception as e:
+                st.error(f"❌ Error running battery performance comparison: {str(e)}")
+                if st.checkbox("Show detailed error"):
+                    st.exception(e)
+    else:
+        st.info("👆 Click 'Run Battery Performance Comparison' to start the analysis")
 
 
 # Complex daily proactive charging function removed - replaced with simple SOC-based charging in main algorithm

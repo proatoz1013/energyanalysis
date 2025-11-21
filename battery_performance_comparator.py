@@ -319,7 +319,78 @@ class BatteryPerformanceComparator:
         Run default shaving strategy using execute_default_shaving_discharge.
         """
         result_df = self.df_sim.copy()
-        battery_capacity_kwh = self.config_data['battery_capacity_kwh']
+        
+        # Get battery parameters - THROW ERRORS if missing (no fallbacks)
+        battery_sizing = self.config_data.get('battery_sizing', {})
+        battery_params = self.config_data.get('battery_params', {})
+        
+        # Try multiple possible keys for battery capacity - THROW ERROR if not found
+        battery_capacity_kwh = (
+            self.config_data.get('battery_capacity_kwh') or
+            battery_sizing.get('battery_capacity_kwh') or
+            battery_params.get('battery_capacity_kwh') or
+            battery_sizing.get('capacity_kwh')
+        )
+        if not battery_capacity_kwh:
+            raise KeyError(
+                "Missing 'battery_capacity_kwh'. Expected in config_data, "
+                "config_data['battery_sizing'], or config_data['battery_params']"
+            )
+        
+        max_discharge_kw = (
+            battery_sizing.get('max_discharge_kw') or
+            battery_params.get('max_discharge_kw') or
+            self.config_data.get('max_discharge_kw')
+        )
+        if not max_discharge_kw:
+            raise KeyError(
+                "Missing 'max_discharge_kw'. Expected in config_data['battery_sizing'], "
+                "config_data['battery_params'], or config_data"
+            )
+        
+        c_rate = (
+            battery_sizing.get('c_rate') or
+            battery_params.get('c_rate') or
+            self.config_data.get('c_rate')
+        )
+        if not c_rate:
+            raise KeyError(
+                "Missing 'c_rate'. Expected in config_data['battery_sizing'], "
+                "config_data['battery_params'], or config_data"
+            )
+        
+        efficiency = (
+            battery_params.get('discharge_efficiency') or
+            self.config_data.get('discharge_efficiency')
+        )
+        if not efficiency:
+            raise KeyError(
+                "Missing 'discharge_efficiency'. Expected in config_data['battery_params'] "
+                "or config_data"
+            )
+        
+        soc_min_percent = battery_params.get('min_soc_percent')
+        if soc_min_percent is None:  # Allow 0 as valid value
+            soc_min_percent = self.config_data.get('min_soc_percent')
+        if soc_min_percent is None:
+            raise KeyError(
+                "Missing 'min_soc_percent'. Expected in config_data['battery_params'] "
+                "or config_data"
+            )
+        
+        soc_max_percent = battery_params.get('max_soc_percent')
+        if soc_max_percent is None:
+            soc_max_percent = self.config_data.get('max_soc_percent')
+        if soc_max_percent is None:
+            raise KeyError(
+                "Missing 'max_soc_percent'. Expected in config_data['battery_params'] "
+                "or config_data"
+            )
+        
+        interval_hours = self.config_data.get('interval_hours')
+        if not interval_hours:
+            raise KeyError("Missing 'interval_hours' in config_data")
+        
         current_soc_kwh = battery_capacity_kwh * (self.initial_soc_percent / 100)
         
         # Get excess demand for event detection
@@ -338,17 +409,20 @@ class BatteryPerformanceComparator:
         # Process each timestamp
         for idx in result_df.index:
             if result_df.loc[idx, 'is_event']:
+                current_demand = result_df.loc[idx, self.power_col]
+                monthly_target = self.config_data['target_series'].loc[idx]
+                
                 battery_result = execute_default_shaving_discharge(
-                    current_demand_kw=result_df.loc[idx, self.power_col],
-                    monthly_target_kw=self.config_data['target_series'].loc[idx],
+                    current_demand_kw=current_demand,
+                    monthly_target_kw=monthly_target,
                     current_soc_kwh=current_soc_kwh,
                     battery_capacity_kwh=battery_capacity_kwh,
-                    max_power_kw=self.config_data.get('max_discharge_kw', 100),
-                    interval_hours=self.config_data.get('interval_hours', 0.5),
-                    efficiency=self.config_data.get('discharge_efficiency', 0.95),
-                    soc_min_percent=self.config_data.get('min_soc_percent', 10),
-                    soc_max_percent=self.config_data.get('max_soc_percent', 95),
-                    c_rate=self.config_data.get('c_rate', 1.0)
+                    max_power_kw=max_discharge_kw,
+                    interval_hours=interval_hours,
+                    efficiency=efficiency,
+                    soc_min_percent=soc_min_percent,
+                    soc_max_percent=soc_max_percent,
+                    c_rate=c_rate
                 )
                 
                 result_df.loc[idx, 'battery_power_kw'] = battery_result['discharge_power_kw']
@@ -368,7 +442,81 @@ class BatteryPerformanceComparator:
         Run simple conservation strategy using execute_conservation_discharge.
         """
         result_df = self.df_sim.copy()
-        battery_capacity_kwh = self.config_data['battery_capacity_kwh']
+        
+        # Get battery parameters - THROW ERRORS if missing (no fallbacks)
+        battery_sizing = self.config_data.get('battery_sizing', {})
+        battery_params = self.config_data.get('battery_params', {})
+        
+        # Try multiple possible keys - THROW ERROR if not found
+        battery_capacity_kwh = (
+            self.config_data.get('battery_capacity_kwh') or
+            battery_sizing.get('battery_capacity_kwh') or
+            battery_params.get('battery_capacity_kwh') or
+            battery_sizing.get('capacity_kwh')
+        )
+        if not battery_capacity_kwh:
+            raise KeyError(
+                "Missing 'battery_capacity_kwh'. Expected in config_data, "
+                "config_data['battery_sizing'], or config_data['battery_params']"
+            )
+        
+        max_discharge_kw = (
+            battery_sizing.get('max_discharge_kw') or
+            battery_params.get('max_discharge_kw') or
+            self.config_data.get('max_discharge_kw')
+        )
+        if not max_discharge_kw:
+            raise KeyError(
+                "Missing 'max_discharge_kw'. Expected in config_data['battery_sizing'], "
+                "config_data['battery_params'], or config_data"
+            )
+        
+        c_rate = (
+            battery_sizing.get('c_rate') or
+            battery_params.get('c_rate') or
+            self.config_data.get('c_rate')
+        )
+        if not c_rate:
+            raise KeyError(
+                "Missing 'c_rate'. Expected in config_data['battery_sizing'], "
+                "config_data['battery_params'], or config_data"
+            )
+        
+        efficiency = (
+            battery_params.get('discharge_efficiency') or
+            self.config_data.get('discharge_efficiency')
+        )
+        if not efficiency:
+            raise KeyError(
+                "Missing 'discharge_efficiency'. Expected in config_data['battery_params'] "
+                "or config_data"
+            )
+        
+        soc_min_percent = battery_params.get('min_soc_percent')
+        if soc_min_percent is None:
+            soc_min_percent = self.config_data.get('min_soc_percent')
+        if soc_min_percent is None:
+            raise KeyError(
+                "Missing 'min_soc_percent'. Expected in config_data['battery_params'] "
+                "or config_data"
+            )
+        
+        soc_max_percent = battery_params.get('max_soc_percent')
+        if soc_max_percent is None:
+            soc_max_percent = self.config_data.get('max_soc_percent')
+        if soc_max_percent is None:
+            raise KeyError(
+                "Missing 'max_soc_percent'. Expected in config_data['battery_params'] "
+                "or config_data"
+            )
+        
+        interval_hours = self.config_data.get('interval_hours')
+        if not interval_hours:
+            raise KeyError("Missing 'interval_hours' in config_data")
+        
+        # FIXED CONSERVATION: 50% of max discharge power
+        battery_kw_conserved = max_discharge_kw * 0.5
+        
         current_soc_kwh = battery_capacity_kwh * (self.initial_soc_percent / 100)
         
         # Get excess demand for event detection
@@ -387,21 +535,21 @@ class BatteryPerformanceComparator:
         # Process each timestamp
         for idx in result_df.index:
             if result_df.loc[idx, 'is_event']:
-                # Fixed conservation parameter: 50% of max discharge power
-                battery_kw_conserved = self.config_data.get('max_discharge_kw', 100) * 0.5
+                current_demand = result_df.loc[idx, self.power_col]
+                monthly_target = self.config_data['target_series'].loc[idx]
                 
                 battery_result = execute_conservation_discharge(
-                    current_demand_kw=result_df.loc[idx, self.power_col],
-                    monthly_target_kw=self.config_data['target_series'].loc[idx],
+                    current_demand_kw=current_demand,
+                    monthly_target_kw=monthly_target,
                     battery_kw_conserved=battery_kw_conserved,
                     current_soc_kwh=current_soc_kwh,
                     battery_capacity_kwh=battery_capacity_kwh,
-                    max_power_kw=self.config_data.get('max_discharge_kw', 100),
-                    interval_hours=self.config_data.get('interval_hours', 0.5),
-                    efficiency=self.config_data.get('discharge_efficiency', 0.95),
-                    soc_min_percent=self.config_data.get('min_soc_percent', 10),
-                    soc_max_percent=self.config_data.get('max_soc_percent', 95),
-                    c_rate=self.config_data.get('c_rate', 1.0)
+                    max_power_kw=max_discharge_kw,
+                    interval_hours=interval_hours,
+                    efficiency=efficiency,
+                    soc_min_percent=soc_min_percent,
+                    soc_max_percent=soc_max_percent,
+                    c_rate=c_rate
                 )
                 
                 result_df.loc[idx, 'battery_power_kw'] = battery_result['discharge_power_kw']
