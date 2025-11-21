@@ -20,8 +20,20 @@ from smart_battery_executor import (
     execute_conservation_discharge,
     execute_battery_recharge
 )
-from smart_conservation import MdOrchestrator, MdExcess
+from smart_conservation import MdOrchestrator, MdExcess, SmartConstants, TriggerEvents
 import pandas as pd
+
+# ============================================================================
+# GLOBAL CONSTANTS - Battery Operation Defaults
+# ============================================================================
+# These defaults match the standard values used across the V3 system
+# and provide fallbacks when parameters are not in config_data
+
+DEFAULT_DISCHARGE_EFFICIENCY = 0.95  # 95% discharge efficiency (industry standard)
+DEFAULT_CHARGE_EFFICIENCY = 0.95     # 95% charge efficiency
+DEFAULT_SOC_MIN_PERCENT = 5.0        # 5% minimum SOC (safety limit)
+DEFAULT_SOC_MAX_PERCENT = 95.0       # 95% maximum SOC (battery health)
+DEFAULT_C_RATE = 1.0                 # 1C rate (charge/discharge in 1 hour)
 
 class BatteryPerformanceComparator:
     """
@@ -74,6 +86,54 @@ class BatteryPerformanceComparator:
         self.results['smart_conservation'] = self._run_smart_conservation()
         
         return self.results
+
+    def _detect_events_with_tou_logic(self, result_df, excess_demand):
+        """
+        Detect events following TOU logic from smart_conservation.py.
+        
+        Events are active when BOTH conditions are met:
+        1. excess_demand > 0 (current demand exceeds target)
+        2. inside_md_window = True (currently in MD recording period)
+        
+        For TOU tariffs: MD window is only 2PM-10PM weekdays (excluding holidays)
+        For General tariffs: MD window is 24/7
+        
+        This method reuses the existing SmartConstants.is_md_active() and 
+        TriggerEvents.set_event_state() from smart_conservation.py.
+        
+        Args:
+            result_df: DataFrame with timestamps as index
+            excess_demand: Series with excess demand values
+            
+        Returns:
+            pd.Series: Boolean series indicating which timestamps are events
+        """
+        # Initialize SmartConstants for MD window checking
+        sc = SmartConstants()
+        trigger_events = TriggerEvents()
+        
+        # Create is_event series (default all False)
+        is_event_series = pd.Series(False, index=result_df.index)
+        
+        # Process each timestamp
+        for idx in result_df.index:
+            current_excess = excess_demand.loc[idx]
+            
+            # Check if we're inside MD window (respects TOU tariff logic)
+            inside_md_window = sc.is_md_active(idx, self.config_data)
+            
+            # Use TriggerEvents logic: event active when excess > 0 AND inside MD window
+            from smart_conservation import _MdEventState
+            temp_event_state = _MdEventState()
+            is_active = trigger_events.set_event_state(
+                current_excess=current_excess,
+                inside_md_window=inside_md_window,
+                event_state=temp_event_state
+            )
+            
+            is_event_series.loc[idx] = is_active
+        
+        return is_event_series
 
     def create_comparison_table(self, max_rows=100):
         """
@@ -352,7 +412,8 @@ class BatteryPerformanceComparator:
         c_rate = (
             battery_sizing.get('c_rate') or
             battery_params.get('c_rate') or
-            self.config_data.get('c_rate')
+            self.config_data.get('c_rate') or
+            DEFAULT_C_RATE  # Use global constant as final fallback
         )
         if not c_rate:
             raise KeyError(
@@ -362,7 +423,8 @@ class BatteryPerformanceComparator:
         
         efficiency = (
             battery_params.get('discharge_efficiency') or
-            self.config_data.get('discharge_efficiency')
+            self.config_data.get('discharge_efficiency') or
+            DEFAULT_DISCHARGE_EFFICIENCY  # Use global constant as final fallback
         )
         if not efficiency:
             raise KeyError(
@@ -374,19 +436,13 @@ class BatteryPerformanceComparator:
         if soc_min_percent is None:  # Allow 0 as valid value
             soc_min_percent = self.config_data.get('min_soc_percent')
         if soc_min_percent is None:
-            raise KeyError(
-                "Missing 'min_soc_percent'. Expected in config_data['battery_params'] "
-                "or config_data"
-            )
+            soc_min_percent = DEFAULT_SOC_MIN_PERCENT  # Use global constant as final fallback
         
         soc_max_percent = battery_params.get('max_soc_percent')
-        if soc_max_percent is None:
+        if soc_max_percent is None:  # Allow 0 as valid value
             soc_max_percent = self.config_data.get('max_soc_percent')
         if soc_max_percent is None:
-            raise KeyError(
-                "Missing 'max_soc_percent'. Expected in config_data['battery_params'] "
-                "or config_data"
-            )
+            soc_max_percent = DEFAULT_SOC_MAX_PERCENT  # Use global constant as final fallback
         
         interval_hours = self.config_data.get('interval_hours')
         if not interval_hours:
@@ -398,7 +454,9 @@ class BatteryPerformanceComparator:
         md_excess = MdExcess(self.config_data)
         excess_demand = md_excess.calculate_excess_demand()
         result_df['excess_demand_kw'] = excess_demand
-        result_df['is_event'] = excess_demand > 0
+        
+        # Use TOU-aware event detection (respects tariff type and MD window)
+        result_df['is_event'] = self._detect_events_with_tou_logic(result_df, excess_demand)
         
         # Initialize result columns
         result_df['battery_power_kw'] = 0.0
@@ -476,7 +534,8 @@ class BatteryPerformanceComparator:
         c_rate = (
             battery_sizing.get('c_rate') or
             battery_params.get('c_rate') or
-            self.config_data.get('c_rate')
+            self.config_data.get('c_rate') or
+            DEFAULT_C_RATE  # Use global constant as final fallback
         )
         if not c_rate:
             raise KeyError(
@@ -486,7 +545,8 @@ class BatteryPerformanceComparator:
         
         efficiency = (
             battery_params.get('discharge_efficiency') or
-            self.config_data.get('discharge_efficiency')
+            self.config_data.get('discharge_efficiency') or
+            DEFAULT_DISCHARGE_EFFICIENCY  # Use global constant as final fallback
         )
         if not efficiency:
             raise KeyError(
@@ -498,19 +558,13 @@ class BatteryPerformanceComparator:
         if soc_min_percent is None:
             soc_min_percent = self.config_data.get('min_soc_percent')
         if soc_min_percent is None:
-            raise KeyError(
-                "Missing 'min_soc_percent'. Expected in config_data['battery_params'] "
-                "or config_data"
-            )
+            soc_min_percent = DEFAULT_SOC_MIN_PERCENT  # Use global constant as final fallback
         
         soc_max_percent = battery_params.get('max_soc_percent')
         if soc_max_percent is None:
             soc_max_percent = self.config_data.get('max_soc_percent')
         if soc_max_percent is None:
-            raise KeyError(
-                "Missing 'max_soc_percent'. Expected in config_data['battery_params'] "
-                "or config_data"
-            )
+            soc_max_percent = DEFAULT_SOC_MAX_PERCENT  # Use global constant as final fallback
         
         interval_hours = self.config_data.get('interval_hours')
         if not interval_hours:
@@ -525,7 +579,9 @@ class BatteryPerformanceComparator:
         md_excess = MdExcess(self.config_data)
         excess_demand = md_excess.calculate_excess_demand()
         result_df['excess_demand_kw'] = excess_demand
-        result_df['is_event'] = excess_demand > 0
+        
+        # Use TOU-aware event detection (respects tariff type and MD window)
+        result_df['is_event'] = self._detect_events_with_tou_logic(result_df, excess_demand)
         
         # Initialize result columns
         result_df['battery_power_kw'] = 0.0
