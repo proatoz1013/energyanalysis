@@ -570,8 +570,18 @@ class BatteryPerformanceComparator:
         if not interval_hours:
             raise KeyError("Missing 'interval_hours' in config_data")
         
-        # FIXED CONSERVATION: 50% of max discharge power
-        battery_kw_conserved = max_discharge_kw * 0.5
+        # Get conservation parameters from config (following V3 logic)
+        soc_threshold = self.config_data.get('soc_threshold', 50.0)
+        battery_kw_conserved = self.config_data.get('battery_kw_conserved', 100.0)
+        
+        # DEBUG: Print configuration
+        print(f"\n🔍 DEBUG Simple Conservation:")
+        print(f"   max_discharge_kw: {max_discharge_kw}")
+        print(f"   battery_capacity_kwh: {battery_capacity_kwh}")
+        print(f"   initial_soc_percent: {self.initial_soc_percent}")
+        print(f"   soc_threshold: {soc_threshold}%")
+        print(f"   battery_kw_conserved (fixed): {battery_kw_conserved} kW")
+        print(f"   Conservation strategy: Fixed kW conservation (V3 logic)")
         
         current_soc_kwh = battery_capacity_kwh * (self.initial_soc_percent / 100)
         
@@ -591,26 +601,88 @@ class BatteryPerformanceComparator:
         result_df['operation_type'] = 'none'
         
         # Process each timestamp
+        event_count = 0
+        discharge_count = 0
+        
         for idx in result_df.index:
             if result_df.loc[idx, 'is_event']:
+                event_count += 1
                 current_demand = result_df.loc[idx, self.power_col]
                 monthly_target = self.config_data['target_series'].loc[idx]
+                excess = current_demand - monthly_target
                 
-                battery_result = execute_conservation_discharge(
-                    current_demand_kw=current_demand,
-                    monthly_target_kw=monthly_target,
-                    battery_kw_conserved=battery_kw_conserved,
-                    current_soc_kwh=current_soc_kwh,
-                    battery_capacity_kwh=battery_capacity_kwh,
-                    max_power_kw=max_discharge_kw,
-                    interval_hours=interval_hours,
-                    efficiency=efficiency,
-                    soc_min_percent=soc_min_percent,
-                    soc_max_percent=soc_max_percent,
-                    c_rate=c_rate
-                )
+                # V3 CONSERVATION LOGIC: Check if conservation should activate
+                # Conservation activates when SOC < threshold
+                conservation_active = (current_soc_kwh / battery_capacity_kwh * 100) < soc_threshold
                 
-                result_df.loc[idx, 'battery_power_kw'] = battery_result['discharge_power_kw']
+                if conservation_active:
+                    # CONSERVATION MODE: Apply FIXED kW conservation amount
+                    original_discharge_required = excess
+                    power_to_conserve = min(battery_kw_conserved, original_discharge_required)
+                    revised_discharge_power = max(0, original_discharge_required - power_to_conserve)
+                    
+                    # Use revised discharge as the actual excess for battery operation
+                    excess = revised_discharge_power
+                    
+                    if event_count <= 3:
+                        print(f"\n   Event {event_count} at {idx}:")
+                        print(f"      🔋 CONSERVATION ACTIVE (SOC < {soc_threshold}%)")
+                        print(f"      current_demand: {current_demand:.2f} kW")
+                        print(f"      monthly_target: {monthly_target:.2f} kW")
+                        print(f"      original_excess: {original_discharge_required:.2f} kW")
+                        print(f"      power_to_conserve: {power_to_conserve:.2f} kW (fixed)")
+                        print(f"      revised_excess: {excess:.2f} kW")
+                    
+                    # Use conservation discharge function
+                    battery_result = execute_conservation_discharge(
+                        current_demand_kw=current_demand,
+                        monthly_target_kw=monthly_target,
+                        battery_kw_conserved=battery_kw_conserved,
+                        current_soc_kwh=current_soc_kwh,
+                        battery_capacity_kwh=battery_capacity_kwh,
+                        max_power_kw=max_discharge_kw,
+                        interval_hours=interval_hours,
+                        efficiency=efficiency,
+                        soc_min_percent=soc_min_percent,
+                        soc_max_percent=soc_max_percent,
+                        c_rate=c_rate
+                    )
+                else:
+                    # NORMAL MODE: Use DEFAULT discharge (no conservation)
+                    if event_count <= 3:
+                        print(f"\n   Event {event_count} at {idx}:")
+                        print(f"      ⚡ NORMAL MODE (SOC >= {soc_threshold}%)")
+                        print(f"      current_demand: {current_demand:.2f} kW")
+                        print(f"      monthly_target: {monthly_target:.2f} kW")
+                        print(f"      excess_demand: {excess:.2f} kW")
+                    
+                    # Use default discharge function (full discharge, no conservation)
+                    battery_result = execute_default_shaving_discharge(
+                        current_demand_kw=current_demand,
+                        monthly_target_kw=monthly_target,
+                        current_soc_kwh=current_soc_kwh,
+                        battery_capacity_kwh=battery_capacity_kwh,
+                        max_power_kw=max_discharge_kw,
+                        interval_hours=interval_hours,
+                        efficiency=efficiency,
+                        soc_min_percent=soc_min_percent,
+                        soc_max_percent=soc_max_percent,
+                        c_rate=c_rate
+                    )
+                
+                discharge_power = battery_result['discharge_power_kw']
+                
+                if discharge_power > 0:
+                    discharge_count += 1
+                
+                # DEBUG: Print first 3 events
+                if event_count <= 3:
+                    print(f"      current_soc: {current_soc_kwh:.2f} kWh ({(current_soc_kwh/battery_capacity_kwh)*100:.1f}%)")
+                    print(f"      discharge_power: {discharge_power:.2f} kW")
+                    print(f"      net_demand: {battery_result['net_demand_kw']:.2f} kW")
+                    print(f"      new_soc: {battery_result['updated_soc_kwh']:.2f} kWh ({battery_result['updated_soc_percent']:.1f}%)")
+                
+                result_df.loc[idx, 'battery_power_kw'] = discharge_power
                 result_df.loc[idx, 'net_demand_kw'] = battery_result['net_demand_kw']
                 result_df.loc[idx, 'battery_soc_kwh'] = battery_result['updated_soc_kwh']
                 result_df.loc[idx, 'battery_soc_percent'] = battery_result['updated_soc_percent']
@@ -619,6 +691,10 @@ class BatteryPerformanceComparator:
             else:
                 result_df.loc[idx, 'battery_soc_kwh'] = current_soc_kwh
                 result_df.loc[idx, 'battery_soc_percent'] = (current_soc_kwh / battery_capacity_kwh) * 100
+        
+        # DEBUG: Print summary
+        print(f"\n   Total events: {event_count}")
+        print(f"   Events with discharge > 0: {discharge_count}")
         
         return result_df
     
