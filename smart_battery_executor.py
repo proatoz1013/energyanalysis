@@ -11,6 +11,7 @@ Version: 1.0.0
 """
 
 from battery_physics import calculate_c_rate_limited_power
+from smart_conservation import SmartConstants
 
 def calculate_battery_kw_conserved(current_excess_kw, discharge_multiplier):
     """
@@ -579,7 +580,7 @@ def execute_mode_based_battery_operation(event_start, is_event, severity_score, 
                                         decision_maker, current_demand_kw, monthly_target_kw,
                                         battery_kw_conserved, current_soc_kwh, battery_capacity_kwh,
                                         max_power_kw, available_grid_power_kw, max_charge_power_kw,
-                                        interval_hours, efficiency=0.95, severity_threshold=3.5,
+                                        interval_hours, efficiency=0.95, severity_threshold=None,
                                         soc_min_percent=5.0, soc_max_percent=95.0,
                                         safety_checker=None, current_timestamp=None, config_data=None):
     """
@@ -608,7 +609,8 @@ def execute_mode_based_battery_operation(event_start, is_event, severity_score, 
         max_charge_power_kw (float): Maximum charge power rating
         interval_hours (float): Time interval for energy calculation
         efficiency (float): Round-trip efficiency (default: 0.95)
-        severity_threshold (float): Severity threshold for conservation (default: 3.5)
+        severity_threshold (float): Severity threshold for conservation 
+                                   (default: None, uses SmartConstants value)
         soc_min_percent (float): Minimum SOC safety limit (default: 5%)
         soc_max_percent (float): Maximum SOC limit (default: 95%)
         safety_checker (SafeConstraints): Safety constraint checker instance (optional)
@@ -625,6 +627,10 @@ def execute_mode_based_battery_operation(event_start, is_event, severity_score, 
     """
     # Calculate current SOC percentage
     current_soc_percent = (current_soc_kwh / battery_capacity_kwh) * 100
+    
+    # Use centralized threshold if not provided
+    if severity_threshold is None:
+        severity_threshold = SmartConstants.get_operational_thresholds()['severity_threshold_conservation']
     
     # Step 1: Determine controller mode based on severity
     controller_status = decision_maker.set_controller_mode_by_severity(

@@ -484,6 +484,32 @@ class SmartConstants:
         return tariff_lower in rules['tou_identifiers']
     
     @classmethod
+    def get_operational_thresholds(cls):
+        """
+        Get operational threshold constants for smart conservation logic.
+        
+        These thresholds control key decision points in the battery management system.
+        Centralizing them here ensures consistency and makes tuning easier.
+        
+        Returns:
+            dict: Operational thresholds used in decision-making:
+                - severity_threshold_conservation: Severity score to trigger conservation mode
+                - min_soc_threshold_percent: Minimum SOC for discharge operations
+                - max_soc_threshold_percent: Maximum SOC for normal operations
+                - trigger_threshold_kw: Trigger threshold for event detection
+                - early_window_soc_reserve: SOC reserve for early MD window (70%)
+                - late_window_soc_reserve: SOC reserve for late MD window (40%)
+        """
+        return {
+            'severity_threshold_conservation': 3.0,  # Severity score to trigger conservation mode
+            'min_soc_threshold_percent': 10.0,       # Minimum SOC for discharge operations
+            'max_soc_threshold_percent': 95.0,       # Maximum SOC for normal operations
+            'trigger_threshold_kw': 50.0,            # Trigger threshold for event detection
+            'early_window_soc_reserve': 70.0,        # SOC reserve for early MD window
+            'late_window_soc_reserve': 40.0          # SOC reserve for late MD window
+        }
+    
+    @classmethod
     def classify_tariff_type(cls, tariff_type):
         """
         Classify tariff type into standard categories.
@@ -2948,13 +2974,13 @@ class SeverityScore:
         
         if current_soc >= 80.0:
             soc_tightness = 'loose'
-            tightness_value = 0.9
+            tightness_value = 0.2
         elif current_soc >= 40.0:
             soc_tightness = 'moderate'
             tightness_value = 0.5
         else:
             soc_tightness = 'tight'
-            tightness_value = 0.2
+            tightness_value = 0.9
         
         return {
             'battery_max_discharge_kw': battery_kw_conserved,
@@ -3219,7 +3245,7 @@ class DecisionMaker:
             }
     
     def set_controller_mode_by_severity(self, event_start, is_event, severity_score, 
-                                       controller_state, severity_threshold=3.5):
+                                       controller_state, severity_threshold=None):
         """
         Set controller mode based on event status and severity score.
         
@@ -3234,7 +3260,8 @@ class DecisionMaker:
             is_event (bool): True if currently in an event
             severity_score (float): Current severity score
             controller_state (_MdControllerState): Controller state object to update
-            severity_threshold (float): Severity threshold for conservation (default: 3.5)
+            severity_threshold (float): Severity threshold for conservation 
+                                       (default: None, uses SmartConstants value)
             
         Returns:
             dict: Controller status with keys:
@@ -3246,6 +3273,10 @@ class DecisionMaker:
                 - 'severity_threshold': float (threshold used)
                 - 'severity_exceeded': bool (True if severity ≥ threshold)
         """
+        # Use centralized threshold if not provided
+        if severity_threshold is None:
+            severity_threshold = SmartConstants.get_operational_thresholds()['severity_threshold_conservation']
+        
         # Store previous mode for comparison
         previous_mode = controller_state.mode.value if hasattr(controller_state.mode, 'value') else str(controller_state.mode)
         trigger_reason = "No change"
@@ -3566,12 +3597,12 @@ class MdOrchestrator:
             severity_score = event_result['severity_score']
             
             # Call set_controller_mode_by_severity to determine mode
+            # Uses default threshold from SmartConstants
             mode_result = decision_maker.set_controller_mode_by_severity(
                 event_start=event_start,
                 is_event=is_event,
                 severity_score=severity_score,
-                controller_state=controller_state,
-                severity_threshold=3.5
+                controller_state=controller_state
             )
             
             # Store controller mode in dataframe
@@ -3767,7 +3798,7 @@ class MdOrchestrator:
                 max_charge_power_kw=max_charge_power_kw,
                 interval_hours=interval_hours,
                 efficiency=0.95,
-                severity_threshold=3.5,
+                # severity_threshold uses default from SmartConstants
                 safety_checker=safety_checker,
                 current_timestamp=current_timestamp,
                 config_data=config_data
@@ -3848,3 +3879,9 @@ class MdOrchestrator:
         
         return df_sim
    
+
+   #TODO: verify charge discharge numbers
+   #TODO: implement safeguards 
+   #TODO: integrate updated SOC score with severity calculations
+   #TODO: Implement success or fail score to compare with normal discharge mode
+   #TODO: refactor orchestrator 
