@@ -339,13 +339,14 @@ class BatteryPerformanceComparator:
         
         max_discharge_kw = (
             battery_sizing.get('max_discharge_kw') or
+            battery_sizing.get('power_rating_kw') or  # Fallback to power_rating_kw
             battery_params.get('max_discharge_kw') or
             self.config_data.get('max_discharge_kw')
         )
         if not max_discharge_kw:
             raise KeyError(
-                "Missing 'max_discharge_kw'. Expected in config_data['battery_sizing'], "
-                "config_data['battery_params'], or config_data"
+                "Missing 'max_discharge_kw' or 'power_rating_kw'. Expected in "
+                "config_data['battery_sizing'], config_data['battery_params'], or config_data"
             )
         
         c_rate = (
@@ -462,13 +463,14 @@ class BatteryPerformanceComparator:
         
         max_discharge_kw = (
             battery_sizing.get('max_discharge_kw') or
+            battery_sizing.get('power_rating_kw') or  # Fallback to power_rating_kw
             battery_params.get('max_discharge_kw') or
             self.config_data.get('max_discharge_kw')
         )
         if not max_discharge_kw:
             raise KeyError(
-                "Missing 'max_discharge_kw'. Expected in config_data['battery_sizing'], "
-                "config_data['battery_params'], or config_data"
+                "Missing 'max_discharge_kw' or 'power_rating_kw'. Expected in "
+                "config_data['battery_sizing'], config_data['battery_params'], or config_data"
             )
         
         c_rate = (
