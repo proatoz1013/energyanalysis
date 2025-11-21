@@ -10,6 +10,8 @@ Created: November 2025
 Version: 1.0.0
 """
 
+from battery_physics import calculate_c_rate_limited_power
+
 def calculate_battery_kw_conserved(current_excess_kw, discharge_multiplier):
     """
     Calculate battery power to conserve based on discharge multiplier.
@@ -114,22 +116,24 @@ def execute_battery_operation(is_event, current_soc_kwh, battery_capacity_kwh,
 
 def execute_default_shaving_discharge(current_demand_kw, monthly_target_kw, current_soc_kwh,
                                      battery_capacity_kwh, max_power_kw, interval_hours,
-                                     efficiency=0.95, soc_min_percent=5.0, soc_max_percent=95.0):
+                                     efficiency=0.95, soc_min_percent=5.0, soc_max_percent=95.0,
+                                     c_rate=1.0):
     """
     Execute default MD shaving discharge to reduce demand to monthly target.
     
     This method implements the core discharge logic from V3's default shaving mode:
     - Calculates excess demand above monthly target
-    - Determines discharge power within battery constraints
+    - Determines discharge power within battery constraints (including C-rate)
     - Updates SOC based on energy discharged
     - Ensures SOC stays within safety limits (5%-95%)
     
     Logic Flow (from md_shaving_solution_v3.py lines 3700-3730):
     1. Calculate excess = current_demand - monthly_target
-    2. Determine discharge_power = min(excess, max_power, available_soc_power)
-    3. Calculate energy_discharged with efficiency losses
-    4. Update SOC = current_soc - (energy_discharged / efficiency)
-    5. Clamp SOC to safety limits
+    2. Get C-rate limits based on current SOC
+    3. Determine discharge_power = min(excess, max_power, available_soc_power, c_rate_limit)
+    4. Calculate energy_discharged with efficiency losses
+    5. Update SOC = current_soc - (energy_discharged / efficiency)
+    6. Clamp SOC to safety limits
     
     Args:
         current_demand_kw (float): Current power demand
@@ -141,6 +145,7 @@ def execute_default_shaving_discharge(current_demand_kw, monthly_target_kw, curr
         efficiency (float): Round-trip efficiency (default: 0.95)
         soc_min_percent (float): Minimum SOC safety limit (default: 5%)
         soc_max_percent (float): Maximum SOC limit (default: 95%)
+        c_rate (float): Battery C-rate specification (default: 1.0)
         
     Returns:
         dict: {
@@ -152,11 +157,26 @@ def execute_default_shaving_discharge(current_demand_kw, monthly_target_kw, curr
             'net_demand_kw': float,           # Resulting demand after discharge
             'excess_shaved_kw': float,        # Amount of excess shaved
             'soc_limited': bool,              # True if discharge limited by SOC
-            'power_limited': bool             # True if discharge limited by power rating
+            'power_limited': bool,            # True if discharge limited by power rating
+            'c_rate_limited': bool,           # True if discharge limited by C-rate
+            'limiting_factor': str,           # What limited discharge
+            'effective_c_rate': float         # Actual C-rate used
         }
     """
     # Calculate excess demand above target
     excess_demand_kw = max(0, current_demand_kw - monthly_target_kw)
+    
+    # Calculate current SOC percentage for C-rate limits
+    current_soc_percent = (current_soc_kwh / battery_capacity_kwh) * 100 if battery_capacity_kwh > 0 else 0
+    
+    # Get C-rate power limits
+    c_rate_limits = calculate_c_rate_limited_power(
+        current_soc_percent=current_soc_percent,
+        max_power_rating_kw=max_power_kw,
+        battery_capacity_kwh=battery_capacity_kwh,
+        c_rate=c_rate,
+        operation='discharge'
+    )
     
     # Calculate usable SOC limits
     usable_capacity_kwh = battery_capacity_kwh * ((soc_max_percent - soc_min_percent) / 100)
@@ -167,8 +187,13 @@ def execute_default_shaving_discharge(current_demand_kw, monthly_target_kw, curr
     available_soc_kwh = current_soc_kwh - min_soc_kwh
     max_discharge_from_soc_kw = available_soc_kwh / interval_hours if interval_hours > 0 else 0
     
-    # Determine actual discharge power (minimum of constraints)
-    discharge_power_kw = min(excess_demand_kw, max_power_kw, max_discharge_from_soc_kw)
+    # Determine actual discharge power (minimum of all constraints)
+    discharge_power_kw = min(
+        excess_demand_kw, 
+        max_power_kw, 
+        max_discharge_from_soc_kw,
+        c_rate_limits['max_power_kw']  # NEW: C-rate constraint
+    )
     discharge_power_kw = max(0, discharge_power_kw)  # Ensure non-negative
     
     # Calculate energy discharged with efficiency
@@ -187,8 +212,19 @@ def execute_default_shaving_discharge(current_demand_kw, monthly_target_kw, curr
     excess_shaved_kw = discharge_power_kw
     
     # Determine limiting factors
-    soc_limited = max_discharge_from_soc_kw < min(excess_demand_kw, max_power_kw)
-    power_limited = max_power_kw < min(excess_demand_kw, max_discharge_from_soc_kw)
+    soc_limited = max_discharge_from_soc_kw < min(excess_demand_kw, max_power_kw, c_rate_limits['max_power_kw'])
+    power_limited = max_power_kw < min(excess_demand_kw, max_discharge_from_soc_kw, c_rate_limits['max_power_kw'])
+    c_rate_limited = c_rate_limits['max_power_kw'] < min(excess_demand_kw, max_power_kw, max_discharge_from_soc_kw)
+    
+    # Overall limiting factor
+    if c_rate_limited:
+        limiting_factor = c_rate_limits['limiting_factor']
+    elif soc_limited:
+        limiting_factor = 'SOC'
+    elif power_limited:
+        limiting_factor = 'Power Rating'
+    else:
+        limiting_factor = 'Demand'
     
     return {
         'action': 'discharge',
@@ -199,27 +235,32 @@ def execute_default_shaving_discharge(current_demand_kw, monthly_target_kw, curr
         'net_demand_kw': net_demand_kw,
         'excess_shaved_kw': excess_shaved_kw,
         'soc_limited': soc_limited,
-        'power_limited': power_limited
+        'power_limited': power_limited,
+        'c_rate_limited': c_rate_limited,
+        'limiting_factor': limiting_factor,
+        'effective_c_rate': c_rate_limits['effective_c_rate']
     }
 
 def execute_conservation_discharge(current_demand_kw, monthly_target_kw, battery_kw_conserved,
                                    current_soc_kwh, battery_capacity_kwh, max_power_kw,
                                    interval_hours, efficiency=0.95, soc_min_percent=5.0,
-                                   soc_max_percent=95.0):
+                                   soc_max_percent=95.0, c_rate=1.0):
     """
     Execute conservation-aware discharge with reduced battery power to preserve SOC.
     
     This method implements the conservation mode logic from V3 (lines 3600-3650):
     - Calculates revised target = monthly_target + battery_kw_conserved
     - Reduces discharge power to preserve battery capacity
+    - Applies C-rate limits
     - Tracks SOC improvement from conservation
     - Maintains same safety limits as default mode
     
     Conservation Logic:
     1. Revised target = monthly_target + battery_kw_conserved
     2. Revised excess = current_demand - revised_target
-    3. Discharge only the revised excess (less than default)
-    4. Track energy preserved and SOC improvement
+    3. Apply C-rate limits based on current SOC
+    4. Discharge only the revised excess (less than default)
+    5. Track energy preserved and SOC improvement
     
     Args:
         current_demand_kw (float): Current power demand
@@ -232,6 +273,7 @@ def execute_conservation_discharge(current_demand_kw, monthly_target_kw, battery
         efficiency (float): Round-trip efficiency (default: 0.95)
         soc_min_percent (float): Minimum SOC safety limit (default: 5%)
         soc_max_percent (float): Maximum SOC limit (default: 95%)
+        c_rate (float): Battery C-rate specification (default: 1.0)
         
     Returns:
         dict: {
@@ -247,9 +289,24 @@ def execute_conservation_discharge(current_demand_kw, monthly_target_kw, battery
             'energy_preserved_kwh': float,         # Energy preserved by conservation
             'soc_improvement_percent': float,      # SOC improvement vs default mode
             'soc_limited': bool,                   # True if limited by SOC
-            'power_limited': bool                  # True if limited by power rating
+            'power_limited': bool,                 # True if limited by power rating
+            'c_rate_limited': bool,                # True if limited by C-rate
+            'limiting_factor': str,                # What limited discharge
+            'effective_c_rate': float              # Actual C-rate used
         }
     """
+    # Calculate current SOC percentage for C-rate limits
+    current_soc_percent = (current_soc_kwh / battery_capacity_kwh) * 100 if battery_capacity_kwh > 0 else 0
+    
+    # Get C-rate power limits
+    c_rate_limits = calculate_c_rate_limited_power(
+        current_soc_percent=current_soc_percent,
+        max_power_rating_kw=max_power_kw,
+        battery_capacity_kwh=battery_capacity_kwh,
+        c_rate=c_rate,
+        operation='discharge'
+    )
+    
     # Calculate revised target with conservation
     revised_target_kw = monthly_target_kw + battery_kw_conserved
     
@@ -266,8 +323,13 @@ def execute_conservation_discharge(current_demand_kw, monthly_target_kw, battery
     available_soc_kwh = current_soc_kwh - min_soc_kwh
     max_discharge_from_soc_kw = available_soc_kwh / interval_hours if interval_hours > 0 else 0
     
-    # Determine actual discharge power (reduced by conservation)
-    discharge_power_kw = min(revised_excess_kw, max_power_kw, max_discharge_from_soc_kw)
+    # Determine actual discharge power (reduced by conservation + C-rate limits)
+    discharge_power_kw = min(
+        revised_excess_kw, 
+        max_power_kw, 
+        max_discharge_from_soc_kw,
+        c_rate_limits['max_power_kw']  # NEW: C-rate constraint
+    )
     discharge_power_kw = max(0, discharge_power_kw)
     
     # Calculate energy discharged with efficiency
@@ -294,8 +356,25 @@ def execute_conservation_discharge(current_demand_kw, monthly_target_kw, battery
     excess_shaved_kw = discharge_power_kw
     
     # Determine limiting factors
-    soc_limited = max_discharge_from_soc_kw < min(revised_excess_kw, max_power_kw)
-    power_limited = max_power_kw < min(revised_excess_kw, max_discharge_from_soc_kw)
+    soc_limited = (max_discharge_from_soc_kw < revised_excess_kw and 
+                   max_discharge_from_soc_kw < max_power_kw and
+                   max_discharge_from_soc_kw < c_rate_limits['max_power_kw'])
+    power_limited = (max_power_kw < revised_excess_kw and 
+                    max_power_kw < max_discharge_from_soc_kw and
+                    max_power_kw < c_rate_limits['max_power_kw'])
+    c_rate_limited = (c_rate_limits['max_power_kw'] < revised_excess_kw and
+                     c_rate_limits['max_power_kw'] < max_power_kw and
+                     c_rate_limits['max_power_kw'] < max_discharge_from_soc_kw)
+    
+    # Determine which factor is actually limiting
+    if c_rate_limited:
+        limiting_factor = c_rate_limits['limiting_factor']
+    elif soc_limited:
+        limiting_factor = 'soc_availability'
+    elif power_limited:
+        limiting_factor = 'power_rating'
+    else:
+        limiting_factor = 'demand'
     
     return {
         'action': 'discharge_conserve',
@@ -310,27 +389,33 @@ def execute_conservation_discharge(current_demand_kw, monthly_target_kw, battery
         'energy_preserved_kwh': energy_preserved_kwh,
         'soc_improvement_percent': soc_improvement_percent,
         'soc_limited': soc_limited,
-        'power_limited': power_limited
+        'power_limited': power_limited,
+        'c_rate_limited': c_rate_limited,
+        'limiting_factor': limiting_factor,
+        'effective_c_rate': c_rate_limits['effective_c_rate']
     }
 
 def execute_battery_recharge(current_demand_kw, available_grid_power_kw, current_soc_kwh,
                              battery_capacity_kwh, max_charge_power_kw, interval_hours,
-                             efficiency=0.95, soc_min_percent=5.0, soc_max_percent=95.0):
+                             efficiency=0.95, soc_min_percent=5.0, soc_max_percent=95.0,
+                             c_rate=1.0):
     """
     Execute battery recharge operation to restore SOC for next discharge cycle.
     
     This method implements the core charging logic from V3's battery simulation:
     - Calculates available charging power from grid
+    - Applies C-rate limits for charging (0.8x factor for battery health)
     - Determines charge power within battery constraints
     - Updates SOC based on energy charged
     - Ensures SOC stays within safety limits (5%-95%)
     
     Charging Logic Flow (from md_shaving_solution_v3.py lines ~5800-5850):
     1. Calculate available_power = available_grid_power (excess capacity)
-    2. Determine charge_power = min(available_power, max_charge_power, soc_space_power)
-    3. Calculate energy_charged with efficiency losses
-    4. Update SOC = current_soc + (energy_charged * efficiency)
-    5. Clamp SOC to safety limits
+    2. Apply C-rate limits with charging operation factor (0.8x)
+    3. Determine charge_power = min(available_power, max_charge_power, soc_space_power, c_rate_limit)
+    4. Calculate energy_charged with efficiency losses
+    5. Update SOC = current_soc + (energy_charged * efficiency)
+    6. Clamp SOC to safety limits
     
     Args:
         current_demand_kw (float): Current power demand
@@ -342,6 +427,7 @@ def execute_battery_recharge(current_demand_kw, available_grid_power_kw, current
         efficiency (float): Charging efficiency (default: 0.95)
         soc_min_percent (float): Minimum SOC safety limit (default: 5%)
         soc_max_percent (float): Maximum SOC limit (default: 95%)
+        c_rate (float): Battery C-rate specification (default: 1.0)
         
     Returns:
         dict: {
@@ -353,9 +439,24 @@ def execute_battery_recharge(current_demand_kw, available_grid_power_kw, current
             'soc_space_remaining_kwh': float, # Remaining capacity to max SOC
             'charging_complete': bool,        # True if reached max SOC
             'power_limited': bool,            # True if limited by charge power rating
-            'grid_limited': bool              # True if limited by available grid power
+            'grid_limited': bool,             # True if limited by available grid power
+            'c_rate_limited': bool,           # True if limited by C-rate
+            'limiting_factor': str,           # What limited charging
+            'effective_c_rate': float         # Actual C-rate used
         }
     """
+    # Calculate current SOC percentage for C-rate limits
+    current_soc_percent = (current_soc_kwh / battery_capacity_kwh) * 100 if battery_capacity_kwh > 0 else 0
+    
+    # Get C-rate power limits for charging (includes 0.8x operation factor)
+    c_rate_limits = calculate_c_rate_limited_power(
+        current_soc_percent=current_soc_percent,
+        max_power_rating_kw=max_charge_power_kw,
+        battery_capacity_kwh=battery_capacity_kwh,
+        c_rate=c_rate,
+        operation='charge'  # Apply 0.8x charging factor
+    )
+    
     # Calculate SOC limits
     min_soc_kwh = battery_capacity_kwh * (soc_min_percent / 100)
     max_soc_kwh = battery_capacity_kwh * (soc_max_percent / 100)
@@ -364,8 +465,13 @@ def execute_battery_recharge(current_demand_kw, available_grid_power_kw, current
     available_soc_space_kwh = max_soc_kwh - current_soc_kwh
     max_charge_from_soc_kw = available_soc_space_kwh / interval_hours if interval_hours > 0 else 0
     
-    # Determine actual charge power (minimum of constraints)
-    charge_power_kw = min(available_grid_power_kw, max_charge_power_kw, max_charge_from_soc_kw)
+    # Determine actual charge power (minimum of constraints including C-rate)
+    charge_power_kw = min(
+        available_grid_power_kw, 
+        max_charge_power_kw, 
+        max_charge_from_soc_kw,
+        c_rate_limits['max_power_kw']  # NEW: C-rate constraint for charging
+    )
     charge_power_kw = max(0, charge_power_kw)  # Ensure non-negative
     
     # Calculate energy charged with efficiency
@@ -386,8 +492,25 @@ def execute_battery_recharge(current_demand_kw, available_grid_power_kw, current
     charging_complete = updated_soc_percent >= soc_max_percent
     
     # Determine limiting factors
-    grid_limited = available_grid_power_kw < min(max_charge_power_kw, max_charge_from_soc_kw)
-    power_limited = max_charge_power_kw < min(available_grid_power_kw, max_charge_from_soc_kw)
+    grid_limited = (available_grid_power_kw < max_charge_power_kw and 
+                   available_grid_power_kw < max_charge_from_soc_kw and
+                   available_grid_power_kw < c_rate_limits['max_power_kw'])
+    power_limited = (max_charge_power_kw < available_grid_power_kw and 
+                    max_charge_power_kw < max_charge_from_soc_kw and
+                    max_charge_power_kw < c_rate_limits['max_power_kw'])
+    c_rate_limited = (c_rate_limits['max_power_kw'] < available_grid_power_kw and
+                     c_rate_limits['max_power_kw'] < max_charge_power_kw and
+                     c_rate_limits['max_power_kw'] < max_charge_from_soc_kw)
+    
+    # Determine which factor is actually limiting
+    if c_rate_limited:
+        limiting_factor = c_rate_limits['limiting_factor']
+    elif grid_limited:
+        limiting_factor = 'grid_availability'
+    elif power_limited:
+        limiting_factor = 'power_rating'
+    else:
+        limiting_factor = 'soc_space'
     
     return {
         'action': 'charge',
@@ -398,7 +521,10 @@ def execute_battery_recharge(current_demand_kw, available_grid_power_kw, current
         'soc_space_remaining_kwh': soc_space_remaining_kwh,
         'charging_complete': charging_complete,
         'power_limited': power_limited,
-        'grid_limited': grid_limited
+        'grid_limited': grid_limited,
+        'c_rate_limited': c_rate_limited,
+        'limiting_factor': limiting_factor,
+        'effective_c_rate': c_rate_limits['effective_c_rate']
     }
 
 def compute_soc_from_energy_change(current_soc_kwh, energy_change_kwh, battery_capacity_kwh,
@@ -547,6 +673,12 @@ def execute_mode_based_battery_operation(event_start, is_event, severity_score, 
             }
     
     # Step 3: Execute appropriate battery operation based on mode
+    # Extract C-rate from config_data if available
+    c_rate = 1.0  # Default C-rate
+    if config_data is not None:
+        battery_sizing = config_data.get('battery_sizing', {})
+        c_rate = battery_sizing.get('c_rate', 1.0)
+    
     # Note: MdShavingMode enum values are lowercase ("normal", "conservation", "idle")
     if current_mode == 'normal':
         # NORMAL mode: Full discharge to monthly target
@@ -559,7 +691,8 @@ def execute_mode_based_battery_operation(event_start, is_event, severity_score, 
             interval_hours=interval_hours,
             efficiency=efficiency,
             soc_min_percent=soc_min_percent,
-            soc_max_percent=soc_max_percent
+            soc_max_percent=soc_max_percent,
+            c_rate=c_rate
         )
         operation_type = 'discharge'
         
@@ -575,7 +708,8 @@ def execute_mode_based_battery_operation(event_start, is_event, severity_score, 
             interval_hours=interval_hours,
             efficiency=efficiency,
             soc_min_percent=soc_min_percent,
-            soc_max_percent=soc_max_percent
+            soc_max_percent=soc_max_percent,
+            c_rate=c_rate
         )
         operation_type = 'discharge_conserve'
         
@@ -590,7 +724,8 @@ def execute_mode_based_battery_operation(event_start, is_event, severity_score, 
             interval_hours=interval_hours,
             efficiency=efficiency,
             soc_min_percent=soc_min_percent,
-            soc_max_percent=soc_max_percent
+            soc_max_percent=soc_max_percent,
+            c_rate=c_rate
         )
         operation_type = 'charge'
     
