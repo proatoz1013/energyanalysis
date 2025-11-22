@@ -275,6 +275,68 @@ class BatteryPerformanceComparator:
             # Failed: no demand reduction
             return 'Failed', excess_demand
     
+    def _calculate_savings_lost_rm(self, comparison_df, status_col, savings_lost_kw_col):
+        """
+        Calculate total savings lost in RM based on MD period rates.
+        
+        Savings lost calculation:
+        - Success: RM 0 (no excess demand)
+        - Partial: (excess not shaved in kW) * (interval hours) * (MD rate RM/kWh)
+        - Failed: (total excess in kW) * (interval hours) * (MD rate RM/kWh)
+        
+        MD Rates (from PEAK_OFFPEAK_LOGIC_COMPARISON.md):
+        - Medium Voltage General: RM 0.2983/kWh
+        - Medium Voltage TOU: RM 0.3132/kWh (peak only)
+        - High Voltage General: RM 0.4303/kWh
+        - High Voltage TOU: RM 0.4452/kWh (peak only)
+        
+        Args:
+            comparison_df: DataFrame with comparison results
+            status_col: Column name for status ('default_status', 'simple_conservation_status', etc.)
+            savings_lost_kw_col: Column name for savings lost kW
+            
+        Returns:
+            float: Total savings lost in RM
+        """
+        # Get selected tariff - handle both dict and string formats
+        selected_tariff = self.config_data.get('selected_tariff', {})
+        if isinstance(selected_tariff, dict):
+            # Extract tariff name from dict
+            tariff_name = selected_tariff.get('name', '').lower()
+        else:
+            # Already a string
+            tariff_name = str(selected_tariff).lower()
+        
+        tariff_type = self.config_data.get('tariff_type', '').upper()
+        
+        # Determine MD energy rate based on tariff
+        if 'medium' in tariff_name or 'mv' in tariff_name:
+            if tariff_type == 'TOU':
+                md_rate_rm_per_kwh = 0.3132  # Medium Voltage TOU peak rate
+            else:
+                md_rate_rm_per_kwh = 0.2983  # Medium Voltage General
+        elif 'high' in tariff_name or 'hv' in tariff_name:
+            if tariff_type == 'TOU':
+                md_rate_rm_per_kwh = 0.4452  # High Voltage TOU peak rate
+            else:
+                md_rate_rm_per_kwh = 0.4303  # High Voltage General
+        else:
+            # Default to Medium Voltage General if unknown
+            md_rate_rm_per_kwh = 0.2983
+        
+        interval_hours = self.config_data.get('interval_hours', 0.25)
+        
+        # Filter to events only (where status is not 'N/A')
+        event_rows = comparison_df[comparison_df[status_col] != 'N/A']
+        
+        # Calculate savings lost in RM
+        # For Failed/Partial: savings_lost_kw * interval_hours * md_rate
+        # For Success: 0
+        savings_lost_kwh = event_rows[savings_lost_kw_col] * interval_hours
+        savings_lost_rm = savings_lost_kwh * md_rate_rm_per_kwh
+        
+        return savings_lost_rm.sum()
+    
     def _calculate_comparison_summary(self, comparison_df):
         """
         Calculate summary statistics comparing all three methods.
@@ -295,7 +357,10 @@ class BatteryPerformanceComparator:
                 'success_count': (comparison_df['default_status'] == 'Success').sum(),
                 'partial_count': (comparison_df['default_status'] == 'Partial').sum(),
                 'failed_count': (comparison_df['default_status'] == 'Failed').sum(),
-                'total_savings_lost_kwh': comparison_df['default_savings_lost_kw'].sum() * self.config_data.get('interval_hours', 0.5)
+                'total_savings_lost_kwh': comparison_df['default_savings_lost_kw'].sum() * self.config_data.get('interval_hours', 0.5),
+                'total_savings_lost_rm': self._calculate_savings_lost_rm(
+                    comparison_df, 'default_status', 'default_savings_lost_kw'
+                )
             },
             
             # Simple conservation summary
@@ -304,7 +369,10 @@ class BatteryPerformanceComparator:
                 'success_count': (comparison_df['simple_conservation_status'] == 'Success').sum(),
                 'partial_count': (comparison_df['simple_conservation_status'] == 'Partial').sum(),
                 'failed_count': (comparison_df['simple_conservation_status'] == 'Failed').sum(),
-                'total_savings_lost_kwh': comparison_df['simple_conservation_savings_lost_kw'].sum() * self.config_data.get('interval_hours', 0.5)
+                'total_savings_lost_kwh': comparison_df['simple_conservation_savings_lost_kw'].sum() * self.config_data.get('interval_hours', 0.5),
+                'total_savings_lost_rm': self._calculate_savings_lost_rm(
+                    comparison_df, 'simple_conservation_status', 'simple_conservation_savings_lost_kw'
+                )
             },
             
             # Smart conservation summary
@@ -313,7 +381,10 @@ class BatteryPerformanceComparator:
                 'success_count': (comparison_df['smart_conservation_status'] == 'Success').sum(),
                 'partial_count': (comparison_df['smart_conservation_status'] == 'Partial').sum(),
                 'failed_count': (comparison_df['smart_conservation_status'] == 'Failed').sum(),
-                'total_savings_lost_kwh': comparison_df['smart_conservation_savings_lost_kw'].sum() * self.config_data.get('interval_hours', 0.5)
+                'total_savings_lost_kwh': comparison_df['smart_conservation_savings_lost_kw'].sum() * self.config_data.get('interval_hours', 0.5),
+                'total_savings_lost_rm': self._calculate_savings_lost_rm(
+                    comparison_df, 'smart_conservation_status', 'smart_conservation_savings_lost_kw'
+                )
             }
         }
         
@@ -470,12 +541,20 @@ class BatteryPerformanceComparator:
         result_df['battery_soc_percent'] = self.initial_soc_percent
         result_df['operation_type'] = 'none'
         
+        # Get tariff configuration for charging logic
+        selected_tariff = self.config_data.get('selected_tariff', {})
+        tariff_type = self.config_data.get('tariff_type', '').upper()
+        is_tou = tariff_type == 'TOU'
+        holidays = self.config_data.get('holidays', set())
+        
         # Process each timestamp
         for idx in result_df.index:
+            current_demand = result_df.loc[idx, self.power_col]
+            monthly_target = self.config_data['target_series'].loc[idx]
+            current_soc_percent = (current_soc_kwh / battery_capacity_kwh) * 100
+            
             if result_df.loc[idx, 'is_event']:
-                current_demand = result_df.loc[idx, self.power_col]
-                monthly_target = self.config_data['target_series'].loc[idx]
-                
+                # DISCHARGE LOGIC
                 battery_result = execute_default_shaving_discharge(
                     current_demand_kw=current_demand,
                     monthly_target_kw=monthly_target,
@@ -496,6 +575,68 @@ class BatteryPerformanceComparator:
                 result_df.loc[idx, 'operation_type'] = 'discharge'
                 current_soc_kwh = battery_result['updated_soc_kwh']
             else:
+                # CHARGING LOGIC - V3 style with TOU awareness
+                # Check if there's available power below monthly target for charging
+                if current_demand < monthly_target and current_soc_percent < soc_max_percent:
+                    available_for_charging = monthly_target - current_demand
+                    
+                    # Determine charge multiplier based on tariff type
+                    if is_tou:
+                        # TOU: Enhanced charging during off-peak window (10 PM - 2 PM)
+                        hour = idx.hour
+                        in_charging_window = (hour >= 22) or (hour < 14)
+                        
+                        if in_charging_window:
+                            # Calculate urgency based on hours until next MD window (2 PM)
+                            if hour >= 14:  # After 2 PM
+                                hours_until_md = (24 - hour) + 14  # Hours to next day 2 PM
+                            else:  # Before 2 PM
+                                hours_until_md = 14 - hour
+                            
+                            # Urgency-based charging multiplier
+                            if hours_until_md < 4:
+                                charge_multiplier = 1.0  # CRITICAL: 100% charging
+                            elif hours_until_md < 8:
+                                charge_multiplier = 0.8  # HIGH: 80% charging
+                            else:
+                                charge_multiplier = 0.6  # NORMAL: 60% charging
+                        else:
+                            # Outside charging window - no charging
+                            charge_multiplier = 0.0
+                    else:
+                        # General Tariff: Simple SOC-based charging
+                        if current_soc_percent < 30:
+                            charge_multiplier = 0.8  # Aggressive at low SOC
+                        elif current_soc_percent < 60:
+                            charge_multiplier = 0.6  # Moderate
+                        else:
+                            charge_multiplier = 0.3  # Conservative at high SOC
+                    
+                    if charge_multiplier > 0:
+                        # Calculate charging power with constraints
+                        max_charge_by_soc = (battery_capacity_kwh * (soc_max_percent / 100) - current_soc_kwh) / (interval_hours * efficiency)
+                        max_charge_by_c_rate = battery_capacity_kwh * c_rate
+                        
+                        charge_power_kw = min(
+                            available_for_charging * charge_multiplier,
+                            max_discharge_kw,  # Use same power rating limit
+                            max_charge_by_soc,
+                            max_charge_by_c_rate
+                        )
+                        
+                        if charge_power_kw > 0.1:  # Minimum threshold
+                            # Apply charging
+                            energy_charged = charge_power_kw * interval_hours * efficiency
+                            current_soc_kwh = min(
+                                current_soc_kwh + energy_charged,
+                                battery_capacity_kwh * (soc_max_percent / 100)
+                            )
+                            
+                            result_df.loc[idx, 'battery_power_kw'] = -charge_power_kw  # Negative = charge
+                            result_df.loc[idx, 'net_demand_kw'] = current_demand + charge_power_kw
+                            result_df.loc[idx, 'operation_type'] = 'charge'
+                
+                # Update SOC tracking
                 result_df.loc[idx, 'battery_soc_kwh'] = current_soc_kwh
                 result_df.loc[idx, 'battery_soc_percent'] = (current_soc_kwh / battery_capacity_kwh) * 100
         
@@ -605,20 +746,28 @@ class BatteryPerformanceComparator:
         result_df['battery_soc_percent'] = self.initial_soc_percent
         result_df['operation_type'] = 'none'
         
+        # Get tariff configuration for charging logic
+        selected_tariff = self.config_data.get('selected_tariff', {})
+        tariff_type = self.config_data.get('tariff_type', '').upper()
+        is_tou = tariff_type == 'TOU'
+        holidays = self.config_data.get('holidays', set())
+        
         # Process each timestamp
         event_count = 0
         discharge_count = 0
         
         for idx in result_df.index:
+            current_demand = result_df.loc[idx, self.power_col]
+            monthly_target = self.config_data['target_series'].loc[idx]
+            current_soc_percent = (current_soc_kwh / battery_capacity_kwh) * 100
+            
             if result_df.loc[idx, 'is_event']:
                 event_count += 1
-                current_demand = result_df.loc[idx, self.power_col]
-                monthly_target = self.config_data['target_series'].loc[idx]
                 excess = current_demand - monthly_target
                 
                 # V3 CONSERVATION LOGIC: Check if conservation should activate
                 # Conservation activates when SOC < threshold
-                conservation_active = (current_soc_kwh / battery_capacity_kwh * 100) < soc_threshold
+                conservation_active = current_soc_percent < soc_threshold
                 
                 if conservation_active:
                     # CONSERVATION MODE: Apply FIXED kW conservation amount
@@ -682,7 +831,7 @@ class BatteryPerformanceComparator:
                 
                 # DEBUG: Print first 3 events
                 if event_count <= 3:
-                    print(f"      current_soc: {current_soc_kwh:.2f} kWh ({(current_soc_kwh/battery_capacity_kwh)*100:.1f}%)")
+                    print(f"      current_soc: {current_soc_kwh:.2f} kWh ({current_soc_percent:.1f}%)")
                     print(f"      discharge_power: {discharge_power:.2f} kW")
                     print(f"      net_demand: {battery_result['net_demand_kw']:.2f} kW")
                     print(f"      new_soc: {battery_result['updated_soc_kwh']:.2f} kWh ({battery_result['updated_soc_percent']:.1f}%)")
@@ -694,6 +843,68 @@ class BatteryPerformanceComparator:
                 result_df.loc[idx, 'operation_type'] = 'discharge_conserve'
                 current_soc_kwh = battery_result['updated_soc_kwh']
             else:
+                # CHARGING LOGIC - V3 style with TOU awareness
+                # Check if there's available power below monthly target for charging
+                if current_demand < monthly_target and current_soc_percent < soc_max_percent:
+                    available_for_charging = monthly_target - current_demand
+                    
+                    # Determine charge multiplier based on tariff type
+                    if is_tou:
+                        # TOU: Enhanced charging during off-peak window (10 PM - 2 PM)
+                        hour = idx.hour
+                        in_charging_window = (hour >= 22) or (hour < 14)
+                        
+                        if in_charging_window:
+                            # Calculate urgency based on hours until next MD window (2 PM)
+                            if hour >= 14:  # After 2 PM
+                                hours_until_md = (24 - hour) + 14  # Hours to next day 2 PM
+                            else:  # Before 2 PM
+                                hours_until_md = 14 - hour
+                            
+                            # Urgency-based charging multiplier
+                            if hours_until_md < 4:
+                                charge_multiplier = 1.0  # CRITICAL: 100% charging
+                            elif hours_until_md < 8:
+                                charge_multiplier = 0.8  # HIGH: 80% charging
+                            else:
+                                charge_multiplier = 0.6  # NORMAL: 60% charging
+                        else:
+                            # Outside charging window - no charging
+                            charge_multiplier = 0.0
+                    else:
+                        # General Tariff: Simple SOC-based charging
+                        if current_soc_percent < 30:
+                            charge_multiplier = 0.8  # Aggressive at low SOC
+                        elif current_soc_percent < 60:
+                            charge_multiplier = 0.6  # Moderate
+                        else:
+                            charge_multiplier = 0.3  # Conservative at high SOC
+                    
+                    if charge_multiplier > 0:
+                        # Calculate charging power with constraints
+                        max_charge_by_soc = (battery_capacity_kwh * (soc_max_percent / 100) - current_soc_kwh) / (interval_hours * efficiency)
+                        max_charge_by_c_rate = battery_capacity_kwh * c_rate
+                        
+                        charge_power_kw = min(
+                            available_for_charging * charge_multiplier,
+                            max_discharge_kw,  # Use same power rating limit
+                            max_charge_by_soc,
+                            max_charge_by_c_rate
+                        )
+                        
+                        if charge_power_kw > 0.1:  # Minimum threshold
+                            # Apply charging
+                            energy_charged = charge_power_kw * interval_hours * efficiency
+                            current_soc_kwh = min(
+                                current_soc_kwh + energy_charged,
+                                battery_capacity_kwh * (soc_max_percent / 100)
+                            )
+                            
+                            result_df.loc[idx, 'battery_power_kw'] = -charge_power_kw  # Negative = charge
+                            result_df.loc[idx, 'net_demand_kw'] = current_demand + charge_power_kw
+                            result_df.loc[idx, 'operation_type'] = 'charge'
+                
+                # Update SOC tracking
                 result_df.loc[idx, 'battery_soc_kwh'] = current_soc_kwh
                 result_df.loc[idx, 'battery_soc_percent'] = (current_soc_kwh / battery_capacity_kwh) * 100
         

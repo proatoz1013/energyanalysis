@@ -3984,17 +3984,20 @@ def _display_battery_performance_comparison(config_data, initial_soc_percent=95.
                     with col1:
                         st.markdown("**Default Shaving**")
                         st.metric("Total Shaved", f"{summary['default']['total_shaved_kwh']:.1f} kWh")
-                        st.metric("Savings Lost", f"{summary['default']['total_savings_lost_kwh']:.1f} kWh")
+                        st.metric("Savings Lost (kWh)", f"{summary['default']['total_savings_lost_kwh']:.1f} kWh")
+                        st.metric("Savings Lost (RM)", f"RM {summary['default']['total_savings_lost_rm']:.2f}")
                     
                     with col2:
                         st.markdown("**Simple Conservation**")
                         st.metric("Total Shaved", f"{summary['simple_conservation']['total_shaved_kwh']:.1f} kWh")
-                        st.metric("Savings Lost", f"{summary['simple_conservation']['total_savings_lost_kwh']:.1f} kWh")
+                        st.metric("Savings Lost (kWh)", f"{summary['simple_conservation']['total_savings_lost_kwh']:.1f} kWh")
+                        st.metric("Savings Lost (RM)", f"RM {summary['simple_conservation']['total_savings_lost_rm']:.2f}")
                     
                     with col3:
                         st.markdown("**Smart Conservation**")
                         st.metric("Total Shaved", f"{summary['smart_conservation']['total_shaved_kwh']:.1f} kWh")
-                        st.metric("Savings Lost", f"{summary['smart_conservation']['total_savings_lost_kwh']:.1f} kWh")
+                        st.metric("Savings Lost (kWh)", f"{summary['smart_conservation']['total_savings_lost_kwh']:.1f} kWh")
+                        st.metric("Savings Lost (RM)", f"RM {summary['smart_conservation']['total_savings_lost_rm']:.2f}")
                     
                     # Download option - create full dataset (no row limit)
                     st.markdown("---")
