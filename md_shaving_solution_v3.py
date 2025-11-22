@@ -99,6 +99,8 @@ def _calculate_tariff_specific_monthly_peaks(df, power_col, selected_tariff, hol
     - General Tariff: Uses 24/7 peak demand (highest demand anytime)
     - TOU Tariff: Uses peak period demand only (2PM-10PM weekdays)
     
+    ENHANCED: Now handles null values in source data gracefully.
+    
     Args:
         df: DataFrame with power data
         power_col: Column name containing power values
@@ -108,6 +110,19 @@ def _calculate_tariff_specific_monthly_peaks(df, power_col, selected_tariff, hol
     Returns:
         tuple: (monthly_general_peaks, monthly_tou_peaks, tariff_type)
     """
+    import streamlit as st
+    
+    # FIX: Filter out null values from power_col before processing
+    df_clean = df[df[power_col].notna()].copy()
+    
+    if len(df_clean) == 0:
+        st.warning(f"⚠️ All values in column '{power_col}' are null. Cannot calculate monthly peaks.")
+        # Return empty series with appropriate index
+        empty_index = df.index.to_period('M').unique()
+        return (pd.Series(index=empty_index, dtype=float), 
+                pd.Series(index=empty_index, dtype=float), 
+                'General')
+    
     # Determine tariff type
     tariff_type = 'General'  # Default
     if selected_tariff:
@@ -118,8 +133,8 @@ def _calculate_tariff_specific_monthly_peaks(df, power_col, selected_tariff, hol
         if 'tou' in tariff_name or 'tou' in tariff_type_field or tariff_type_field == 'tou':
             tariff_type = 'TOU'
     
-    # Calculate monthly peaks
-    df_monthly = df.copy()
+    # Calculate monthly peaks (using clean data only)
+    df_monthly = df_clean.copy()
     df_monthly['Month'] = df_monthly.index.to_period('M')
     
     # General peaks (24/7 maximum demand)
@@ -131,8 +146,8 @@ def _calculate_tariff_specific_monthly_peaks(df, power_col, selected_tariff, hol
     for month_period in monthly_general_peaks.index:
         month_start = month_period.start_time
         month_end = month_period.end_time
-        month_mask = (df.index >= month_start) & (df.index <= month_end)
-        month_data = df[month_mask]
+        month_mask = (df_clean.index >= month_start) & (df_clean.index <= month_end)
+        month_data = df_clean[month_mask]
         
         if not month_data.empty:
             # Filter for TOU peak periods only (2PM-10PM weekdays)
@@ -159,13 +174,19 @@ def _calculate_monthly_targets_v2(df, power_col, selected_tariff, holidays, targ
     """
     Calculate monthly targets based on tariff-specific peak demands.
     
+    ENHANCED: Now handles null values in monthly peaks gracefully.
+    
     Returns:
         tuple: (monthly_targets, reference_peaks, tariff_type, target_description)
     """
-    # Get tariff-specific monthly peaks
+    # Get tariff-specific monthly peaks (now with null handling)
     monthly_general_peaks, monthly_tou_peaks, tariff_type = _calculate_tariff_specific_monthly_peaks(
         df, power_col, selected_tariff, holidays
     )
+    
+    # FIX: Drop any remaining null values from monthly peaks
+    monthly_general_peaks = monthly_general_peaks.dropna()
+    monthly_tou_peaks = monthly_tou_peaks.dropna()
     
     # Select appropriate reference peaks based on tariff type
     if tariff_type == 'TOU':
@@ -190,6 +211,9 @@ def _calculate_monthly_targets_v2(df, power_col, selected_tariff, holidays, targ
         target_multiplier = target_percent / 100
         monthly_targets = reference_peaks * target_multiplier
         target_description = f"{target_percent}% of {peak_description}"
+    
+    # FIX: Drop any null values that may have been calculated
+    monthly_targets = monthly_targets.dropna()
     
     return monthly_targets, reference_peaks, tariff_type, target_description
 
@@ -5454,6 +5478,8 @@ def _create_v2_dynamic_target_series(simulation_index, monthly_targets):
     Create a dynamic target series that matches the simulation dataframe index
     with stepped monthly targets from V2's monthly_targets.
     
+    ENHANCED: Now drops null values and handles gaps in monthly_targets gracefully.
+    
     Args:
         simulation_index: DatetimeIndex from the simulation dataframe
         monthly_targets: V2's monthly targets (Series with Period index)
@@ -5461,26 +5487,46 @@ def _create_v2_dynamic_target_series(simulation_index, monthly_targets):
     Returns:
         Series with same index as simulation_index, containing monthly target values
     """
+    import streamlit as st
+    
+    # FIX: Drop null values from monthly_targets first
+    monthly_targets_clean = monthly_targets.dropna()
+    
+    if len(monthly_targets_clean) == 0:
+        # No valid targets available - return default fallback series
+        st.warning("⚠️ All monthly targets are null. Using fallback default target.")
+        return pd.Series(index=simulation_index, data=1000.0, dtype=float)
+    
     target_series = pd.Series(index=simulation_index, dtype=float)
     
     for timestamp in simulation_index:
         # Get the month period for this timestamp
         month_period = timestamp.to_period('M')
         
-        # Find the corresponding monthly target
-        if month_period in monthly_targets.index:
-            target_series.loc[timestamp] = monthly_targets.loc[month_period]
+        # Find the corresponding monthly target (from clean data)
+        if month_period in monthly_targets_clean.index:
+            target_series.loc[timestamp] = monthly_targets_clean.loc[month_period]
         else:
-            # Fallback: use the closest available monthly target
-            available_months = list(monthly_targets.index)
+            # Fallback: use the closest available monthly target (forward-fill approach)
+            available_months = list(monthly_targets_clean.index)
             if available_months:
-                # Find the closest month
+                # Find the closest month that has a valid target
                 closest_month = min(available_months, 
                                   key=lambda m: abs((timestamp.to_period('M') - m).n))
-                target_series.loc[timestamp] = monthly_targets.loc[closest_month]
+                target_series.loc[timestamp] = monthly_targets_clean.loc[closest_month]
             else:
-                # Ultimate fallback
+                # Ultimate fallback if somehow no months are available
                 target_series.loc[timestamp] = 1000.0  # Safe default
+    
+    # Verify no NaN values remain in target series
+    if target_series.isna().any():
+        # Fill any remaining NaN values with forward-fill, then back-fill
+        target_series = target_series.fillna(method='ffill').fillna(method='bfill')
+        
+        # If still NaN (edge case), use overall mean or default
+        if target_series.isna().any():
+            fallback_value = monthly_targets_clean.mean() if len(monthly_targets_clean) > 0 else 1000.0
+            target_series = target_series.fillna(fallback_value)
     
     return target_series
 
