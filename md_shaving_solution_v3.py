@@ -3996,14 +3996,16 @@ def _display_battery_performance_comparison(config_data, initial_soc_percent=95.
                         st.metric("Total Shaved", f"{summary['smart_conservation']['total_shaved_kwh']:.1f} kWh")
                         st.metric("Savings Lost", f"{summary['smart_conservation']['total_savings_lost_kwh']:.1f} kWh")
                     
-                    # Download option
+                    # Download option - create full dataset (no row limit)
                     st.markdown("---")
-                    csv = comparison_df.to_csv(index=False)
+                    full_comparison_df = comparator.create_comparison_table(max_rows=None)
+                    csv = full_comparison_df.to_csv(index=False)
                     st.download_button(
-                        label="📥 Download Comparison CSV",
+                        label="📥 Download Full Comparison CSV",
                         data=csv,
-                        file_name="battery_performance_comparison.csv",
-                        mime="text/csv"
+                        file_name="battery_performance_comparison_full.csv",
+                        mime="text/csv",
+                        help="Download complete comparison results (all timestamps)"
                     )
                     
                 else:

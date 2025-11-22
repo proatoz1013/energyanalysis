@@ -171,8 +171,13 @@ class BatteryPerformanceComparator:
         # Build comparison data
         comparison_data = []
         
-        # Limit to max_rows for display
-        timestamps = default_df.index[:max_rows] if len(default_df) > max_rows else default_df.index
+        # Limit to max_rows for display (None means all rows)
+        if max_rows is None:
+            timestamps = default_df.index
+        elif len(default_df) > max_rows:
+            timestamps = default_df.index[:max_rows]
+        else:
+            timestamps = default_df.index
         
         for idx in timestamps:
             # Base information (same for all methods)
